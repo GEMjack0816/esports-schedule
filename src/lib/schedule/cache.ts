@@ -1,10 +1,11 @@
 import { getCache } from "@vercel/functions";
 import type { PandaGameSnapshot } from "./pandascore";
-import type { PandaGameKey } from "./types";
+import { normalizeStoredMatchStatus } from "./status";
+import type { MatchStatus, PandaGameKey } from "./types";
 import { pandaGameKeys } from "./types";
 
 const CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
-const SYNC_LOCK_TTL_SECONDS = 5 * 60;
+const SYNC_LOCK_TTL_SECONDS = 6 * 60;
 const SYNC_LOCK_KEY = "pandascore-sync-lock-v1";
 
 export type PandaScoreGameSyncState = {
@@ -30,7 +31,14 @@ function syncStateKey(game: PandaGameKey): string {
 
 type SyncLock = {
   owner: string;
+  startedAt: string;
   expiresAt: string;
+};
+
+export type PandaScoreSyncLockStatus = {
+  refreshInProgress: boolean;
+  startedAt: string | null;
+  expiresAt: string | null;
 };
 
 function isActiveSyncLock(value: unknown, now: Date): value is SyncLock {
@@ -50,6 +58,7 @@ export async function acquirePandaScoreSyncLock(now = new Date()): Promise<strin
     const owner = crypto.randomUUID();
     const lock: SyncLock = {
       owner,
+      startedAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + SYNC_LOCK_TTL_SECONDS * 1_000).toISOString(),
     };
     await cache.set(SYNC_LOCK_KEY, lock, {
@@ -66,6 +75,24 @@ export async function acquirePandaScoreSyncLock(now = new Date()): Promise<strin
   } catch {
     console.warn("[schedule-cache] regional sync lock unavailable; using instance lock only");
     return "instance-lock-fallback";
+  }
+}
+
+export async function readPandaScoreSyncLockStatus(now = new Date()): Promise<PandaScoreSyncLockStatus> {
+  try {
+    const value = await scheduleCache().get(SYNC_LOCK_KEY);
+    if (!isActiveSyncLock(value, now)) {
+      return { refreshInProgress: false, startedAt: null, expiresAt: null };
+    }
+    const lock = value as SyncLock;
+    return {
+      refreshInProgress: true,
+      startedAt: typeof lock.startedAt === "string" ? lock.startedAt : null,
+      expiresAt: lock.expiresAt,
+    };
+  } catch {
+    console.warn("[schedule-cache] regional sync lock status could not be read");
+    return { refreshInProgress: false, startedAt: null, expiresAt: null };
   }
 }
 
@@ -91,10 +118,35 @@ function isPandaGameSnapshot(value: unknown, game: PandaGameKey): value is Panda
     && !!cached.coverage;
 }
 
+function migrateSnapshot(snapshot: PandaGameSnapshot): PandaGameSnapshot {
+  const matches = snapshot.matches.map((match) => ({
+    ...match,
+    status: normalizeStoredMatchStatus(match.status) ?? "unknown",
+  }));
+  const statusCounts: Record<MatchStatus, number> = {
+    scheduled: 0,
+    running: 0,
+    finished: 0,
+    postponed: 0,
+    cancelled: 0,
+    forfeit: 0,
+    unknown: 0,
+  };
+  for (const match of matches) statusCounts[match.status] += 1;
+  return {
+    ...snapshot,
+    matches,
+    coverage: {
+      ...snapshot.coverage,
+      statusCounts,
+    },
+  };
+}
+
 export async function readPandaScoreGameSnapshot(game: PandaGameKey): Promise<PandaGameSnapshot | null> {
   try {
     const cached = await scheduleCache().get(snapshotKey(game));
-    return isPandaGameSnapshot(cached, game) ? cached : null;
+    return isPandaGameSnapshot(cached, game) ? migrateSnapshot(cached) : null;
   } catch {
     console.warn(`[schedule-cache] ${game} last-success cache could not be read`);
     return null;
@@ -110,15 +162,17 @@ export async function readAllPandaScoreGameSnapshots(): Promise<Partial<Record<P
   return snapshots;
 }
 
-export async function writePandaScoreGameSnapshot(value: PandaGameSnapshot): Promise<void> {
+export async function writePandaScoreGameSnapshot(value: PandaGameSnapshot): Promise<boolean> {
   try {
     await scheduleCache().set(snapshotKey(value.game), value, {
       name: `PandaScore ${value.game} last successful fixtures`,
       tags: ["pandascore-fixtures", `schedule-${value.game}`],
       ttl: CACHE_TTL_SECONDS,
     });
+    return true;
   } catch {
     console.warn(`[schedule-cache] ${value.game} last-success cache could not be written`);
+    return false;
   }
 }
 
@@ -152,14 +206,16 @@ export async function readAllPandaScoreGameSyncStates(): Promise<Partial<Record<
   return states;
 }
 
-export async function writePandaScoreGameSyncState(value: PandaScoreGameSyncState): Promise<void> {
+export async function writePandaScoreGameSyncState(value: PandaScoreGameSyncState): Promise<boolean> {
   try {
     await scheduleCache().set(syncStateKey(value.game), value, {
       name: `PandaScore ${value.game} sync state`,
       tags: ["pandascore-fixtures", `schedule-${value.game}`],
       ttl: CACHE_TTL_SECONDS,
     });
+    return true;
   } catch {
     console.warn(`[schedule-cache] ${value.game} sync state could not be written`);
+    return false;
   }
 }

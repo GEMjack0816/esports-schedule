@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyManualOverrides } from "./manual";
+import { applyManualData, applyManualOverrides } from "./manual";
 import type { EsportsMatch } from "./types";
 
 function match(providerMatchId: string): EsportsMatch {
@@ -16,7 +16,7 @@ function match(providerMatchId: string): EsportsMatch {
     homeScore: null,
     awayScore: null,
     bestOf: 3,
-    status: "upcoming",
+    status: "scheduled",
     startTimeUtc: "2026-07-20T00:00:00.000Z",
     streams: [],
     lastUpdatedAt: "2026-07-18T00:00:00.000Z",
@@ -70,5 +70,18 @@ describe("manual corrections", () => {
 
     expect(result.hiddenCount).toBe(1);
     expect(result.matches.map((item) => item.providerMatchId)).toEqual(["2"]);
+  });
+
+  it("keeps approved Honor of Kings manual fixtures when API fixtures are synchronized", () => {
+    const apiMatch: EsportsMatch = {
+      ...match("kog-api-1"),
+      id: "pandascore:honor-of-kings:kog-api-1",
+      game: "honor-of-kings",
+    };
+    const result = applyManualData([apiMatch], new Date("2026-07-18T00:00:00.000Z"));
+
+    expect(result.honorOfKingsCount).toBe(3);
+    expect(result.matches.some((item) => item.providerMatchId === "kog-api-1")).toBe(true);
+    expect(result.matches.filter((item) => item.provider === "manual" && item.game === "honor-of-kings")).toHaveLength(3);
   });
 });

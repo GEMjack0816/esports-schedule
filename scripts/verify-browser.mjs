@@ -59,7 +59,7 @@ for (const profile of [
   }
   await gameSelect.selectOption("all");
   const statusSelect = page.locator(".filter-panel select").nth(2);
-  for (const status of ["running", "finished", "upcoming"]) {
+  for (const status of ["running", "finished", "scheduled"]) {
     await statusSelect.selectOption(status);
     statusFilterCounts[status] = await page.locator(".match-card").count();
   }

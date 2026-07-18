@@ -10,6 +10,7 @@ import type {
   Team,
 } from "./types";
 import { pandaEndpointKeys, pandaGameKeys } from "./types";
+import { normalizeMatchStatus } from "./status";
 
 const PANDASCORE_API = "https://api.pandascore.co";
 const PER_PAGE = 100;
@@ -120,6 +121,7 @@ export type PandaScoreResult = {
 
 export type PandaFetchOptions = {
   now?: Date;
+  clock?: () => Date;
   fetchImpl?: typeof fetch;
   sleep?: (milliseconds: number) => Promise<void>;
   timeoutMs?: number;
@@ -140,12 +142,13 @@ export class PandaScoreRequestError extends Error {
 
 function emptyStatusCounts(): Record<MatchStatus, number> {
   return {
-    upcoming: 0,
+    scheduled: 0,
     running: 0,
     finished: 0,
     postponed: 0,
-    canceled: 0,
+    cancelled: 0,
     forfeit: 0,
+    unknown: 0,
   };
 }
 
@@ -157,28 +160,6 @@ function emptyFiltered(): EndpointCoverage["filtered"] {
     outsideWindow: 0,
     duplicate: 0,
   };
-}
-
-function mapStatus(status: string | null | undefined, endpoint: PandaEndpointKey): MatchStatus {
-  switch (status) {
-    case "running":
-      return "running";
-    case "finished":
-      return "finished";
-    case "canceled":
-    case "cancelled":
-      return "canceled";
-    case "postponed":
-      return "postponed";
-    case "forfeit":
-    case "walkover":
-    case "wo":
-      return "forfeit";
-    case "not_started":
-      return "upcoming";
-    default:
-      return endpoint === "running" ? "running" : endpoint === "past" ? "finished" : "upcoming";
-  }
 }
 
 function mapTeam(opponent: PandaOpponent | undefined): Team {
@@ -233,6 +214,15 @@ export function normalizePandaMatch(
 
   const providerMatchId = String(raw.id);
   const startTimeUtc = effectiveTime ? new Date(effectiveTime).toISOString() : null;
+  const normalizedStatus = normalizeMatchStatus(raw.status, {
+    endpoint,
+    startTimeUtc,
+    now,
+    onUnknown(value) {
+      const safeValue = value.replace(/[^a-z0-9_:.]/g, "").slice(0, 64) || "invalid";
+      console.warn(`[schedule-status] unknown upstream status game=${game} match=${providerMatchId} status=${safeValue}`);
+    },
+  });
   return {
     match: {
       id: `pandascore:${game}:${providerMatchId}`,
@@ -247,7 +237,7 @@ export function normalizePandaMatch(
       homeScore: scoreForOpponent(raw, 0),
       awayScore: scoreForOpponent(raw, 1),
       bestOf: inferBestOf(raw),
-      status: mapStatus(raw.status, endpoint),
+      status: normalizedStatus.status,
       startTimeUtc,
       streams: mapStreams(raw.streams_list),
       lastUpdatedAt: validIsoOrFallback(raw.modified_at, now.toISOString()),
@@ -363,10 +353,10 @@ async function requestPage(
           Authorization: `Bearer ${token}`,
         },
         signal: controller.signal,
-        next: {
-          revalidate: 900,
-          tags: ["pandascore-fixtures-v4", `pandascore-${game}-${endpoint}`],
-        },
+        // Runtime Cache is the authoritative last-success snapshot. A second
+        // Next Data Cache layer can return stale upstream pages while stamping
+        // the new snapshot with the current time, so sync requests bypass it.
+        cache: "no-store",
       });
       if (response.ok) return response;
       const error = responseError(response, game, endpoint);
@@ -475,7 +465,15 @@ function deduplicateNormalized(items: NormalizedMatch[]): NormalizedMatch[] {
   for (const item of items) {
     const key = dedupeKey(item.match);
     const existing = unique.get(key);
-    if (!existing || Date.parse(item.match.lastUpdatedAt) >= Date.parse(existing.match.lastUpdatedAt)) {
+    const runningEndpointWins = item.endpoint === "running" && existing?.endpoint !== "running";
+    const existingRunningEndpointWins = existing?.endpoint === "running" && item.endpoint !== "running";
+    const itemUpdatedAt = Date.parse(item.match.lastUpdatedAt);
+    const existingUpdatedAt = existing ? Date.parse(existing.match.lastUpdatedAt) : Number.NaN;
+    if (
+      !existing
+      || runningEndpointWins
+      || (!existingRunningEndpointWins && itemUpdatedAt >= existingUpdatedAt)
+    ) {
       unique.set(key, item);
     }
   }
@@ -589,7 +587,7 @@ export async function fetchPandaScoreGame(
   const statusCounts = emptyStatusCounts();
   for (const match of matches) statusCounts[match.status] += 1;
   const bounds = timeBounds(matches);
-  const fetchedAt = now.toISOString();
+  const fetchedAt = (options.clock?.() ?? new Date()).toISOString();
   const sample = verificationSample(completed, matches);
 
   return {
@@ -610,10 +608,14 @@ export async function fetchPandaScoreGame(
       latestMatchAt: bounds.latest,
       lastSuccessfulSyncAt: fetchedAt,
       lastAttemptAt: fetchedAt,
+      sourceFetchedAt: fetchedAt,
+      snapshotAgeSeconds: 0,
+      refreshInProgress: false,
       syncStatus: "normal",
       staleMinutes: 0,
       dataSource: "fresh",
       lastErrorCode: null,
+      lastError: null,
       verificationSample: sample,
     },
   };

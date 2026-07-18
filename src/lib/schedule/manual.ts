@@ -1,11 +1,11 @@
 import honorOfKingsData from "../../data/honor-of-kings.json";
 import supplementalData from "../../data/manual-matches.json";
 import { gameKeys } from "./types";
+import { normalizeStoredMatchStatus } from "./status";
 import type {
   EsportsMatch,
   GameKey,
   MatchProvider,
-  MatchStatus,
   Stream,
   Team,
 } from "./types";
@@ -28,7 +28,7 @@ type ManualRecord = {
   homeScore?: number | null;
   awayScore?: number | null;
   scores?: [number | null, number | null];
-  status: MatchStatus;
+  status: string;
   streams: Stream[];
   sourceUrl?: string | null;
   reviewStatus?: "approved" | "pending";
@@ -37,7 +37,7 @@ type ManualRecord = {
 
 type ManualOverrideChanges = {
   startTimeUtc?: string | null;
-  status?: MatchStatus;
+  status?: string;
   homeTeam?: Partial<Team>;
   awayTeam?: Partial<Team>;
   league?: string;
@@ -62,15 +62,6 @@ type ManualOverride = {
 
 type LegacyHonorOfKingsMatch = Omit<ManualRecord, "game" | "reviewStatus">;
 
-const validStatuses: MatchStatus[] = [
-  "upcoming",
-  "running",
-  "finished",
-  "postponed",
-  "canceled",
-  "forfeit",
-];
-
 function validTime(value: string | null | undefined): boolean {
   return value === null || (typeof value === "string" && !Number.isNaN(Date.parse(value)));
 }
@@ -90,7 +81,7 @@ function isManualRecord(value: unknown): value is ManualRecord {
     && typeof match.league === "string"
     && (match.bestOf === null || typeof match.bestOf === "number")
     && Array.isArray(match.streams)
-    && validStatuses.includes(match.status as MatchStatus)
+    && normalizeStoredMatchStatus(match.status) !== null
   );
 }
 
@@ -107,7 +98,7 @@ function isManualOverride(value: unknown): value is ManualOverride {
     && typeof override.providerMatchId === "string"
     && gameKeys.includes(override.game as GameKey)
     && (override.reviewStatus === "approved" || override.reviewStatus === "pending")
-    && (!override.changes?.status || validStatuses.includes(override.changes.status))
+    && (!override.changes?.status || normalizeStoredMatchStatus(override.changes.status) !== null)
     && (override.changes?.startTimeUtc === undefined || validTime(override.changes.startTimeUtc));
 }
 
@@ -145,7 +136,7 @@ function normalizeManualMatch(match: ManualRecord, now: string): EsportsMatch {
     homeScore: scores[0],
     awayScore: scores[1],
     bestOf: match.bestOf && match.bestOf > 0 ? match.bestOf : null,
-    status: match.status,
+    status: normalizeStoredMatchStatus(match.status) ?? "unknown",
     startTimeUtc: start ? new Date(start).toISOString() : null,
     streams: safeStreams(match.streams),
     lastUpdatedAt: now,
@@ -204,7 +195,9 @@ export function applyManualOverrides(
       homeScore: changes.homeScore === undefined ? current.homeScore : changes.homeScore,
       awayScore: changes.awayScore === undefined ? current.awayScore : changes.awayScore,
       bestOf: changes.bestOf === undefined ? current.bestOf : changes.bestOf,
-      status: changes.status ?? current.status,
+      status: changes.status
+        ? normalizeStoredMatchStatus(changes.status) ?? current.status
+        : current.status,
       startTimeUtc: changes.startTimeUtc === undefined
         ? current.startTimeUtc
         : changes.startTimeUtc

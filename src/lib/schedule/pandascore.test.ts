@@ -35,7 +35,7 @@ function baseMatch(overrides: Partial<EsportsMatch> = {}): EsportsMatch {
     homeScore: null,
     awayScore: null,
     bestOf: 3,
-    status: "upcoming",
+    status: "scheduled",
     startTimeUtc: "2026-07-20T00:00:00.000Z",
     streams: [],
     lastUpdatedAt: "2026-07-18T00:00:00.000Z",
@@ -61,15 +61,19 @@ function emptyCoverage(): GameCoverage {
     normalized: 3,
     deduplicated: 1,
     final: 1,
-    statusCounts: { upcoming: 1, running: 0, finished: 0, postponed: 0, canceled: 0, forfeit: 0 },
+    statusCounts: { scheduled: 1, running: 0, finished: 0, postponed: 0, cancelled: 0, forfeit: 0, unknown: 0 },
     earliestMatchAt: "2026-07-20T00:00:00.000Z",
     latestMatchAt: "2026-07-20T00:00:00.000Z",
     lastSuccessfulSyncAt: "2026-07-18T00:00:00.000Z",
     lastAttemptAt: "2026-07-18T00:00:00.000Z",
+    sourceFetchedAt: "2026-07-18T00:00:00.000Z",
+    snapshotAgeSeconds: 0,
+    refreshInProgress: false,
     syncStatus: "normal",
     staleMinutes: 0,
     dataSource: "fresh",
     lastErrorCode: null,
+    lastError: null,
   };
 }
 
@@ -104,6 +108,22 @@ describe("PandaScore endpoint configuration", () => {
 });
 
 describe("PandaScore pagination and retry", () => {
+  it("bypasses the Next Data Cache during an authoritative source sync", async () => {
+    let requestInit: RequestInit | undefined;
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      requestInit = init;
+      return response([]);
+    };
+    await fetchPaginatedEndpoint(
+      "lol",
+      "running",
+      "test-token",
+      fetchImpl as typeof fetch,
+      new Date("2026-07-18T00:00:00.000Z"),
+    );
+    expect(requestInit?.cache).toBe("no-store");
+  });
+
   it("follows rel=next, requests 100 per page, and matches X-Total", async () => {
     const calls: URL[] = [];
     const fetchImpl = async (input: string | URL | Request) => {
@@ -168,6 +188,20 @@ describe("PandaScore pagination and retry", () => {
       new Date("2026-07-18T00:00:00.000Z"),
     )).rejects.toThrow("pagination mismatch");
   });
+
+  it("accepts a changing total across separate sync runs without hard-coded counts", async () => {
+    let total = 1;
+    const fetchImpl = async () => response(
+      Array.from({ length: total }, (_, index) => ({ id: index + 1 })),
+      { "x-total": String(total) },
+    );
+    const now = new Date("2026-07-18T00:00:00.000Z");
+    await expect(fetchPaginatedEndpoint("dota2", "running", "test-token", fetchImpl as typeof fetch, now))
+      .resolves.toMatchObject({ xTotal: 1 });
+    total = 2;
+    await expect(fetchPaginatedEndpoint("dota2", "running", "test-token", fetchImpl as typeof fetch, now))
+      .resolves.toMatchObject({ xTotal: 2 });
+  });
 });
 
 describe("PandaScore normalization", () => {
@@ -207,8 +241,13 @@ describe("PandaScore normalization", () => {
       }
       return response([]);
     };
-    const result = await fetchPandaScoreGame("lol", "test-token", { now, fetchImpl: fetchImpl as typeof fetch });
+    const result = await fetchPandaScoreGame("lol", "test-token", {
+      now,
+      clock: () => new Date("2026-07-18T12:00:30.000Z"),
+      fetchImpl: fetchImpl as typeof fetch,
+    });
     expect(result.matches).toHaveLength(1);
+    expect(result.fetchedAt).toBe("2026-07-18T12:00:30.000Z");
     expect(result.matches[0]).toMatchObject({ providerMatchId: "88", status: "finished" });
     expect(result.coverage.verificationSample).toMatchObject({
       providerMatchId: "88",
@@ -216,6 +255,38 @@ describe("PandaScore normalization", () => {
       providerStartTimeUtc: "2026-07-18T11:00:00.000Z",
       normalizedStartTimeUtc: "2026-07-18T11:00:00.000Z",
     });
+  });
+
+  it("keeps the running endpoint version when the same match also has a newer scheduled copy", async () => {
+    const now = new Date("2026-07-18T12:00:00.000Z");
+    const fetchImpl = async (input: string | URL | Request) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname.endsWith("/upcoming")) {
+        return response([{
+          id: 99,
+          begin_at: "2026-07-18T11:00:00.000Z",
+          status: "not_started",
+          modified_at: "2026-07-18T11:59:00.000Z",
+        }]);
+      }
+      if (url.pathname.endsWith("/running")) {
+        return response([{
+          id: 99,
+          begin_at: "2026-07-18T11:00:00.000Z",
+          status: "running",
+          modified_at: "2026-07-18T11:58:00.000Z",
+        }]);
+      }
+      return response([]);
+    };
+
+    const result = await fetchPandaScoreGame("lol", "test-token", {
+      now,
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0].status).toBe("running");
+    expect(result.coverage.statusCounts.running).toBe(1);
   });
 });
 

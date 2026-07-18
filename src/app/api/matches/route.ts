@@ -1,10 +1,17 @@
-import { getSchedule } from "@/lib/schedule";
+import { after } from "next/server";
+import { getSchedule, refreshSchedule, shouldRefreshSchedule } from "@/lib/schedule";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 export async function GET() {
-  const payload = await getSchedule();
+  const payload = await getSchedule({ cachedOnly: true });
+  const refreshScheduled = shouldRefreshSchedule(payload);
+  if (refreshScheduled) {
+    after(async () => {
+      await refreshSchedule();
+    });
+  }
 
   return Response.json(payload, {
     headers: {
@@ -12,6 +19,7 @@ export async function GET() {
       "Vercel-CDN-Cache-Control": "no-store",
       "X-Schedule-Mode": payload.mode,
       "X-Schedule-Stale": String(payload.stale),
+      "X-Schedule-Refresh-Scheduled": String(refreshScheduled),
     },
   });
 }
