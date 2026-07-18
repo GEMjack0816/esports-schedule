@@ -5,16 +5,21 @@
 ## 数据源与密钥
 
 - 英雄联盟、无畏契约、CS2、Dota 2：PandaScore 免费 Fixtures API。
-- 王者荣耀：`src/data/honor-of-kings.json` 人工录入，通过独立适配器接入。
-- 未配置 PandaScore Token 时：自动启用明确标注的演示赛程，避免页面空白。
+- PandaScore 按游戏和 upcoming/running/past 分别完整分页，覆盖未来 60 天与过去 30 天。
+- 王者荣耀：`src/data/honor-of-kings.json` 人工录入；五个游戏都可通过 `src/data/manual-matches.json` 补录已审核赛事。
+- 同步失败时保留 Runtime Cache 中最近一次成功的真实数据并标记可能过期，不会静默切换演示数据。
+- 只有从未成功同步真实数据且没有配置 Token 的环境才启用明确标注的演示赛程。
 
 PandaScore Token 仅由服务端使用，不会发送到客户端，也不要添加 `NEXT_PUBLIC_` 前缀。复制 `.env.example` 为 `.env.local` 后填写 `PANDASCORE_TOKEN` 和至少 16 位的 `CRON_SECRET`。
 
 ## 检查与接口
 
-运行 `npm run check` 执行 TypeScript、ESLint 和生产构建检查。
+运行 `npm run check` 执行 TypeScript、ESLint、Vitest 和生产构建检查。
 
 - `GET /api/matches`：聚合后的公开赛程。
+- `GET /api/health/data-coverage`：不含密钥的分页、X-Total、去重、时间范围和额度诊断。
+- `POST /api/submissions`：保存用户提交的遗漏赛事为待审核状态，不直接公开。
+- `/submit-match`：遗漏赛事提交表单。
 - `GET /api/cron/sync`：Vercel Cron 更新入口，要求 `Authorization: Bearer $CRON_SECRET`。
 - `vercel.json`：每天 18:15 UTC 自动更新赛程。
 

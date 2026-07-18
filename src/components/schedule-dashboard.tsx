@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
+import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
-type RangeKey = "today" | "tomorrow" | "seven" | "history";
+type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 
 const subscribeToTimeZone = () => () => undefined;
 const getBrowserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -25,21 +27,6 @@ const statusMeta: Record<MatchStatus, { label: string; className: string }> = {
   canceled: { label: "已取消", className: "status-canceled" },
 };
 
-function dateKey(date: Date, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
-function addDaysKey(days: number, timeZone: string): string {
-  return dateKey(new Date(Date.now() + days * 86_400_000), timeZone);
-}
-
 function formatTime(value: string, timeZone: string): string {
   return new Intl.DateTimeFormat("zh-CN", {
     timeZone,
@@ -55,6 +42,19 @@ function formatDate(value: string, timeZone: string): string {
     month: "long",
     day: "numeric",
     weekday: "short",
+  }).format(new Date(value));
+}
+
+function formatDateTime(value: string | null, timeZone: string): string {
+  if (!value) return "暂无";
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
   }).format(new Date(value));
 }
 
@@ -109,7 +109,7 @@ function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string 
         <TeamRow team={match.teams[1]} score={scoreB} winning={secondWins} />
       </div>
       <div className="match-meta-cell">
-        <span className="bo-label">BO{match.bestOf}</span>
+        <span className="bo-label">{match.bestOf ? `BO${match.bestOf}` : "BO待定"}</span>
         <MatchStatusBadge status={match.status} />
         {stream ? (
           <a className="watch-link" href={stream.url} target="_blank" rel="noreferrer">
@@ -139,12 +139,13 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
 
   const today = addDaysKey(0, timeZone);
   const tomorrow = addDaysKey(1, timeZone);
-  const sevenDaysOut = addDaysKey(7, timeZone);
+  const sevenDaysOut = addDaysKey(6, timeZone);
 
   const rangeCounts = useMemo(() => {
-    const counts: Record<RangeKey, number> = { today: 0, tomorrow: 0, seven: 0, history: 0 };
+    const counts: Record<RangeKey, number> = { today: 0, tomorrow: 0, seven: 0, history: 0, all: 0 };
     for (const match of payload.matches) {
-      const key = dateKey(new Date(match.scheduledAt), timeZone);
+      const key = dateKeyInTimeZone(match.scheduledAt, timeZone);
+      counts.all += 1;
       if (key === today) counts.today += 1;
       if (key === tomorrow) counts.tomorrow += 1;
       if (key >= today && key <= sevenDaysOut) counts.seven += 1;
@@ -161,21 +162,24 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const filtered = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
     return payload.matches.filter((match) => {
-      const key = dateKey(new Date(match.scheduledAt), timeZone);
-      const inRange = range === "today"
-        ? key === today
-        : range === "tomorrow"
-          ? key === tomorrow
-          : range === "seven"
-            ? key >= today && key <= sevenDaysOut
-            : key < today;
+      const key = dateKeyInTimeZone(match.scheduledAt, timeZone);
+      const inRange = selectedDate
+        ? key === selectedDate
+        : range === "all"
+          ? true
+          : range === "today"
+            ? key === today
+            : range === "tomorrow"
+              ? key === tomorrow
+              : range === "seven"
+                ? key >= today && key <= sevenDaysOut
+                : key < today;
       const haystack = [match.teams[0].name, match.teams[1].name, match.league, match.tournament || ""]
         .join(" ").toLocaleLowerCase();
       return inRange
         && (game === "all" || match.game === game)
         && (league === "all" || match.league === league)
         && (status === "all" || match.status === status)
-        && (!selectedDate || key === selectedDate)
         && (!normalizedQuery || haystack.includes(normalizedQuery));
     });
   }, [game, league, payload.matches, query, range, selectedDate, sevenDaysOut, status, timeZone, today, tomorrow]);
@@ -183,7 +187,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const grouped = useMemo(() => {
     const groups = new Map<string, EsportsMatch[]>();
     for (const match of filtered) {
-      const key = dateKey(new Date(match.scheduledAt), timeZone);
+      const key = dateKeyInTimeZone(match.scheduledAt, timeZone);
       groups.set(key, [...(groups.get(key) ?? []), match]);
     }
     return [...groups.entries()].sort(([a], [b]) => range === "history" ? b.localeCompare(a) : a.localeCompare(b));
@@ -241,13 +245,24 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
         <section className="schedule-section" aria-labelledby="schedule-title">
           <div className="section-heading">
             <div><span className="section-index">01 / 赛程中心</span><h2 id="schedule-title">比赛日历</h2></div>
-            <div className={`source-state ${payload.mode === "live" ? "source-live" : "source-demo"}`}><i /><span>{payload.mode === "live" ? "PandaScore 实时数据" : "演示数据模式"}</span></div>
+            <div className={`source-state ${payload.mode === "live" && !payload.stale ? "source-live" : payload.stale ? "source-stale" : "source-demo"}`}>
+              <i />
+              <span>{payload.mode === "live"
+                ? payload.stale ? "PandaScore 真实数据（可能过期）" : "PandaScore 实时数据"
+                : payload.mode === "demo" ? "演示数据模式" : "真实数据暂不可用"}</span>
+            </div>
           </div>
 
           {payload.warning && <div className="data-notice" role="status"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" /><path d="M10 6.5v4.2M10 13.7h.01" /></svg><span>{payload.warning}</span></div>}
 
+          <div className="data-summary" aria-label="数据覆盖信息">
+            <span>数据更新时间 <strong>{formatDateTime(payload.lastSuccessfulSyncAt, timeZone)}</strong></span>
+            <span>当前收录范围 <strong>{formatDateTime(payload.coverage.range.earliestMatchAt, timeZone)} — {formatDateTime(payload.coverage.range.latestMatchAt, timeZone)}</strong></span>
+            <Link href="/submit-match" prefetch={false}>提交遗漏比赛</Link>
+          </div>
+
           <div className="range-tabs" role="tablist" aria-label="选择时间范围">
-            {([ ["today", "今日"], ["tomorrow", "明日"], ["seven", "未来 7 天"], ["history", "历史比赛"] ] as const).map(([key, label]) => (
+            {([ ["today", "今日"], ["tomorrow", "明日"], ["seven", "未来 7 天"], ["history", "历史比赛"], ["all", "全部收录"] ] as const).map(([key, label]) => (
               <button key={key} role="tab" aria-selected={range === key} className={range === key ? "active" : ""} type="button" onClick={() => setRange(key)}>
                 <span>{label}</span><em>{rangeCounts[key]}</em>
               </button>
@@ -259,7 +274,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <label><span className="sr-only">游戏</span><select value={game} onChange={(event) => setGame(event.target.value as GameKey | "all")}><option value="all">全部游戏</option>{Object.entries(games).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
             <label><span className="sr-only">赛事</span><select value={league} onChange={(event) => setLeague(event.target.value)}><option value="all">全部赛事</option>{leagues.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
             <label><span className="sr-only">状态</span><select value={status} onChange={(event) => setStatus(event.target.value as MatchStatus | "all")}><option value="all">全部状态</option>{Object.entries(statusMeta).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
-            <label className="date-field"><span className="sr-only">日期</span><input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
+            <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt?.slice(0, 10)} max={payload.coverage.range.latestMatchAt?.slice(0, 10)} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
           </div>
 
           <div className="match-list" aria-live="polite">
@@ -278,7 +293,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
       <footer className="site-footer">
         <div className="brand footer-brand"><span className="brand-mark"><i /><i /><i /></span><span>赛界<span className="brand-accent">PULSE</span></span></div>
         <p>PandaScore Fixtures · 王者荣耀人工 JSON · 自动本地时区</p>
-        <span>最后更新 {formatTime(payload.generatedAt, timeZone)}</span>
+        <span>最后成功同步 {formatDateTime(payload.lastSuccessfulSyncAt, timeZone)}</span>
       </footer>
     </div>
   );

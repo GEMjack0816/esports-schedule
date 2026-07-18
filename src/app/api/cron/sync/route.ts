@@ -1,4 +1,3 @@
-import { revalidateTag } from "next/cache";
 import { getSchedule } from "@/lib/schedule";
 
 export const dynamic = "force-dynamic";
@@ -12,14 +11,15 @@ export async function GET(request: Request) {
     return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  revalidateTag("pandascore-fixtures", { expire: 0 });
-  const schedule = await getSchedule();
+  const schedule = await getSchedule({ forceRefresh: true });
 
   return Response.json({
     ok: true,
     refreshedAt: schedule.generatedAt,
     matches: schedule.matches.length,
     mode: schedule.mode,
+    stale: schedule.stale,
+    lastSuccessfulSyncAt: schedule.lastSuccessfulSyncAt,
     providers: schedule.providers,
   });
 }
