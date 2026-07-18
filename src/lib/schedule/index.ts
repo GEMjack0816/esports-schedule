@@ -1,6 +1,8 @@
 import {
+  acquirePandaScoreSyncLock,
   readAllPandaScoreGameSnapshots,
   readAllPandaScoreGameSyncStates,
+  releasePandaScoreSyncLock,
   writePandaScoreGameSnapshot,
   writePandaScoreGameSyncState,
 } from "./cache";
@@ -81,6 +83,7 @@ function emptyGameCoverage(): GameCoverage {
     staleMinutes: null,
     dataSource: "unavailable",
     lastErrorCode: null,
+    verificationSample: null,
   };
 }
 
@@ -204,6 +207,12 @@ function buildPayload(
       manual: "json",
     },
     coverage,
+    deployment: {
+      id: process.env.VERCEL_DEPLOYMENT_ID ?? null,
+      commitSha: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
+      productionUrl: process.env.VERCEL_PROJECT_PRODUCTION_URL ?? null,
+      environment: process.env.VERCEL_TARGET_ENV ?? process.env.VERCEL_ENV ?? null,
+    },
     warning,
   };
 }
@@ -216,17 +225,30 @@ function allGamesFresh(snapshots: SnapshotMap, states: SyncStateMap, now: Date):
   return pandaGameKeys.every((game) => {
     const snapshot = snapshots[game];
     const state = states[game];
-    if (!snapshot || !isFresh(snapshot, now)) return false;
+    if (!snapshot || !snapshot.coverage.verificationSample || !isFresh(snapshot, now)) return false;
     return !state?.lastErrorAt || Date.parse(state.lastErrorAt) < Date.parse(snapshot.fetchedAt);
   });
 }
 
-async function synchronize(token: string, snapshots: SnapshotMap, now: Date): Promise<PandaScoreSyncBatch> {
-  if (!inFlightSync) {
-    inFlightSync = syncPandaScoreGames(token, snapshots, { now }).finally(() => {
-      inFlightSync = null;
-    });
+async function synchronize(token: string, snapshots: SnapshotMap, now: Date): Promise<PandaScoreSyncBatch | null> {
+  if (inFlightSync) return inFlightSync;
+
+  const lockOwner = await acquirePandaScoreSyncLock(now);
+  if (!lockOwner) {
+    console.info("[schedule] sync skipped because another regional instance owns the refresh lock");
+    return null;
   }
+
+  if (inFlightSync) {
+    await releasePandaScoreSyncLock(lockOwner);
+    return inFlightSync;
+  }
+
+  console.info("[schedule] regional refresh lock acquired");
+  inFlightSync = syncPandaScoreGames(token, snapshots, { now }).finally(async () => {
+    inFlightSync = null;
+    await releasePandaScoreSyncLock(lockOwner);
+  });
   return inFlightSync;
 }
 
@@ -299,10 +321,14 @@ export async function getSchedule(options: {
       return buildPayload(
         cachedPanda,
         states,
-        "live",
-        stale ? "stale-cache" : "connected",
+        token ? "live" : "unavailable",
+        token ? (stale ? "stale-cache" : "connected") : "not-configured",
         now,
-        stale ? "一个或多个项目的数据同步延迟，当前继续提供各项目上一次成功的真实数据。" : undefined,
+        !token
+          ? "生产数据源配置错误；当前响应仅保留上一次成功同步的真实数据。"
+          : stale
+            ? "一个或多个项目的数据同步延迟，当前继续提供各项目上一次成功的真实数据。"
+            : undefined,
       );
     }
     return buildPayload(
@@ -311,7 +337,7 @@ export async function getSchedule(options: {
       "unavailable",
       token ? "error" : "not-configured",
       now,
-      token ? "尚未生成首批真实数据缓存。" : "PandaScore 服务端环境变量尚未配置。",
+      token ? "尚未生成首批真实数据缓存。" : "生产数据源配置错误，暂时没有可用的真实赛程。",
     );
   }
 
@@ -321,6 +347,26 @@ export async function getSchedule(options: {
 
   if (token) {
     const batch = await synchronize(token, snapshots, now);
+    if (!batch) {
+      if (cachedPanda) {
+        return buildPayload(
+          cachedPanda,
+          states,
+          "live",
+          "stale-cache",
+          now,
+          "另一个生产实例正在更新真实赛程，当前继续提供上一次成功同步的数据。",
+        );
+      }
+      return buildPayload(
+        null,
+        states,
+        "unavailable",
+        "error",
+        now,
+        "首批真实赛程正在同步，请稍后重试。",
+      );
+    }
     states = await persistSyncBatch(batch, states, now);
     const panda = aggregatePandaScoreSnapshots(batch.snapshots);
     if (panda) {
@@ -340,7 +386,7 @@ export async function getSchedule(options: {
       "unavailable",
       "error",
       now,
-      "PandaScore 当前不可用且没有任何项目的历史真实数据；未使用演示比赛替代。",
+      "PandaScore 当前不可用且没有任何项目的历史真实数据。",
     );
   }
 
@@ -348,10 +394,10 @@ export async function getSchedule(options: {
     return buildPayload(
       cachedPanda,
       states,
-      "live",
-      "stale-cache",
+      "unavailable",
+      "not-configured",
       now,
-      "PandaScore 当前未配置，继续保留各项目上一次成功的真实数据。",
+      "生产数据源配置错误；当前响应仅保留上一次成功同步的真实数据。",
     );
   }
 
@@ -361,7 +407,7 @@ export async function getSchedule(options: {
     "unavailable",
     "not-configured",
     now,
-    "没有可用的 PandaScore 真实数据；生产环境不会使用演示比赛冒充真实数据。",
+    "生产数据源配置错误，暂时没有可用的真实赛程。",
   );
 }
 

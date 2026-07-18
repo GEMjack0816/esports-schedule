@@ -5,6 +5,7 @@ import type {
   MatchStatus,
   PandaEndpointKey,
   PandaGameKey,
+  ProviderVerificationSample,
   Stream,
   Team,
 } from "./types";
@@ -489,6 +490,36 @@ function timeBounds(matches: EsportsMatch[]): { earliest: string | null; latest:
   return { earliest: times[0] ?? null, latest: times.at(-1) ?? null };
 }
 
+function verificationSample(
+  completed: Array<{ endpoint: PandaEndpointKey; result: PaginatedEndpoint }>,
+  matches: EsportsMatch[],
+): ProviderVerificationSample | null {
+  const normalized = matches.find((match) => match.startTimeUtc !== null) ?? matches[0];
+  if (!normalized) return null;
+
+  for (const { endpoint, result } of completed) {
+    const raw = result.matches.find((match) => String(match.id) === normalized.providerMatchId);
+    if (!raw) continue;
+    const rawTime = raw.begin_at ?? raw.scheduled_at ?? null;
+    return {
+      providerMatchId: normalized.providerMatchId,
+      endpoint,
+      providerTournament: raw.league?.name?.trim()
+        || raw.serie?.full_name?.trim()
+        || raw.serie?.name?.trim()
+        || raw.tournament?.name?.trim()
+        || raw.name?.trim()
+        || "赛事待定",
+      providerStartTimeUtc: rawTime && !Number.isNaN(Date.parse(rawTime))
+        ? new Date(rawTime).toISOString()
+        : null,
+      normalizedTournament: normalized.league,
+      normalizedStartTimeUtc: normalized.startTimeUtc,
+    };
+  }
+  return null;
+}
+
 export async function fetchPandaScoreGame(
   game: PandaGameKey,
   token: string,
@@ -559,6 +590,7 @@ export async function fetchPandaScoreGame(
   for (const match of matches) statusCounts[match.status] += 1;
   const bounds = timeBounds(matches);
   const fetchedAt = now.toISOString();
+  const sample = verificationSample(completed, matches);
 
   return {
     game,
@@ -582,6 +614,7 @@ export async function fetchPandaScoreGame(
       staleMinutes: 0,
       dataSource: "fresh",
       lastErrorCode: null,
+      verificationSample: sample,
     },
   };
 }

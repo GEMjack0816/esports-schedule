@@ -9,6 +9,7 @@ export async function GET() {
   return Response.json({
     demoMode: schedule.demoMode,
     providers: schedule.providers,
+    deployment: schedule.deployment,
     ...schedule.coverage,
   }, {
     headers: {

@@ -8,9 +8,10 @@ export async function GET() {
 
   return Response.json(payload, {
     headers: {
-      "Cache-Control": payload.stale
-        ? "public, s-maxage=60, stale-while-revalidate=300"
-        : "public, s-maxage=300, stale-while-revalidate=900",
+      "Cache-Control": "private, no-cache, no-store, max-age=0, must-revalidate",
+      "Vercel-CDN-Cache-Control": "no-store",
+      "X-Schedule-Mode": payload.mode,
+      "X-Schedule-Stale": String(payload.stale),
     },
   });
 }

@@ -286,11 +286,11 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
         <section className="schedule-section" aria-labelledby="schedule-title">
           <div className="section-heading">
             <div><span className="section-index">01 / 赛程中心</span><h2 id="schedule-title">比赛日历</h2></div>
-            <div className={`source-state ${payload.mode === "live" && !payload.stale ? "source-live" : payload.stale ? "source-stale" : "source-demo"}`}>
+            <div className={`source-state ${payload.mode === "live" && !payload.stale ? "source-live" : "source-stale"}`}>
               <i />
               <span>{payload.mode === "live"
                 ? payload.stale ? "PandaScore 聚合数据（部分延迟）" : "PandaScore 聚合数据"
-                : payload.mode === "demo" ? "演示数据模式" : "真实数据暂不可用"}</span>
+                : "真实数据服务暂不可用"}</span>
             </div>
           </div>
 

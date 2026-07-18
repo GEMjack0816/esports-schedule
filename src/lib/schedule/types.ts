@@ -18,7 +18,7 @@ export type MatchStatus =
   | "canceled"
   | "forfeit";
 
-export type MatchProvider = "pandascore" | "manual" | "demo";
+export type MatchProvider = "pandascore" | "manual";
 
 export type Team = {
   name: string;
@@ -71,6 +71,15 @@ export type EndpointCoverage = {
 
 export type GameSyncStatus = "normal" | "delayed" | "failed";
 
+export type ProviderVerificationSample = {
+  providerMatchId: string;
+  endpoint: PandaEndpointKey;
+  providerTournament: string;
+  providerStartTimeUtc: string | null;
+  normalizedTournament: string;
+  normalizedStartTimeUtc: string | null;
+};
+
 export type GameCoverage = {
   endpoints: Record<PandaEndpointKey, EndpointCoverage>;
   pages: number;
@@ -88,10 +97,11 @@ export type GameCoverage = {
   staleMinutes: number | null;
   dataSource: "fresh" | "cache" | "unavailable";
   lastErrorCode: string | null;
+  verificationSample?: ProviderVerificationSample | null;
 };
 
 export type DataCoverage = {
-  mode: "live" | "demo" | "unavailable";
+  mode: "live" | "unavailable";
   stale: boolean;
   syncAttemptedAt: string;
   lastSuccessfulSyncAt: string | null;
@@ -124,7 +134,7 @@ export type DataCoverage = {
 export type SchedulePayload = {
   matches: EsportsMatch[];
   generatedAt: string;
-  mode: "live" | "demo" | "unavailable";
+  mode: "live" | "unavailable";
   demoMode: boolean;
   stale: boolean;
   lastSuccessfulSyncAt: string | null;
@@ -133,5 +143,11 @@ export type SchedulePayload = {
     manual: "json";
   };
   coverage: DataCoverage;
+  deployment: {
+    id: string | null;
+    commitSha: string | null;
+    productionUrl: string | null;
+    environment: string | null;
+  };
   warning?: string;
 };

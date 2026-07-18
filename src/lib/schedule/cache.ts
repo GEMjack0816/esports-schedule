@@ -4,6 +4,8 @@ import type { PandaGameKey } from "./types";
 import { pandaGameKeys } from "./types";
 
 const CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
+const SYNC_LOCK_TTL_SECONDS = 5 * 60;
+const SYNC_LOCK_KEY = "pandascore-sync-lock-v1";
 
 export type PandaScoreGameSyncState = {
   game: PandaGameKey;
@@ -24,6 +26,60 @@ function snapshotKey(game: PandaGameKey): string {
 
 function syncStateKey(game: PandaGameKey): string {
   return `sync-state-v4:${game}`;
+}
+
+type SyncLock = {
+  owner: string;
+  expiresAt: string;
+};
+
+function isActiveSyncLock(value: unknown, now: Date): value is SyncLock {
+  if (!value || typeof value !== "object") return false;
+  const lock = value as Partial<SyncLock>;
+  return typeof lock.owner === "string"
+    && typeof lock.expiresAt === "string"
+    && Date.parse(lock.expiresAt) > now.getTime();
+}
+
+export async function acquirePandaScoreSyncLock(now = new Date()): Promise<string | null> {
+  const cache = scheduleCache();
+  try {
+    const existing = await cache.get(SYNC_LOCK_KEY);
+    if (isActiveSyncLock(existing, now)) return null;
+
+    const owner = crypto.randomUUID();
+    const lock: SyncLock = {
+      owner,
+      expiresAt: new Date(now.getTime() + SYNC_LOCK_TTL_SECONDS * 1_000).toISOString(),
+    };
+    await cache.set(SYNC_LOCK_KEY, lock, {
+      name: "PandaScore regional sync lock",
+      tags: ["pandascore-sync-lock"],
+      ttl: SYNC_LOCK_TTL_SECONDS,
+    });
+
+    // A brief claim-confirmation step prevents concurrent regional instances from
+    // both proceeding when they observed an expired lock at the same instant.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const confirmed = await cache.get(SYNC_LOCK_KEY);
+    return isActiveSyncLock(confirmed, now) && confirmed.owner === owner ? owner : null;
+  } catch {
+    console.warn("[schedule-cache] regional sync lock unavailable; using instance lock only");
+    return "instance-lock-fallback";
+  }
+}
+
+export async function releasePandaScoreSyncLock(owner: string): Promise<void> {
+  if (owner === "instance-lock-fallback") return;
+  const cache = scheduleCache();
+  try {
+    const current = await cache.get(SYNC_LOCK_KEY);
+    if (current && typeof current === "object" && (current as Partial<SyncLock>).owner === owner) {
+      await cache.delete(SYNC_LOCK_KEY);
+    }
+  } catch {
+    console.warn("[schedule-cache] regional sync lock release failed; TTL will expire it");
+  }
 }
 
 function isPandaGameSnapshot(value: unknown, game: PandaGameKey): value is PandaGameSnapshot {

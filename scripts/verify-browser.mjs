@@ -32,19 +32,47 @@ for (const profile of [
   });
   const page = await context.newPage();
   const errors = [];
+  const auditUrl = new URL(baseUrl);
+  auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(`console:${message.text()}`);
   });
   page.on("pageerror", (error) => errors.push(`page:${error.message}`));
   page.on("requestfailed", (request) => errors.push(`request:${request.method()} ${request.url()}`));
 
-  const response = await page.goto(baseUrl, { waitUntil: "networkidle", timeout: 120_000 });
+  const response = await page.goto(auditUrl.toString(), { waitUntil: "networkidle", timeout: 120_000 });
   const bodyText = await page.locator("body").innerText();
+  const html = await page.content();
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+
+  const gameFilterCounts = {};
+  const statusFilterCounts = {};
+  await page.getByRole("tab", { name: /全部收录/ }).click();
+  const gameSelect = page.locator(".filter-panel select").nth(0);
+  for (const game of ["lol", "valorant", "honor-of-kings", "cs2", "dota2"]) {
+    await gameSelect.selectOption(game);
+    gameFilterCounts[game] = await page.locator(".match-card").count();
+  }
+  await gameSelect.selectOption("all");
+  const statusSelect = page.locator(".filter-panel select").nth(2);
+  for (const status of ["running", "finished", "upcoming"]) {
+    await statusSelect.selectOption(status);
+    statusFilterCounts[status] = await page.locator(".match-card").count();
+  }
+  await statusSelect.selectOption("all");
+  await page.getByRole("tab", { name: /^今日/ }).click();
+
+  const apiResponsePromise = page.waitForResponse(
+    (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
+    { timeout: 120_000 },
+  );
+  await page.locator(".refresh-button").click();
+  const apiResponse = await apiResponsePromise;
+  const apiBody = await apiResponse.json();
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -87,9 +115,20 @@ for (const profile of [
     hasCoverageSummary: bodyText.includes("当前收录范围"),
     hasSubmitLink: bodyText.includes("提交遗漏比赛"),
     hasProfessionalCoverageCopy: bodyText.includes("聚合五大电竞项目的主要职业及半职业比赛"),
+    forbiddenVisiblePhrases: ["演示数据模式", "PandaScore Token 尚未配置", "当前展示演示赛程与王者荣耀人工数据"]
+      .filter((phrase) => bodyText.includes(phrase)),
+    forbiddenHtmlPhrases: ["演示数据模式", "PandaScore Token 尚未配置", "当前展示演示赛程与王者荣耀人工数据"]
+      .filter((phrase) => html.includes(phrase)),
     syncStatusCards,
     gameOptions,
+    gameFilterCounts,
+    statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
+    refreshedApiUrl: apiResponse.url(),
+    refreshedApiMode: apiBody.mode,
+    refreshedApiDemoMode: apiBody.demoMode,
+    refreshedApiStale: apiBody.stale,
+    refreshedApiDeployment: apiBody.deployment,
     healthStatus: healthResult.status,
     healthMode: healthResult.body.mode,
     healthDemoMode: healthResult.body.demoMode,

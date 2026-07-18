@@ -210,6 +210,12 @@ describe("PandaScore normalization", () => {
     const result = await fetchPandaScoreGame("lol", "test-token", { now, fetchImpl: fetchImpl as typeof fetch });
     expect(result.matches).toHaveLength(1);
     expect(result.matches[0]).toMatchObject({ providerMatchId: "88", status: "finished" });
+    expect(result.coverage.verificationSample).toMatchObject({
+      providerMatchId: "88",
+      endpoint: "past",
+      providerStartTimeUtc: "2026-07-18T11:00:00.000Z",
+      normalizedStartTimeUtc: "2026-07-18T11:00:00.000Z",
+    });
   });
 });
 
