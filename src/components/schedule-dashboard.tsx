@@ -1,15 +1,23 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
+type Theme = "dark" | "light";
 
 const subscribeToTimeZone = () => () => undefined;
 const getBrowserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 const getServerTimeZone = () => "UTC";
+const subscribeToTheme = (callback: () => void) => {
+  window.addEventListener("schedule-theme-change", callback);
+  return () => window.removeEventListener("schedule-theme-change", callback);
+};
+const getBrowserTheme = (): Theme => document.documentElement.dataset.theme === "light" ? "light" : "dark";
+const getServerTheme = (): Theme => "dark";
 
 const games: Record<GameKey, { label: string; short: string; color: string }> = {
   lol: { label: "英雄联盟", short: "LOL", color: "#45d6ff" },
@@ -25,9 +33,11 @@ const statusMeta: Record<MatchStatus, { label: string; className: string }> = {
   finished: { label: "已结束", className: "status-finished" },
   postponed: { label: "已延期", className: "status-postponed" },
   canceled: { label: "已取消", className: "status-canceled" },
+  forfeit: { label: "已弃权", className: "status-forfeit" },
 };
 
-function formatTime(value: string, timeZone: string): string {
+function formatTime(value: string | null, timeZone: string): string {
+  if (!value) return "待定";
   return new Intl.DateTimeFormat("zh-CN", {
     timeZone,
     hour: "2-digit",
@@ -36,7 +46,8 @@ function formatTime(value: string, timeZone: string): string {
   }).format(new Date(value));
 }
 
-function formatDate(value: string, timeZone: string): string {
+function formatDate(value: string | null, timeZone: string): string {
+  if (!value) return "时间待定";
   return new Intl.DateTimeFormat("zh-CN", {
     timeZone,
     month: "long",
@@ -63,6 +74,10 @@ function initials(name: string): string {
   return asciiInitials || name.slice(0, 2);
 }
 
+function matchDateKey(match: EsportsMatch, timeZone: string): string {
+  return match.startTimeUtc ? dateKeyInTimeZone(match.startTimeUtc, timeZone) : "unscheduled";
+}
+
 function MatchStatusBadge({ status }: { status: MatchStatus }) {
   const meta = statusMeta[status];
   return (
@@ -74,13 +89,23 @@ function MatchStatusBadge({ status }: { status: MatchStatus }) {
 }
 
 function TeamRow({ team, score, winning }: {
-  team: EsportsMatch["teams"][number];
+  team: EsportsMatch["homeTeam"];
   score: number | null;
   winning: boolean;
 }) {
   return (
     <div className={`team-row ${winning ? "team-winning" : ""}`}>
-      <span className="team-mark" aria-hidden="true">{team.acronym?.slice(0, 3) || initials(team.name)}</span>
+      <span className="team-mark" aria-hidden="true">
+        <Image
+          src={team.logo || "/team-placeholder.svg"}
+          alt=""
+          width={28}
+          height={28}
+          unoptimized
+          onError={(event) => { event.currentTarget.src = "/team-placeholder.svg"; }}
+        />
+        <span>{team.acronym?.slice(0, 3) || initials(team.name)}</span>
+      </span>
       <span className="team-name">{team.name}</span>
       <span className="team-score">{score ?? "–"}</span>
     </div>
@@ -89,7 +114,8 @@ function TeamRow({ team, score, winning }: {
 
 function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string }) {
   const game = games[match.game];
-  const [scoreA, scoreB] = match.scores;
+  const scoreA = match.homeScore;
+  const scoreB = match.awayScore;
   const firstWins = scoreA !== null && scoreB !== null && scoreA > scoreB;
   const secondWins = scoreA !== null && scoreB !== null && scoreB > scoreA;
   const stream = match.streams[0];
@@ -97,16 +123,16 @@ function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string 
   return (
     <article className={`match-card ${match.status === "running" ? "match-live" : ""}`}>
       <div className="match-time-cell">
-        <span className="match-time">{formatTime(match.scheduledAt, timeZone)}</span>
-        <span className="match-date">{formatDate(match.scheduledAt, timeZone)}</span>
+        <span className="match-time">{formatTime(match.startTimeUtc, timeZone)}</span>
+        <span className="match-date">{formatDate(match.startTimeUtc, timeZone)}</span>
       </div>
       <div className="match-event-cell">
         <span className="game-chip" style={{ "--game-color": game.color } as React.CSSProperties}>{game.short}</span>
-        <div><h3>{match.league}</h3><p>{match.tournament || "赛程待更新"}</p></div>
+        <div><h3>{match.league}</h3><p>{[match.tournament, match.stage].filter(Boolean).join(" · ") || "赛程待更新"}</p></div>
       </div>
       <div className="match-teams-cell">
-        <TeamRow team={match.teams[0]} score={scoreA} winning={firstWins} />
-        <TeamRow team={match.teams[1]} score={scoreB} winning={secondWins} />
+        <TeamRow team={match.homeTeam} score={scoreA} winning={firstWins} />
+        <TeamRow team={match.awayTeam} score={scoreB} winning={secondWins} />
       </div>
       <div className="match-meta-cell">
         <span className="bo-label">{match.bestOf ? `BO${match.bestOf}` : "BO待定"}</span>
@@ -136,6 +162,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     getBrowserTimeZone,
     getServerTimeZone,
   );
+  const theme = useSyncExternalStore(subscribeToTheme, getBrowserTheme, getServerTheme);
 
   const today = addDaysKey(0, timeZone);
   const tomorrow = addDaysKey(1, timeZone);
@@ -144,7 +171,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const rangeCounts = useMemo(() => {
     const counts: Record<RangeKey, number> = { today: 0, tomorrow: 0, seven: 0, history: 0, all: 0 };
     for (const match of payload.matches) {
-      const key = dateKeyInTimeZone(match.scheduledAt, timeZone);
+      const key = matchDateKey(match, timeZone);
       counts.all += 1;
       if (key === today) counts.today += 1;
       if (key === tomorrow) counts.tomorrow += 1;
@@ -162,7 +189,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const filtered = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
     return payload.matches.filter((match) => {
-      const key = dateKeyInTimeZone(match.scheduledAt, timeZone);
+      const key = matchDateKey(match, timeZone);
       const inRange = selectedDate
         ? key === selectedDate
         : range === "all"
@@ -174,7 +201,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
               : range === "seven"
                 ? key >= today && key <= sevenDaysOut
                 : key < today;
-      const haystack = [match.teams[0].name, match.teams[1].name, match.league, match.tournament || ""]
+      const haystack = [match.homeTeam.name, match.awayTeam.name, match.league, match.tournament || "", match.stage || ""]
         .join(" ").toLocaleLowerCase();
       return inRange
         && (game === "all" || match.game === game)
@@ -187,10 +214,14 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const grouped = useMemo(() => {
     const groups = new Map<string, EsportsMatch[]>();
     for (const match of filtered) {
-      const key = dateKeyInTimeZone(match.scheduledAt, timeZone);
+      const key = matchDateKey(match, timeZone);
       groups.set(key, [...(groups.get(key) ?? []), match]);
     }
-    return [...groups.entries()].sort(([a], [b]) => range === "history" ? b.localeCompare(a) : a.localeCompare(b));
+    return [...groups.entries()].sort(([a], [b]) => {
+      if (a === "unscheduled") return 1;
+      if (b === "unscheduled") return -1;
+      return range === "history" ? b.localeCompare(a) : a.localeCompare(b);
+    });
   }, [filtered, range, timeZone]);
 
   const liveCount = payload.matches.filter((match) => match.status === "running").length;
@@ -210,6 +241,13 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     setGame("all"); setLeague("all"); setStatus("all"); setQuery(""); setSelectedDate("");
   }
 
+  function toggleTheme() {
+    const nextTheme: Theme = theme === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = nextTheme;
+    localStorage.setItem("schedule-theme", nextTheme);
+    window.dispatchEvent(new Event("schedule-theme-change"));
+  }
+
   return (
     <div className="site-shell">
       <header className="site-header">
@@ -222,6 +260,9 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="6.75" /><path d="M9 5v4.3l2.7 1.7" /></svg>
             {timeZone.replace("Asia/", "")}
           </span>
+          <button className="theme-button" type="button" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}>
+            <span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
+          </button>
           <button className="refresh-button" type="button" onClick={refreshSchedule} disabled={refreshing}>
             <svg className={refreshing ? "is-spinning" : ""} viewBox="0 0 18 18" aria-hidden="true"><path d="M14.6 6.5A6 6 0 1 0 15 10M14.6 3.5v3h-3" /></svg>
             <span>{refreshing ? "更新中" : "刷新"}</span>
@@ -234,7 +275,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           <div className="hero-copy">
             <span className="eyebrow"><i /> GLOBAL ESPORTS FIXTURES</span>
             <h1>全球赛场，<br /><span>一屏掌握。</span></h1>
-            <p>五大热门电竞项目的赛程、比分与直播入口，时间已自动转换为你的本地时区。</p>
+            <p>聚合五大电竞项目的主要职业及半职业比赛、比分与直播入口，时间会自动转换为你的本地时区。</p>
           </div>
           <div className="hero-stats">
             <div className="stat-card stat-card-live"><span className="stat-label"><i /> LIVE NOW</span><strong>{String(liveCount).padStart(2, "0")}</strong><span>场比赛正在进行</span></div>
@@ -248,7 +289,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <div className={`source-state ${payload.mode === "live" && !payload.stale ? "source-live" : payload.stale ? "source-stale" : "source-demo"}`}>
               <i />
               <span>{payload.mode === "live"
-                ? payload.stale ? "PandaScore 真实数据（可能过期）" : "PandaScore 实时数据"
+                ? payload.stale ? "PandaScore 聚合数据（部分延迟）" : "PandaScore 聚合数据"
                 : payload.mode === "demo" ? "演示数据模式" : "真实数据暂不可用"}</span>
             </div>
           </div>
@@ -259,6 +300,20 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <span>数据更新时间 <strong>{formatDateTime(payload.lastSuccessfulSyncAt, timeZone)}</strong></span>
             <span>当前收录范围 <strong>{formatDateTime(payload.coverage.range.earliestMatchAt, timeZone)} — {formatDateTime(payload.coverage.range.latestMatchAt, timeZone)}</strong></span>
             <Link href="/submit-match" prefetch={false}>提交遗漏比赛</Link>
+          </div>
+
+          <div className="sync-status-grid" aria-label="各游戏数据同步状态">
+            {Object.entries(games).map(([key, value]) => {
+              const coverage = payload.coverage.games[key as GameKey];
+              const syncStatus = coverage?.syncStatus ?? "failed";
+              return (
+                <div className={`sync-status-card sync-${syncStatus}`} key={key}>
+                  <span>{value.label}</span>
+                  <strong>{syncStatus === "normal" ? "正常" : syncStatus === "delayed" ? "延迟" : "同步失败"}</strong>
+                  <small>{formatDateTime(coverage?.lastSuccessfulSyncAt ?? null, timeZone)}</small>
+                </div>
+              );
+            })}
           </div>
 
           <div className="range-tabs" role="tablist" aria-label="选择时间范围">
@@ -280,7 +335,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           <div className="match-list" aria-live="polite">
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
               <section className="date-group" key={key}>
-                <div className="date-divider"><span>{formatDate(matches[0].scheduledAt, timeZone)}</span><i /><em>{matches.length} 场</em></div>
+                <div className="date-divider"><span>{formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
                 {matches.map((match) => <MatchCard match={match} timeZone={timeZone} key={match.id} />)}
               </section>
             )) : (
@@ -292,7 +347,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
 
       <footer className="site-footer">
         <div className="brand footer-brand"><span className="brand-mark"><i /><i /><i /></span><span>赛界<span className="brand-accent">PULSE</span></span></div>
-        <p>PandaScore Fixtures · 王者荣耀人工 JSON · 自动本地时区</p>
+        <p>PandaScore 五游戏 Fixtures · 人工纠错补漏 · 自动本地时区</p>
         <span>最后成功同步 {formatDateTime(payload.lastSuccessfulSyncAt, timeZone)}</span>
       </footer>
     </div>

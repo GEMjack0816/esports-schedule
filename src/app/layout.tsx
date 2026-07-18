@@ -13,12 +13,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "赛界 PULSE｜全球电竞赛程",
-  description: "聚合英雄联盟、无畏契约、王者荣耀、CS2 与 Dota 2 的比赛时间、比分和直播入口。",
+  title: "赛界 PULSE｜五大电竞赛程聚合",
+  description: "聚合英雄联盟、无畏契约、王者荣耀、CS2 与 Dota 2 的主要职业及半职业比赛。",
   metadataBase: new URL("https://esports-schedule-two.vercel.app"),
   openGraph: {
     title: "赛界 PULSE｜全球电竞赛程",
-    description: "五大热门电竞项目赛程、比分与直播，一屏掌握。",
+    description: "聚合五大电竞项目的主要职业及半职业比赛、比分与直播入口。",
     type: "website",
     locale: "zh_CN",
   },
@@ -33,8 +33,16 @@ export default function RootLayout({
     <html
       lang="zh-CN"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <script
+          dangerouslySetInnerHTML={{
+            __html: "try{var t=localStorage.getItem('schedule-theme');document.documentElement.dataset.theme=t==='light'||t==='dark'?t:(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark')}catch(e){document.documentElement.dataset.theme='dark'}",
+          }}
+        />
+        {children}
+      </body>
     </html>
   );
 }

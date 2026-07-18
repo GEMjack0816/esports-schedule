@@ -1,13 +1,20 @@
 import {
-  readLastSuccessfulPandaScore,
-  readPandaScoreSyncState,
-  writeLastSuccessfulPandaScore,
-  writePandaScoreSyncState,
+  readAllPandaScoreGameSnapshots,
+  readAllPandaScoreGameSyncStates,
+  writePandaScoreGameSnapshot,
+  writePandaScoreGameSyncState,
 } from "./cache";
-import { getDemoMatches } from "./demo";
-import { getManualMatches } from "./manual";
-import { getPandaScoreMatches } from "./pandascore";
-import type { PandaScoreResult } from "./pandascore";
+import type { PandaScoreGameSyncState } from "./cache";
+import { applyManualData } from "./manual";
+import {
+  aggregatePandaScoreSnapshots,
+  syncPandaScoreGames,
+} from "./pandascore";
+import type {
+  PandaGameSnapshot,
+  PandaScoreResult,
+  PandaScoreSyncBatch,
+} from "./pandascore";
 import type {
   DataCoverage,
   EndpointCoverage,
@@ -19,11 +26,14 @@ import type {
   SchedulePayload,
 } from "./types";
 import { pandaEndpointKeys, pandaGameKeys } from "./types";
-import { uniqueAndSort } from "./utils";
 
 const FRESH_FOR_MS = 15 * 60 * 1_000;
+const FAILED_AFTER_MS = 60 * 60 * 1_000;
 
-let inFlightSync: Promise<PandaScoreResult> | null = null;
+let inFlightSync: Promise<PandaScoreSyncBatch> | null = null;
+
+type SnapshotMap = Partial<Record<PandaGameKey, PandaGameSnapshot>>;
+type SyncStateMap = Partial<Record<PandaGameKey, PandaScoreGameSyncState>>;
 
 function emptyEndpointCoverage(): EndpointCoverage {
   return {
@@ -52,6 +62,7 @@ function emptyGameCoverage(): GameCoverage {
     finished: 0,
     postponed: 0,
     canceled: 0,
+    forfeit: 0,
   };
   return {
     endpoints,
@@ -64,40 +75,80 @@ function emptyGameCoverage(): GameCoverage {
     statusCounts,
     earliestMatchAt: null,
     latestMatchAt: null,
+    lastSuccessfulSyncAt: null,
+    lastAttemptAt: null,
+    syncStatus: "failed",
+    staleMinutes: null,
+    dataSource: "unavailable",
+    lastErrorCode: null,
   };
 }
 
-function emptyGames(): Record<PandaGameKey, GameCoverage> {
+function maxDate(values: Array<string | null | undefined>): string | null {
+  const valid = values.filter((value): value is string => !!value && !Number.isNaN(Date.parse(value)));
+  return valid.sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
+}
+
+function decorateGames(
+  snapshots: SnapshotMap,
+  states: SyncStateMap,
+  now: Date,
+): Record<PandaGameKey, GameCoverage> {
   const games = {} as Record<PandaGameKey, GameCoverage>;
-  for (const game of pandaGameKeys) games[game] = emptyGameCoverage();
+  for (const game of pandaGameKeys) {
+    const snapshot = snapshots[game];
+    const state = states[game];
+    const base = snapshot?.coverage ?? emptyGameCoverage();
+    const lastSuccessfulSyncAt = state?.lastSuccessfulSyncAt ?? snapshot?.fetchedAt ?? null;
+    const lastAttemptAt = state?.lastAttemptAt ?? lastSuccessfulSyncAt;
+    const staleMs = lastSuccessfulSyncAt
+      ? Math.max(0, now.getTime() - Date.parse(lastSuccessfulSyncAt))
+      : null;
+    const failedAttempt = !!state?.lastErrorAt
+      && (!lastSuccessfulSyncAt || Date.parse(state.lastErrorAt) >= Date.parse(lastSuccessfulSyncAt));
+    const syncStatus = failedAttempt || staleMs === null || staleMs > FAILED_AFTER_MS
+      ? "failed"
+      : staleMs > FRESH_FOR_MS
+        ? "delayed"
+        : "normal";
+
+    games[game] = {
+      ...base,
+      lastSuccessfulSyncAt,
+      lastAttemptAt,
+      syncStatus,
+      staleMinutes: staleMs === null ? null : Math.floor(staleMs / 60_000),
+      dataSource: snapshot ? (syncStatus === "normal" ? "fresh" : "cache") : "unavailable",
+      lastErrorCode: state?.lastErrorCode ?? null,
+    };
+  }
   return games;
 }
 
 function bounds(matches: EsportsMatch[]) {
-  if (matches.length === 0) return { earliest: null, latest: null };
-  const sorted = [...matches].sort(
-    (a, b) => Date.parse(a.scheduledAt) - Date.parse(b.scheduledAt),
-  );
-  return {
-    earliest: sorted[0].scheduledAt,
-    latest: sorted.at(-1)?.scheduledAt ?? null,
-  };
+  const sorted = matches
+    .map((match) => match.startTimeUtc)
+    .filter((value): value is string => value !== null)
+    .sort((a, b) => Date.parse(a) - Date.parse(b));
+  return { earliest: sorted[0] ?? null, latest: sorted.at(-1) ?? null };
 }
 
 function makeCoverage(
   mode: SchedulePayload["mode"],
   stale: boolean,
-  syncAttemptedAt: string,
+  now: Date,
   panda: PandaScoreResult | null,
+  states: SyncStateMap,
   matches: EsportsMatch[],
-  manual: ReturnType<typeof getManualMatches>,
+  manual: ReturnType<typeof applyManualData>,
 ): DataCoverage {
   const range = bounds(matches);
+  const games = decorateGames(panda?.snapshots ?? {}, states, now);
   return {
     mode,
     stale,
-    syncAttemptedAt,
-    lastSuccessfulSyncAt: panda?.fetchedAt ?? null,
+    syncAttemptedAt: maxDate(Object.values(states).map((state) => state?.lastAttemptAt)) ?? now.toISOString(),
+    lastSuccessfulSyncAt: maxDate(Object.values(games).map((game) => game.lastSuccessfulSyncAt)),
     rateLimitRemaining: panda?.rateLimitRemaining ?? null,
     range: {
       pastDays: 30,
@@ -114,55 +165,116 @@ function makeCoverage(
       finalWithManual: matches.length,
       filtered: panda ? panda.totals.raw - panda.totals.final : 0,
     },
-    games: panda?.games ?? emptyGames(),
+    games,
     manual: {
       honorOfKings: manual.honorOfKingsCount,
       supplemental: manual.supplementalCount,
-      published: manual.matches.length,
+      overrides: manual.overrideCount,
+      hidden: manual.hiddenCount,
+      published: manual.honorOfKingsCount + manual.supplementalCount,
     },
   };
 }
 
 function buildPayload(
   panda: PandaScoreResult | null,
+  states: SyncStateMap,
   mode: SchedulePayload["mode"],
   provider: SchedulePayload["providers"]["pandascore"],
-  stale: boolean,
   now: Date,
   warning?: string,
 ): SchedulePayload {
-  const manual = getManualMatches(now);
-  const base = mode === "demo" ? getDemoMatches() : panda?.matches ?? [];
-  const matches = uniqueAndSort([...base, ...manual.matches]);
-  const generatedAt = now.toISOString();
+  const manual = applyManualData(panda?.matches ?? [], now);
+  const matches = manual.matches;
+  const games = decorateGames(panda?.snapshots ?? {}, states, now);
+  const stale = panda
+    ? pandaGameKeys.some((game) => games[game].syncStatus !== "normal")
+    : true;
+  const coverage = makeCoverage(mode, stale, now, panda, states, matches, manual);
 
   return {
     matches,
-    generatedAt,
+    generatedAt: now.toISOString(),
     mode,
-    demoMode: mode === "demo",
+    demoMode: false,
     stale,
-    lastSuccessfulSyncAt: panda?.fetchedAt ?? null,
+    lastSuccessfulSyncAt: coverage.lastSuccessfulSyncAt,
     providers: {
       pandascore: provider,
       manual: "json",
     },
-    coverage: makeCoverage(mode, stale, generatedAt, panda, matches, manual),
+    coverage,
     warning,
   };
 }
 
-function isFresh(result: PandaScoreResult, now: Date): boolean {
-  return now.getTime() - Date.parse(result.fetchedAt) < FRESH_FOR_MS;
+function isFresh(snapshot: PandaGameSnapshot, now: Date): boolean {
+  return now.getTime() - Date.parse(snapshot.fetchedAt) < FRESH_FOR_MS;
 }
 
-async function synchronize(token: string, now: Date): Promise<PandaScoreResult> {
+function allGamesFresh(snapshots: SnapshotMap, states: SyncStateMap, now: Date): boolean {
+  return pandaGameKeys.every((game) => {
+    const snapshot = snapshots[game];
+    const state = states[game];
+    if (!snapshot || !isFresh(snapshot, now)) return false;
+    return !state?.lastErrorAt || Date.parse(state.lastErrorAt) < Date.parse(snapshot.fetchedAt);
+  });
+}
+
+async function synchronize(token: string, snapshots: SnapshotMap, now: Date): Promise<PandaScoreSyncBatch> {
   if (!inFlightSync) {
-    inFlightSync = getPandaScoreMatches(token, { now }).finally(() => {
+    inFlightSync = syncPandaScoreGames(token, snapshots, { now }).finally(() => {
       inFlightSync = null;
     });
   }
   return inFlightSync;
+}
+
+async function persistSyncBatch(
+  batch: PandaScoreSyncBatch,
+  previousStates: SyncStateMap,
+  now: Date,
+): Promise<SyncStateMap> {
+  const nextStates: SyncStateMap = { ...previousStates };
+  const operations: Promise<unknown>[] = [];
+  for (const game of pandaGameKeys) {
+    const snapshot = batch.snapshots[game];
+    const failure = batch.failures[game];
+    if (batch.updatedGames.includes(game) && snapshot) {
+      const state: PandaScoreGameSyncState = {
+        game,
+        lastAttemptAt: now.toISOString(),
+        lastSuccessfulSyncAt: snapshot.fetchedAt,
+        lastErrorAt: null,
+        lastErrorCode: null,
+        lastHttpStatus: null,
+      };
+      nextStates[game] = state;
+      operations.push(writePandaScoreGameSnapshot(snapshot), writePandaScoreGameSyncState(state));
+      continue;
+    }
+    if (failure) {
+      const state: PandaScoreGameSyncState = {
+        game,
+        lastAttemptAt: now.toISOString(),
+        lastSuccessfulSyncAt: previousStates[game]?.lastSuccessfulSyncAt ?? snapshot?.fetchedAt ?? null,
+        lastErrorAt: now.toISOString(),
+        lastErrorCode: failure.code,
+        lastHttpStatus: failure.status,
+      };
+      nextStates[game] = state;
+      operations.push(writePandaScoreGameSyncState(state));
+      console.error(`[schedule] ${game} sync failed (${failure.code}${failure.status ? ` HTTP ${failure.status}` : ""})`);
+    }
+  }
+  await Promise.allSettled(operations);
+  return nextStates;
+}
+
+function failureWarning(batch: PandaScoreSyncBatch): string | undefined {
+  const failedGames = pandaGameKeys.filter((game) => !!batch.failures[game]);
+  if (failedGames.length === 0) return undefined;
+  return `部分项目同步失败（${failedGames.join("、")}），已分别保留这些项目上一次成功的真实数据；其他项目已继续更新。`;
 }
 
 export async function getSchedule(options: {
@@ -172,101 +284,84 @@ export async function getSchedule(options: {
 } = {}): Promise<SchedulePayload> {
   const now = options.now ?? new Date();
   const token = process.env.PANDASCORE_TOKEN?.trim();
-  const [cached, syncState] = await Promise.all([
-    readLastSuccessfulPandaScore(),
-    readPandaScoreSyncState(),
+  const cacheReads = await Promise.allSettled([
+    readAllPandaScoreGameSnapshots(),
+    readAllPandaScoreGameSyncStates(),
   ]);
+  const snapshots = cacheReads[0].status === "fulfilled" ? cacheReads[0].value : {};
+  let states: SyncStateMap = cacheReads[1].status === "fulfilled" ? cacheReads[1].value : {};
+  const cachedPanda = aggregatePandaScoreSnapshots(snapshots);
 
   if (options.cachedOnly) {
-    if (cached) {
-      const stale = !!syncState?.lastErrorAt
-        && Date.parse(syncState.lastErrorAt) >= Date.parse(cached.fetchedAt);
+    if (cachedPanda) {
+      const games = decorateGames(snapshots, states, now);
+      const stale = pandaGameKeys.some((game) => games[game].syncStatus !== "normal");
       return buildPayload(
-        cached,
+        cachedPanda,
+        states,
         "live",
         stale ? "stale-cache" : "connected",
-        stale,
         now,
-        stale ? "最近一次 PandaScore 同步失败，当前保留上次成功的真实数据。" : undefined,
+        stale ? "一个或多个项目的数据同步延迟，当前继续提供各项目上一次成功的真实数据。" : undefined,
       );
     }
-    return token
-      ? buildPayload(
-          null,
-          "unavailable",
-          "error",
-          true,
-          now,
-          "尚未生成首次真实数据缓存，请先访问赛程接口触发同步。",
-        )
-      : buildPayload(
-          null,
-          "demo",
-          "not-configured",
-          false,
-          now,
-          "此环境从未成功同步 PandaScore，当前展示演示数据与已审核人工数据。",
-        );
+    return buildPayload(
+      null,
+      states,
+      "unavailable",
+      token ? "error" : "not-configured",
+      now,
+      token ? "尚未生成首批真实数据缓存。" : "PandaScore 服务端环境变量尚未配置。",
+    );
   }
 
-  if (cached && !options.forceRefresh && isFresh(cached, now)) {
-    return buildPayload(cached, "live", "connected", false, now);
+  if (cachedPanda && !options.forceRefresh && allGamesFresh(snapshots, states, now)) {
+    return buildPayload(cachedPanda, states, "live", "connected", now);
   }
 
   if (token) {
-    try {
-      const live = await synchronize(token, now);
-      await Promise.all([
-        writeLastSuccessfulPandaScore(live),
-        writePandaScoreSyncState({ lastAttemptAt: now.toISOString(), lastErrorAt: null }),
-      ]);
-      return buildPayload(live, "live", "connected", false, now);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown PandaScore failure";
-      console.error(`[schedule] PandaScore sync failed: ${message}`);
-      await writePandaScoreSyncState({
-        lastAttemptAt: now.toISOString(),
-        lastErrorAt: now.toISOString(),
-      });
-      if (cached) {
-        return buildPayload(
-          cached,
-          "live",
-          "stale-cache",
-          true,
-          now,
-          "PandaScore 暂时不可用，当前保留最近一次成功同步的真实数据，数据可能已过期。",
-        );
-      }
+    const batch = await synchronize(token, snapshots, now);
+    states = await persistSyncBatch(batch, states, now);
+    const panda = aggregatePandaScoreSnapshots(batch.snapshots);
+    if (panda) {
+      const warning = failureWarning(batch);
       return buildPayload(
-        null,
-        "unavailable",
-        "error",
-        true,
+        panda,
+        states,
+        "live",
+        warning ? "stale-cache" : "connected",
         now,
-        "PandaScore 暂时不可用，且没有可用的历史真实数据；当前仅展示已审核人工数据。",
+        warning,
       );
     }
+    return buildPayload(
+      null,
+      states,
+      "unavailable",
+      "error",
+      now,
+      "PandaScore 当前不可用且没有任何项目的历史真实数据；未使用演示比赛替代。",
+    );
   }
 
-  if (cached) {
+  if (cachedPanda) {
     return buildPayload(
-      cached,
+      cachedPanda,
+      states,
       "live",
       "stale-cache",
-      true,
       now,
-      "PandaScore 当前未配置，正在保留最近一次成功同步的真实数据。",
+      "PandaScore 当前未配置，继续保留各项目上一次成功的真实数据。",
     );
   }
 
   return buildPayload(
     null,
-    "demo",
+    states,
+    "unavailable",
     "not-configured",
-    false,
     now,
-    "此环境从未成功同步 PandaScore，当前展示演示数据与已审核人工数据。",
+    "没有可用的 PandaScore 真实数据；生产环境不会使用演示比赛冒充真实数据。",
   );
 }
 

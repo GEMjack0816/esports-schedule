@@ -122,21 +122,22 @@ export function getDemoMatches(): EsportsMatch[] {
 
   return seeds.map((seed) => ({
     id: `demo-${seed.id}`,
+    provider: "demo" as const,
+    providerMatchId: seed.id,
     game: seed.game,
-    scheduledAt: new Date(now + seed.hourOffset * 60 * 60 * 1000).toISOString(),
-    teams: [
-      { name: seed.teams[0], acronym: seed.teams[0].split(" ").map((word) => word[0]).join("").slice(0, 4) },
-      { name: seed.teams[1], acronym: seed.teams[1].split(" ").map((word) => word[0]).join("").slice(0, 4) },
-    ],
+    startTimeUtc: new Date(now + seed.hourOffset * 60 * 60 * 1000).toISOString(),
+    homeTeam: { name: seed.teams[0], acronym: seed.teams[0].split(" ").map((word) => word[0]).join("").slice(0, 4), logo: "/team-placeholder.svg" },
+    awayTeam: { name: seed.teams[1], acronym: seed.teams[1].split(" ").map((word) => word[0]).join("").slice(0, 4), logo: "/team-placeholder.svg" },
     league: seed.league,
     tournament: seed.tournament,
+    stage: null,
     bestOf: seed.bestOf,
-    scores: seed.scores ?? [null, null],
+    homeScore: seed.scores?.[0] ?? null,
+    awayScore: seed.scores?.[1] ?? null,
     status: seed.status,
     streams: seed.stream
       ? [{ label: "官方直播", url: seed.stream, official: true }]
       : [],
-    source: "demo",
-    updatedAt,
+    lastUpdatedAt: updatedAt,
   }));
 }

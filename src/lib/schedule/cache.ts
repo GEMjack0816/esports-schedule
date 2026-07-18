@@ -1,74 +1,109 @@
 import { getCache } from "@vercel/functions";
-import type { PandaScoreResult } from "./pandascore";
+import type { PandaGameSnapshot } from "./pandascore";
+import type { PandaGameKey } from "./types";
+import { pandaGameKeys } from "./types";
 
-const CACHE_KEY = "last-success-v3";
-const SYNC_STATE_KEY = "sync-state-v3";
 const CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
 
-export type PandaScoreSyncState = {
+export type PandaScoreGameSyncState = {
+  game: PandaGameKey;
   lastAttemptAt: string;
+  lastSuccessfulSyncAt: string | null;
   lastErrorAt: string | null;
+  lastErrorCode: string | null;
+  lastHttpStatus: number | null;
 };
 
 function scheduleCache() {
   return getCache({ namespace: "esports-schedule" });
 }
 
-function isPandaScoreResult(value: unknown): value is PandaScoreResult {
-  if (!value || typeof value !== "object") return false;
-  const cached = value as Partial<PandaScoreResult>;
-  return (
-    Array.isArray(cached.matches) &&
-    typeof cached.fetchedAt === "string" &&
-    !!cached.games &&
-    !!cached.totals
-  );
+function snapshotKey(game: PandaGameKey): string {
+  return `last-success-v4:${game}`;
 }
 
-export async function readLastSuccessfulPandaScore(): Promise<PandaScoreResult | null> {
+function syncStateKey(game: PandaGameKey): string {
+  return `sync-state-v4:${game}`;
+}
+
+function isPandaGameSnapshot(value: unknown, game: PandaGameKey): value is PandaGameSnapshot {
+  if (!value || typeof value !== "object") return false;
+  const cached = value as Partial<PandaGameSnapshot>;
+  return cached.game === game
+    && Array.isArray(cached.matches)
+    && typeof cached.fetchedAt === "string"
+    && !!cached.coverage;
+}
+
+export async function readPandaScoreGameSnapshot(game: PandaGameKey): Promise<PandaGameSnapshot | null> {
   try {
-    const cached = await scheduleCache().get(CACHE_KEY);
-    return isPandaScoreResult(cached) ? cached : null;
+    const cached = await scheduleCache().get(snapshotKey(game));
+    return isPandaGameSnapshot(cached, game) ? cached : null;
   } catch {
-    console.warn("[schedule-cache] Last-success cache could not be read");
+    console.warn(`[schedule-cache] ${game} last-success cache could not be read`);
     return null;
   }
 }
 
-export async function writeLastSuccessfulPandaScore(value: PandaScoreResult): Promise<void> {
+export async function readAllPandaScoreGameSnapshots(): Promise<Partial<Record<PandaGameKey, PandaGameSnapshot>>> {
+  const settled = await Promise.allSettled(pandaGameKeys.map((game) => readPandaScoreGameSnapshot(game)));
+  const snapshots: Partial<Record<PandaGameKey, PandaGameSnapshot>> = {};
+  settled.forEach((result, index) => {
+    if (result.status === "fulfilled" && result.value) snapshots[pandaGameKeys[index]] = result.value;
+  });
+  return snapshots;
+}
+
+export async function writePandaScoreGameSnapshot(value: PandaGameSnapshot): Promise<void> {
   try {
-    await scheduleCache().set(CACHE_KEY, value, {
-      name: "PandaScore last successful fixtures",
-      tags: ["pandascore-fixtures", "schedule-last-success"],
+    await scheduleCache().set(snapshotKey(value.game), value, {
+      name: `PandaScore ${value.game} last successful fixtures`,
+      tags: ["pandascore-fixtures", `schedule-${value.game}`],
       ttl: CACHE_TTL_SECONDS,
     });
   } catch {
-    console.warn("[schedule-cache] Last-success cache could not be written");
+    console.warn(`[schedule-cache] ${value.game} last-success cache could not be written`);
   }
 }
 
-export async function readPandaScoreSyncState(): Promise<PandaScoreSyncState | null> {
+export async function readPandaScoreGameSyncState(game: PandaGameKey): Promise<PandaScoreGameSyncState | null> {
   try {
-    const value = await scheduleCache().get(SYNC_STATE_KEY);
+    const value = await scheduleCache().get(syncStateKey(game));
     if (!value || typeof value !== "object") return null;
-    const state = value as Partial<PandaScoreSyncState>;
-    return typeof state.lastAttemptAt === "string"
-      ? { lastAttemptAt: state.lastAttemptAt, lastErrorAt: state.lastErrorAt ?? null }
+    const state = value as Partial<PandaScoreGameSyncState>;
+    return state.game === game && typeof state.lastAttemptAt === "string"
+      ? {
+          game,
+          lastAttemptAt: state.lastAttemptAt,
+          lastSuccessfulSyncAt: state.lastSuccessfulSyncAt ?? null,
+          lastErrorAt: state.lastErrorAt ?? null,
+          lastErrorCode: state.lastErrorCode ?? null,
+          lastHttpStatus: state.lastHttpStatus ?? null,
+        }
       : null;
   } catch {
-    console.warn("[schedule-cache] Sync state could not be read");
+    console.warn(`[schedule-cache] ${game} sync state could not be read`);
     return null;
   }
 }
 
-export async function writePandaScoreSyncState(value: PandaScoreSyncState): Promise<void> {
+export async function readAllPandaScoreGameSyncStates(): Promise<Partial<Record<PandaGameKey, PandaScoreGameSyncState>>> {
+  const settled = await Promise.allSettled(pandaGameKeys.map((game) => readPandaScoreGameSyncState(game)));
+  const states: Partial<Record<PandaGameKey, PandaScoreGameSyncState>> = {};
+  settled.forEach((result, index) => {
+    if (result.status === "fulfilled" && result.value) states[pandaGameKeys[index]] = result.value;
+  });
+  return states;
+}
+
+export async function writePandaScoreGameSyncState(value: PandaScoreGameSyncState): Promise<void> {
   try {
-    await scheduleCache().set(SYNC_STATE_KEY, value, {
-      name: "PandaScore sync state",
-      tags: ["pandascore-fixtures"],
+    await scheduleCache().set(syncStateKey(value.game), value, {
+      name: `PandaScore ${value.game} sync state`,
+      tags: ["pandascore-fixtures", `schedule-${value.game}`],
       ttl: CACHE_TTL_SECONDS,
     });
   } catch {
-    console.warn("[schedule-cache] Sync state could not be written");
+    console.warn(`[schedule-cache] ${value.game} sync state could not be written`);
   }
 }

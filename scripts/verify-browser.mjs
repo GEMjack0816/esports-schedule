@@ -40,6 +40,11 @@ for (const profile of [
 
   const response = await page.goto(baseUrl, { waitUntil: "networkidle", timeout: 120_000 });
   const bodyText = await page.locator("body").innerText();
+  const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
+  const syncStatusCards = await page.locator('.sync-status-card').count();
+  const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+  await page.getByRole('button', { name: /切换到.+主题/ }).click();
+  const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -81,9 +86,14 @@ for (const profile of [
     overflowElements: layout.offenders,
     hasCoverageSummary: bodyText.includes("当前收录范围"),
     hasSubmitLink: bodyText.includes("提交遗漏比赛"),
+    hasProfessionalCoverageCopy: bodyText.includes("聚合五大电竞项目的主要职业及半职业比赛"),
+    syncStatusCards,
+    gameOptions,
+    themeToggleWorks: initialTheme !== toggledTheme,
     healthStatus: healthResult.status,
     healthMode: healthResult.body.mode,
     healthDemoMode: healthResult.body.demoMode,
+    healthGames: Object.keys(healthResult.body.games || {}),
     submitFields,
     errors,
     screenshot,

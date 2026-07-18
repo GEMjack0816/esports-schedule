@@ -2,9 +2,9 @@ export const gameKeys = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"] as
 
 export type GameKey = (typeof gameKeys)[number];
 
-export const pandaGameKeys = ["lol", "valorant", "cs2", "dota2"] as const;
+export const pandaGameKeys = gameKeys;
 
-export type PandaGameKey = (typeof pandaGameKeys)[number];
+export type PandaGameKey = GameKey;
 
 export const pandaEndpointKeys = ["upcoming", "running", "past"] as const;
 
@@ -15,12 +15,15 @@ export type MatchStatus =
   | "running"
   | "finished"
   | "postponed"
-  | "canceled";
+  | "canceled"
+  | "forfeit";
+
+export type MatchProvider = "pandascore" | "manual" | "demo";
 
 export type Team = {
   name: string;
   acronym?: string | null;
-  logo?: string | null;
+  logo: string;
 };
 
 export type Stream = {
@@ -31,18 +34,23 @@ export type Stream = {
 
 export type EsportsMatch = {
   id: string;
+  provider: MatchProvider;
+  providerMatchId: string;
   game: GameKey;
-  scheduledAt: string;
-  teams: [Team, Team];
+  tournament: string | null;
   league: string;
-  tournament?: string | null;
+  stage: string | null;
+  homeTeam: Team;
+  awayTeam: Team;
+  homeScore: number | null;
+  awayScore: number | null;
   bestOf: number | null;
-  scores: [number | null, number | null];
   status: MatchStatus;
+  startTimeUtc: string | null;
   streams: Stream[];
-  source: "pandascore" | "manual" | "demo";
+  lastUpdatedAt: string;
   sourceUrl?: string | null;
-  updatedAt: string;
+  manualOverride?: boolean;
 };
 
 export type EndpointCoverage = {
@@ -61,6 +69,8 @@ export type EndpointCoverage = {
   };
 };
 
+export type GameSyncStatus = "normal" | "delayed" | "failed";
+
 export type GameCoverage = {
   endpoints: Record<PandaEndpointKey, EndpointCoverage>;
   pages: number;
@@ -72,6 +82,12 @@ export type GameCoverage = {
   statusCounts: Record<MatchStatus, number>;
   earliestMatchAt: string | null;
   latestMatchAt: string | null;
+  lastSuccessfulSyncAt: string | null;
+  lastAttemptAt: string | null;
+  syncStatus: GameSyncStatus;
+  staleMinutes: number | null;
+  dataSource: "fresh" | "cache" | "unavailable";
+  lastErrorCode: string | null;
 };
 
 export type DataCoverage = {
@@ -99,6 +115,8 @@ export type DataCoverage = {
   manual: {
     honorOfKings: number;
     supplemental: number;
+    overrides: number;
+    hidden: number;
     published: number;
   };
 };

@@ -15,10 +15,13 @@ const PER_PAGE = 100;
 const PAST_DAYS = 30;
 const FUTURE_DAYS = 60;
 const DAY_MS = 86_400_000;
+const DEFAULT_TIMEOUT_MS = 20_000;
+const DEFAULT_MAX_RETRIES = 2;
 
-const apiGamePaths: Record<PandaGameKey, string> = {
+export const apiGamePaths: Record<PandaGameKey, string> = {
   lol: "lol",
   valorant: "valorant",
+  "honor-of-kings": "kog",
   cs2: "csgo",
   dota2: "dota2",
 };
@@ -58,6 +61,7 @@ export type PandaMatch = {
   results?: PandaResult[];
   streams_list?: PandaStream[];
   league?: { name?: string | null } | null;
+  serie?: { name?: string | null; full_name?: string | null } | null;
   tournament?: { name?: string | null } | null;
   videogame?: { slug?: string | null; name?: string | null } | null;
   modified_at?: string | null;
@@ -77,11 +81,33 @@ type PaginatedEndpoint = {
   rateLimitRemaining: number | null;
 };
 
+export type PandaGameSnapshot = {
+  game: PandaGameKey;
+  matches: EsportsMatch[];
+  fetchedAt: string;
+  rateLimitRemaining: number | null;
+  coverage: GameCoverage;
+};
+
+export type PandaSyncFailure = {
+  game: PandaGameKey;
+  code: string;
+  status: number | null;
+  message: string;
+};
+
+export type PandaScoreSyncBatch = {
+  snapshots: Partial<Record<PandaGameKey, PandaGameSnapshot>>;
+  updatedGames: PandaGameKey[];
+  failures: Partial<Record<PandaGameKey, PandaSyncFailure>>;
+};
+
 export type PandaScoreResult = {
   matches: EsportsMatch[];
   fetchedAt: string;
   rateLimitRemaining: number | null;
   games: Record<PandaGameKey, GameCoverage>;
+  snapshots: Partial<Record<PandaGameKey, PandaGameSnapshot>>;
   totals: {
     xTotal: number;
     raw: number;
@@ -94,7 +120,22 @@ export type PandaScoreResult = {
 export type PandaFetchOptions = {
   now?: Date;
   fetchImpl?: typeof fetch;
+  sleep?: (milliseconds: number) => Promise<void>;
+  timeoutMs?: number;
+  maxRetries?: number;
 };
+
+export class PandaScoreRequestError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+    readonly status: number | null,
+    readonly retryable: boolean,
+  ) {
+    super(message);
+    this.name = "PandaScoreRequestError";
+  }
+}
 
 function emptyStatusCounts(): Record<MatchStatus, number> {
   return {
@@ -103,6 +144,7 @@ function emptyStatusCounts(): Record<MatchStatus, number> {
     finished: 0,
     postponed: 0,
     canceled: 0,
+    forfeit: 0,
   };
 }
 
@@ -127,6 +169,10 @@ function mapStatus(status: string | null | undefined, endpoint: PandaEndpointKey
       return "canceled";
     case "postponed":
       return "postponed";
+    case "forfeit":
+    case "walkover":
+    case "wo":
+      return "forfeit";
     case "not_started":
       return "upcoming";
     default:
@@ -138,7 +184,7 @@ function mapTeam(opponent: PandaOpponent | undefined): Team {
   return {
     name: opponent?.opponent?.name?.trim() || "待定",
     acronym: opponent?.opponent?.acronym?.trim() || null,
-    logo: opponent?.opponent?.image_url || null,
+    logo: opponent?.opponent?.image_url || "/team-placeholder.svg",
   };
 }
 
@@ -179,27 +225,32 @@ export function normalizePandaMatch(
 ): { match: EsportsMatch | null; reason: FilterReason | null } {
   if (!Number.isFinite(raw.id)) return { match: null, reason: "missingId" };
 
-  const effectiveTime = raw.begin_at?.trim() || raw.scheduled_at?.trim();
-  if (!effectiveTime) return { match: null, reason: "missingTime" };
-  const epoch = Date.parse(effectiveTime);
-  if (Number.isNaN(epoch)) return { match: null, reason: "invalidTime" };
+  const effectiveTime = raw.begin_at?.trim() || raw.scheduled_at?.trim() || null;
+  if (effectiveTime && Number.isNaN(Date.parse(effectiveTime))) {
+    return { match: null, reason: "invalidTime" };
+  }
 
-  const scheduledAt = new Date(epoch).toISOString();
+  const providerMatchId = String(raw.id);
+  const startTimeUtc = effectiveTime ? new Date(effectiveTime).toISOString() : null;
   return {
     match: {
-      id: `pandascore:${game}:${raw.id}`,
+      id: `pandascore:${game}:${providerMatchId}`,
+      provider: "pandascore",
+      providerMatchId,
       game,
-      scheduledAt,
-      teams: [mapTeam(raw.opponents?.[0]), mapTeam(raw.opponents?.[1])],
+      tournament: raw.serie?.full_name?.trim() || raw.serie?.name?.trim() || null,
       league: raw.league?.name?.trim() || "赛事待定",
-      tournament: raw.tournament?.name?.trim() || null,
+      stage: raw.tournament?.name?.trim() || null,
+      homeTeam: mapTeam(raw.opponents?.[0]),
+      awayTeam: mapTeam(raw.opponents?.[1]),
+      homeScore: scoreForOpponent(raw, 0),
+      awayScore: scoreForOpponent(raw, 1),
       bestOf: inferBestOf(raw),
-      scores: [scoreForOpponent(raw, 0), scoreForOpponent(raw, 1)],
       status: mapStatus(raw.status, endpoint),
+      startTimeUtc,
       streams: mapStreams(raw.streams_list),
-      source: "pandascore",
+      lastUpdatedAt: validIsoOrFallback(raw.modified_at, now.toISOString()),
       sourceUrl: null,
-      updatedAt: validIsoOrFallback(raw.modified_at, now.toISOString()),
     },
     reason: null,
   };
@@ -215,8 +266,8 @@ export function getUtcCoverageWindow(now = new Date()) {
 }
 
 function isInEndpointWindow(match: EsportsMatch, endpoint: PandaEndpointKey, now: Date): boolean {
-  if (endpoint === "running") return true;
-  const epoch = Date.parse(match.scheduledAt);
+  if (endpoint === "running" || !match.startTimeUtc) return true;
+  const epoch = Date.parse(match.startTimeUtc);
   const window = getUtcCoverageWindow(now);
   if (endpoint === "upcoming") {
     return epoch >= window.now.getTime() && epoch <= window.futureEnd.getTime();
@@ -239,7 +290,7 @@ export function nextPageFromLink(link: string | null): number | null {
     if (!match) continue;
     try {
       const nextUrl = new URL(match[1]);
-      const page = Number(nextUrl.searchParams.get("page"));
+      const page = Number(nextUrl.searchParams.get("page") ?? nextUrl.searchParams.get("page[number]"));
       if (Number.isInteger(page) && page > 0) return page;
     } catch {
       return null;
@@ -248,7 +299,7 @@ export function nextPageFromLink(link: string | null): number | null {
   return null;
 }
 
-function buildEndpointUrl(
+export function buildPandaEndpointUrl(
   game: PandaGameKey,
   endpoint: PandaEndpointKey,
   page: number,
@@ -257,7 +308,9 @@ function buildEndpointUrl(
   const url = new URL(`/${apiGamePaths[game]}/matches/${endpoint}`, PANDASCORE_API);
   url.searchParams.set("per_page", String(PER_PAGE));
   url.searchParams.set("page", String(page));
-  url.searchParams.set("sort", endpoint === "past" ? "-begin_at" : "begin_at");
+  if (endpoint === "past") url.searchParams.set("sort", "-begin_at");
+  if (endpoint === "upcoming") url.searchParams.set("sort", "begin_at");
+  if (endpoint === "running") url.searchParams.set("sort", "begin_at");
 
   if (endpoint !== "running") {
     const window = getUtcCoverageWindow(now);
@@ -269,12 +322,79 @@ function buildEndpointUrl(
   return url;
 }
 
+function retryAfterMilliseconds(response: Response, attempt: number): number {
+  const retryAfter = response.headers.get("retry-after");
+  if (retryAfter && /^\d+(\.\d+)?$/.test(retryAfter.trim())) {
+    return Math.min(Number(retryAfter) * 1_000, 15_000);
+  }
+  return Math.min(500 * 2 ** attempt, 4_000);
+}
+
+function responseError(
+  response: Response,
+  game: PandaGameKey,
+  endpoint: PandaEndpointKey,
+): PandaScoreRequestError {
+  const status = response.status;
+  const prefix = `PandaScore ${game}/${endpoint}`;
+  if (status === 401) return new PandaScoreRequestError(`${prefix} authentication failed (HTTP 401)`, "AUTH", status, false);
+  if (status === 429) return new PandaScoreRequestError(`${prefix} rate limited (HTTP 429)`, "RATE_LIMIT", status, true);
+  if (status >= 500) return new PandaScoreRequestError(`${prefix} server error (HTTP ${status})`, "UPSTREAM", status, true);
+  if (status === 408) return new PandaScoreRequestError(`${prefix} timed out (HTTP 408)`, "TIMEOUT", status, true);
+  return new PandaScoreRequestError(`${prefix} request failed (HTTP ${status})`, "HTTP_ERROR", status, false);
+}
+
+async function requestPage(
+  url: URL,
+  game: PandaGameKey,
+  endpoint: PandaEndpointKey,
+  token: string,
+  options: Required<Pick<PandaFetchOptions, "fetchImpl" | "sleep" | "timeoutMs" | "maxRetries">>,
+): Promise<Response> {
+  let lastError: PandaScoreRequestError | null = null;
+  for (let attempt = 0; attempt <= options.maxRetries; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
+    try {
+      const response = await options.fetchImpl(url, {
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        signal: controller.signal,
+        next: {
+          revalidate: 900,
+          tags: ["pandascore-fixtures-v4", `pandascore-${game}-${endpoint}`],
+        },
+      });
+      if (response.ok) return response;
+      const error = responseError(response, game, endpoint);
+      if (!error.retryable || attempt === options.maxRetries) throw error;
+      lastError = error;
+      await options.sleep(retryAfterMilliseconds(response, attempt));
+    } catch (error) {
+      const normalized = error instanceof PandaScoreRequestError
+        ? error
+        : error instanceof DOMException && error.name === "AbortError"
+          ? new PandaScoreRequestError(`PandaScore ${game}/${endpoint} request timed out`, "TIMEOUT", null, true)
+          : new PandaScoreRequestError(`PandaScore ${game}/${endpoint} network request failed`, "NETWORK", null, true);
+      if (!normalized.retryable || attempt === options.maxRetries) throw normalized;
+      lastError = normalized;
+      await options.sleep(Math.min(500 * 2 ** attempt, 4_000));
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw lastError ?? new PandaScoreRequestError("PandaScore request failed", "UNKNOWN", null, false);
+}
+
 export async function fetchPaginatedEndpoint(
   game: PandaGameKey,
   endpoint: PandaEndpointKey,
   token: string,
   fetchImpl: typeof fetch,
   now: Date,
+  retryOptions: Omit<PandaFetchOptions, "now" | "fetchImpl"> = {},
 ): Promise<PaginatedEndpoint> {
   const matches: PandaMatch[] = [];
   let page = 1;
@@ -282,50 +402,43 @@ export async function fetchPaginatedEndpoint(
   let xTotal: number | null = null;
   let rateLimitRemaining: number | null = null;
   const visited = new Set<number>();
+  const requestOptions = {
+    fetchImpl,
+    sleep: retryOptions.sleep ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))),
+    timeoutMs: retryOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    maxRetries: retryOptions.maxRetries ?? DEFAULT_MAX_RETRIES,
+  };
 
   while (true) {
     if (visited.has(page) || pages >= 1_000) {
-      throw new Error(`PandaScore pagination loop detected for ${game}/${endpoint}`);
+      throw new PandaScoreRequestError(`PandaScore pagination loop for ${game}/${endpoint}`, "PAGINATION_LOOP", null, false);
     }
     visited.add(page);
 
-    const response = await fetchImpl(buildEndpointUrl(game, endpoint, page, now), {
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      next: {
-        revalidate: 900,
-        tags: ["pandascore-fixtures-v3", `pandascore-${game}-${endpoint}`],
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`PandaScore request failed for ${game}/${endpoint} with HTTP ${response.status}`);
-    }
-
+    const response = await requestPage(
+      buildPandaEndpointUrl(game, endpoint, page, now),
+      game,
+      endpoint,
+      token,
+      requestOptions,
+    );
     const pageMatches = (await response.json()) as unknown;
     if (!Array.isArray(pageMatches)) {
-      throw new Error(`PandaScore returned a non-list response for ${game}/${endpoint}`);
+      throw new PandaScoreRequestError(`PandaScore returned non-list data for ${game}/${endpoint}`, "INVALID_RESPONSE", response.status, false);
     }
 
     const pageTotal = parseIntegerHeader(response.headers, ["x-total"]);
     if (pageTotal === null) {
-      throw new Error(`PandaScore omitted X-Total for ${game}/${endpoint}`);
+      throw new PandaScoreRequestError(`PandaScore omitted X-Total for ${game}/${endpoint}`, "MISSING_TOTAL", response.status, false);
     }
     if (xTotal !== null && pageTotal !== xTotal) {
-      throw new Error(`PandaScore X-Total changed during pagination for ${game}/${endpoint}`);
+      throw new PandaScoreRequestError(`PandaScore X-Total changed for ${game}/${endpoint}`, "TOTAL_CHANGED", response.status, false);
     }
     xTotal = pageTotal;
 
-    const remaining = parseIntegerHeader(response.headers, [
-      "x-ratelimit-remaining",
-      "x-rate-limit-remaining",
-    ]);
+    const remaining = parseIntegerHeader(response.headers, ["x-ratelimit-remaining", "x-rate-limit-remaining"]);
     if (remaining !== null) {
-      rateLimitRemaining = rateLimitRemaining === null
-        ? remaining
-        : Math.min(rateLimitRemaining, remaining);
+      rateLimitRemaining = rateLimitRemaining === null ? remaining : Math.min(rateLimitRemaining, remaining);
     }
 
     matches.push(...(pageMatches as PandaMatch[]));
@@ -341,54 +454,70 @@ export async function fetchPaginatedEndpoint(
   }
 
   if (matches.length !== xTotal) {
-    throw new Error(
+    throw new PandaScoreRequestError(
       `PandaScore pagination mismatch for ${game}/${endpoint}: fetched ${matches.length}, expected ${xTotal}`,
+      "PAGINATION_MISMATCH",
+      null,
+      false,
     );
   }
 
   return { matches, pages, xTotal, rateLimitRemaining };
 }
 
+function dedupeKey(match: EsportsMatch): string {
+  return `${match.provider}:${match.providerMatchId}`;
+}
+
 function deduplicateNormalized(items: NormalizedMatch[]): NormalizedMatch[] {
   const unique = new Map<string, NormalizedMatch>();
   for (const item of items) {
-    const existing = unique.get(item.match.id);
-    if (!existing || Date.parse(item.match.updatedAt) >= Date.parse(existing.match.updatedAt)) {
-      unique.set(item.match.id, item);
+    const key = dedupeKey(item.match);
+    const existing = unique.get(key);
+    if (!existing || Date.parse(item.match.lastUpdatedAt) >= Date.parse(existing.match.lastUpdatedAt)) {
+      unique.set(key, item);
     }
   }
   return [...unique.values()];
 }
 
 function timeBounds(matches: EsportsMatch[]): { earliest: string | null; latest: string | null } {
-  if (matches.length === 0) return { earliest: null, latest: null };
-  const sorted = [...matches].sort(
-    (a, b) => Date.parse(a.scheduledAt) - Date.parse(b.scheduledAt),
-  );
-  return {
-    earliest: sorted[0].scheduledAt,
-    latest: sorted.at(-1)?.scheduledAt ?? null,
-  };
+  const times = matches
+    .map((match) => match.startTimeUtc)
+    .filter((value): value is string => value !== null)
+    .sort((a, b) => Date.parse(a) - Date.parse(b));
+  return { earliest: times[0] ?? null, latest: times.at(-1) ?? null };
 }
 
-async function fetchGame(
+export async function fetchPandaScoreGame(
   game: PandaGameKey,
   token: string,
-  fetchImpl: typeof fetch,
-  now: Date,
-): Promise<{ matches: EsportsMatch[]; coverage: GameCoverage; rateLimitRemaining: number | null }> {
-  const endpointResults = await Promise.all(
+  options: PandaFetchOptions = {},
+): Promise<PandaGameSnapshot> {
+  const now = options.now ?? new Date();
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const endpointResults = await Promise.allSettled(
     pandaEndpointKeys.map(async (endpoint) => ({
       endpoint,
-      result: await fetchPaginatedEndpoint(game, endpoint, token, fetchImpl, now),
+      result: await fetchPaginatedEndpoint(game, endpoint, token, fetchImpl, now, options),
     })),
   );
 
+  const failed = endpointResults.filter((result) => result.status === "rejected");
+  if (failed.length > 0) {
+    const first = failed[0].reason;
+    if (first instanceof PandaScoreRequestError) throw first;
+    throw new PandaScoreRequestError(`PandaScore ${game} endpoint sync failed`, "GAME_SYNC_FAILED", null, false);
+  }
+
+  const completed = endpointResults
+    .filter((result): result is PromiseFulfilledResult<{ endpoint: PandaEndpointKey; result: PaginatedEndpoint }> => result.status === "fulfilled")
+    .map((result) => result.value);
   const endpointCoverage = {} as Record<PandaEndpointKey, EndpointCoverage>;
   const allNormalized: NormalizedMatch[] = [];
   let minimumRemaining: number | null = null;
 
-  for (const { endpoint, result } of endpointResults) {
+  for (const { endpoint, result } of completed) {
     const filtered = emptyFiltered();
     const normalized: NormalizedMatch[] = [];
     for (const raw of result.matches) {
@@ -419,9 +548,7 @@ async function fetchGame(
     };
     allNormalized.push(...normalized);
     if (result.rateLimitRemaining !== null) {
-      minimumRemaining = minimumRemaining === null
-        ? result.rateLimitRemaining
-        : Math.min(minimumRemaining, result.rateLimitRemaining);
+      minimumRemaining = minimumRemaining === null ? result.rateLimitRemaining : Math.min(minimumRemaining, result.rateLimitRemaining);
     }
   }
 
@@ -431,64 +558,115 @@ async function fetchGame(
   const statusCounts = emptyStatusCounts();
   for (const match of matches) statusCounts[match.status] += 1;
   const bounds = timeBounds(matches);
+  const fetchedAt = now.toISOString();
 
-  const coverage: GameCoverage = {
-    endpoints: endpointCoverage,
-    pages: endpointResults.reduce((sum, item) => sum + item.result.pages, 0),
-    xTotal: endpointResults.reduce((sum, item) => sum + item.result.xTotal, 0),
-    raw: endpointResults.reduce((sum, item) => sum + item.result.matches.length, 0),
-    normalized: allNormalized.length,
-    deduplicated: combinedUnique.length,
-    final: matches.length,
-    statusCounts,
-    earliestMatchAt: bounds.earliest,
-    latestMatchAt: bounds.latest,
+  return {
+    game,
+    matches,
+    fetchedAt,
+    rateLimitRemaining: minimumRemaining,
+    coverage: {
+      endpoints: endpointCoverage,
+      pages: completed.reduce((sum, item) => sum + item.result.pages, 0),
+      xTotal: completed.reduce((sum, item) => sum + item.result.xTotal, 0),
+      raw: completed.reduce((sum, item) => sum + item.result.matches.length, 0),
+      normalized: allNormalized.length,
+      deduplicated: combinedUnique.length,
+      final: matches.length,
+      statusCounts,
+      earliestMatchAt: bounds.earliest,
+      latestMatchAt: bounds.latest,
+      lastSuccessfulSyncAt: fetchedAt,
+      lastAttemptAt: fetchedAt,
+      syncStatus: "normal",
+      staleMinutes: 0,
+      dataSource: "fresh",
+      lastErrorCode: null,
+    },
   };
-
-  return { matches, coverage, rateLimitRemaining: minimumRemaining };
 }
 
-export async function getPandaScoreMatches(
-  token: string,
-  options: PandaFetchOptions = {},
-): Promise<PandaScoreResult> {
-  const now = options.now ?? new Date();
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const gameResults = await Promise.all(
-    pandaGameKeys.map(async (game) => ({
-      game,
-      result: await fetchGame(game, token, fetchImpl, now),
-    })),
-  );
-
-  const games = {} as Record<PandaGameKey, GameCoverage>;
-  const combined: EsportsMatch[] = [];
-  let rateLimitRemaining: number | null = null;
-  for (const { game, result } of gameResults) {
-    games[game] = result.coverage;
-    combined.push(...result.matches);
-    if (result.rateLimitRemaining !== null) {
-      rateLimitRemaining = rateLimitRemaining === null
-        ? result.rateLimitRemaining
-        : Math.min(rateLimitRemaining, result.rateLimitRemaining);
-    }
+function failureFromReason(game: PandaGameKey, reason: unknown): PandaSyncFailure {
+  if (reason instanceof PandaScoreRequestError) {
+    return { game, code: reason.code, status: reason.status, message: reason.message };
   }
+  return { game, code: "UNKNOWN", status: null, message: `PandaScore ${game} sync failed` };
+}
 
-  const unique = new Map(combined.map((match) => [match.id, match]));
-  const matches = [...unique.values()].sort(
-    (a, b) => Date.parse(a.scheduledAt) - Date.parse(b.scheduledAt),
+export async function syncPandaScoreGames(
+  token: string,
+  previousSnapshots: Partial<Record<PandaGameKey, PandaGameSnapshot>> = {},
+  options: PandaFetchOptions = {},
+): Promise<PandaScoreSyncBatch> {
+  const settled = await Promise.allSettled(
+    pandaGameKeys.map((game) => fetchPandaScoreGame(game, token, options)),
   );
+  const snapshots: Partial<Record<PandaGameKey, PandaGameSnapshot>> = { ...previousSnapshots };
+  const failures: Partial<Record<PandaGameKey, PandaSyncFailure>> = {};
+  const updatedGames: PandaGameKey[] = [];
+
+  settled.forEach((result, index) => {
+    const game = pandaGameKeys[index];
+    if (result.status === "fulfilled") {
+      const previous = previousSnapshots[game];
+      if (previous && previous.matches.length > 0 && result.value.matches.length === 0) {
+        failures[game] = {
+          game,
+          code: "EMPTY_RESULT",
+          status: null,
+          message: `PandaScore ${game} returned an empty result; preserved previous data`,
+        };
+        return;
+      }
+      snapshots[game] = result.value;
+      updatedGames.push(game);
+      return;
+    }
+    failures[game] = failureFromReason(game, result.reason);
+  });
+
+  return { snapshots, updatedGames, failures };
+}
+
+export function aggregatePandaScoreSnapshots(
+  snapshots: Partial<Record<PandaGameKey, PandaGameSnapshot>>,
+): PandaScoreResult | null {
+  const available = pandaGameKeys
+    .map((game) => snapshots[game])
+    .filter((snapshot): snapshot is PandaGameSnapshot => !!snapshot);
+  if (available.length === 0) return null;
+
+  const unique = new Map<string, EsportsMatch>();
+  for (const snapshot of available) {
+    for (const match of snapshot.matches) unique.set(dedupeKey(match), match);
+  }
+  const matches = [...unique.values()].sort((a, b) => {
+    if (!a.startTimeUtc) return 1;
+    if (!b.startTimeUtc) return -1;
+    return Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc);
+  });
+  const fetchedAt = available
+    .map((snapshot) => snapshot.fetchedAt)
+    .sort((a, b) => Date.parse(b) - Date.parse(a))[0];
+  const remaining = available
+    .map((snapshot) => snapshot.rateLimitRemaining)
+    .filter((value): value is number => value !== null);
+  const games = {} as Record<PandaGameKey, GameCoverage>;
+  for (const game of pandaGameKeys) {
+    if (snapshots[game]) games[game] = snapshots[game].coverage;
+  }
 
   return {
     matches,
-    fetchedAt: now.toISOString(),
-    rateLimitRemaining,
+    fetchedAt,
+    rateLimitRemaining: remaining.length > 0 ? Math.min(...remaining) : null,
     games,
+    snapshots,
     totals: {
-      xTotal: gameResults.reduce((sum, item) => sum + item.result.coverage.xTotal, 0),
-      raw: gameResults.reduce((sum, item) => sum + item.result.coverage.raw, 0),
-      normalized: gameResults.reduce((sum, item) => sum + item.result.coverage.normalized, 0),
-      deduplicated: gameResults.reduce((sum, item) => sum + item.result.coverage.deduplicated, 0),
+      xTotal: available.reduce((sum, item) => sum + item.coverage.xTotal, 0),
+      raw: available.reduce((sum, item) => sum + item.coverage.raw, 0),
+      normalized: available.reduce((sum, item) => sum + item.coverage.normalized, 0),
+      deduplicated: available.reduce((sum, item) => sum + item.coverage.deduplicated, 0),
       final: matches.length,
     },
   };
