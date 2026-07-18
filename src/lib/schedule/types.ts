@@ -11,12 +11,13 @@ export const pandaEndpointKeys = ["upcoming", "running", "past"] as const;
 export type PandaEndpointKey = (typeof pandaEndpointKeys)[number];
 
 export type MatchStatus =
-  | "upcoming"
+  | "scheduled"
   | "running"
   | "finished"
   | "postponed"
-  | "canceled"
-  | "forfeit";
+  | "cancelled"
+  | "forfeit"
+  | "unknown";
 
 export type MatchProvider = "pandascore" | "manual";
 
@@ -93,18 +94,33 @@ export type GameCoverage = {
   latestMatchAt: string | null;
   lastSuccessfulSyncAt: string | null;
   lastAttemptAt: string | null;
+  sourceFetchedAt: string | null;
+  snapshotAgeSeconds: number | null;
+  refreshInProgress: boolean;
   syncStatus: GameSyncStatus;
   staleMinutes: number | null;
   dataSource: "fresh" | "cache" | "unavailable";
   lastErrorCode: string | null;
+  lastError: SyncErrorInfo | null;
   verificationSample?: ProviderVerificationSample | null;
+};
+
+export type SyncErrorInfo = {
+  at: string;
+  code: string;
+  httpStatus: number | null;
 };
 
 export type DataCoverage = {
   mode: "live" | "unavailable";
   stale: boolean;
-  syncAttemptedAt: string;
+  syncAttemptedAt: string | null;
+  lastAttemptAt: string | null;
   lastSuccessfulSyncAt: string | null;
+  sourceFetchedAt: string | null;
+  snapshotAgeSeconds: number | null;
+  refreshInProgress: boolean;
+  lastError: SyncErrorInfo | null;
   rateLimitRemaining: number | null;
   range: {
     pastDays: 30;

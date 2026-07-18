@@ -1,4 +1,4 @@
-import { getSchedule } from "@/lib/schedule";
+import { refreshSchedule } from "@/lib/schedule";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -11,7 +11,7 @@ export async function GET(request: Request) {
     return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  const schedule = await getSchedule({ forceRefresh: true });
+  const schedule = await refreshSchedule({ force: true });
 
   return Response.json({
     ok: true,
@@ -20,6 +20,11 @@ export async function GET(request: Request) {
     mode: schedule.mode,
     stale: schedule.stale,
     lastSuccessfulSyncAt: schedule.lastSuccessfulSyncAt,
+    sourceFetchedAt: schedule.coverage.sourceFetchedAt,
+    snapshotAgeSeconds: schedule.coverage.snapshotAgeSeconds,
+    lastAttemptAt: schedule.coverage.lastAttemptAt,
+    refreshInProgress: schedule.coverage.refreshInProgress,
+    lastError: schedule.coverage.lastError,
     providers: schedule.providers,
   });
 }

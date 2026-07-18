@@ -10,7 +10,7 @@
     "tournament": "常规赛 第三轮",
     "bestOf": 5,
     "scores": [null, null],
-    "status": "upcoming",
+    "status": "scheduled",
     "streams": [
       { "label": "王者荣耀赛事", "url": "https://pvp.qq.com/match/", "official": true }
     ]
@@ -26,7 +26,7 @@
     "tournament": "常规赛 第三轮",
     "bestOf": 5,
     "scores": [null, null],
-    "status": "upcoming",
+    "status": "scheduled",
     "streams": [
       { "label": "王者荣耀赛事", "url": "https://pvp.qq.com/match/", "official": true }
     ]

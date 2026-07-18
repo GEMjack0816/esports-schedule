@@ -28,12 +28,13 @@ const games: Record<GameKey, { label: string; short: string; color: string }> = 
 };
 
 const statusMeta: Record<MatchStatus, { label: string; className: string }> = {
-  upcoming: { label: "未开始", className: "status-upcoming" },
+  scheduled: { label: "未开始", className: "status-scheduled" },
   running: { label: "进行中", className: "status-running" },
   finished: { label: "已结束", className: "status-finished" },
   postponed: { label: "已延期", className: "status-postponed" },
-  canceled: { label: "已取消", className: "status-canceled" },
+  cancelled: { label: "已取消", className: "status-cancelled" },
   forfeit: { label: "已弃权", className: "status-forfeit" },
+  unknown: { label: "状态待确认", className: "status-unknown" },
 };
 
 function formatTime(value: string | null, timeZone: string): string {
@@ -225,7 +226,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   }, [filtered, range, timeZone]);
 
   const liveCount = payload.matches.filter((match) => match.status === "running").length;
-  const upcomingCount = payload.matches.filter((match) => match.status === "upcoming").length;
+  const upcomingCount = payload.matches.filter((match) => match.status === "scheduled").length;
 
   async function refreshSchedule() {
     setRefreshing(true);
@@ -297,7 +298,8 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           {payload.warning && <div className="data-notice" role="status"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" /><path d="M10 6.5v4.2M10 13.7h.01" /></svg><span>{payload.warning}</span></div>}
 
           <div className="data-summary" aria-label="数据覆盖信息">
-            <span>数据更新时间 <strong>{formatDateTime(payload.lastSuccessfulSyncAt, timeZone)}</strong></span>
+            <span>源快照时间 <strong>{formatDateTime(payload.coverage.sourceFetchedAt, timeZone)}</strong></span>
+            <span>最近同步尝试 <strong>{formatDateTime(payload.coverage.lastAttemptAt, timeZone)}</strong></span>
             <span>当前收录范围 <strong>{formatDateTime(payload.coverage.range.earliestMatchAt, timeZone)} — {formatDateTime(payload.coverage.range.latestMatchAt, timeZone)}</strong></span>
             <Link href="/submit-match" prefetch={false}>提交遗漏比赛</Link>
           </div>
@@ -309,8 +311,8 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
               return (
                 <div className={`sync-status-card sync-${syncStatus}`} key={key}>
                   <span>{value.label}</span>
-                  <strong>{syncStatus === "normal" ? "正常" : syncStatus === "delayed" ? "延迟" : "同步失败"}</strong>
-                  <small>{formatDateTime(coverage?.lastSuccessfulSyncAt ?? null, timeZone)}</small>
+                  <strong>{coverage?.refreshInProgress ? "同步中" : syncStatus === "normal" ? "正常" : syncStatus === "delayed" ? "延迟" : "同步失败"}</strong>
+                  <small>{formatDateTime(coverage?.sourceFetchedAt ?? null, timeZone)}</small>
                 </div>
               );
             })}

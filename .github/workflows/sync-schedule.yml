@@ -1,0 +1,30 @@
+name: Sync esports fixtures
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: esports-schedule-production-sync
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Trigger the protected production sync
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SYNC_URL: https://esports-schedule-two.vercel.app/api/cron/sync
+        run: |
+          test -n "$CRON_SECRET"
+          curl --fail-with-body --silent --show-error \
+            --retry 2 --retry-all-errors --max-time 300 \
+            --output /dev/null \
+            --header "Authorization: Bearer $CRON_SECRET" \
+            "$SYNC_URL"
