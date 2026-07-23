@@ -64,6 +64,14 @@ Vercel Cron（每日保底） ──────┼─> /api/cron/sync
 
 每个游戏也返回同样的时间和状态字段，以及端点分页、X-Total、原始/规范化/去重/最终数量。同步尝试不会让快照变新；只有成功写入最后成功快照才会更新源时间。
 
+## 生产版本指纹
+
+`GET /api/version` 动态返回当前部署的公开版本信息，包括环境、Git commit/ref、Deployment ID/URL、构建时间和请求时间。接口只读取明确列入白名单的 Vercel 系统变量和构建期回退值，不枚举环境变量，也不读取或返回业务密钥、请求头或 Cookie。响应同时设置浏览器和 Vercel CDN 的 `no-store` 缓存策略。
+
+`GET /api/health/data-coverage` 的 `version` 字段复用同一个服务端模块，提供 `gitCommitSha`、`deploymentId` 和 `buildTimestamp` 摘要。首页还包含一个隐藏的公开 commit 指纹，浏览器验证会将它与版本接口及健康接口交叉核对，避免把旧 Alias 或旧缓存误判成当前部署。
+
+构建时间由 `next.config.ts` 在 `next build` 启动时生成，部署中的每次请求保持不变；`runtimeTimestamp` 则按请求生成。Git SHA 优先使用 Vercel 官方 `VERCEL_GIT_COMMIT_SHA`，若构建环境没有提供，则回退到构建工作区的 Git HEAD。
+
 ## 本地验证
 
 ```powershell
@@ -81,6 +89,7 @@ npm start
 ```powershell
 Invoke-RestMethod http://localhost:3000/api/health/data-coverage
 npm run verify:browser -- http://localhost:3000
+npm run verify:production -- http://localhost:3000 <expected-git-sha>
 ```
 
 没有 `PANDASCORE_TOKEN` 时，本地只返回可用的上次缓存/人工数据并明确标记数据源未配置，不会生成模拟比赛。不要为了测试把真实 Token 写入仓库。
@@ -95,5 +104,11 @@ npm run verify:browser -- http://localhost:3000
 6. 连续并发请求 `/api/matches`；响应应快速返回同一快照，日志中同一时刻只能有一条 `regional refresh lock acquired`。
 7. 等待一次定时周期，确认 `sourceFetchedAt` 和各游戏 `sourceFetchedAt` 前进；失败测试时确认旧快照数量仍可用且 `lastSuccessfulSyncAt` 不变。
 8. 使用无登录浏览器检查桌面端和 390px 手机端、五个游戏筛选、`scheduled/running/finished` 状态筛选及控制台错误。
+
+版本和健康状态可使用同一个严格脚本核验；expected SHA 必须由命令行参数或 `EXPECTED_GIT_COMMIT_SHA` 提供，脚本本身不硬编码提交：
+
+```powershell
+npm run verify:production -- https://esports-schedule-two.vercel.app <production-git-sha>
+```
 
 GitHub 定时任务可能因平台负载延迟几分钟；私有仓库还需确认账户包含足够的 Actions 分钟数。若不希望使用 Actions，应使用支持 15 分钟频率的外部调度器调用同一个受保护接口，不能把 Hobby 的每日 Vercel Cron 描述为 15 分钟刷新。

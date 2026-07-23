@@ -291,7 +291,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
               <i />
               <span>{payload.mode === "live"
                 ? payload.stale ? "PandaScore 聚合数据（部分延迟）" : "PandaScore 聚合数据"
-                : "真实数据服务暂不可用"}</span>
+                : "PandaScore 聚合数据（服务暂不可用）"}</span>
             </div>
           </div>
 

@@ -9,6 +9,7 @@
     "test": "vitest run",
     "test:client-bundle": "node scripts/check-client-secrets.mjs",
     "verify:browser": "node scripts/verify-browser.mjs",
+    "verify:production": "node scripts/verify-production.mjs",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:client-bundle"
