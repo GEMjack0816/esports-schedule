@@ -104,6 +104,17 @@ async function writeLastSuccess(value: CachedPublicMatches): Promise<void> {
   }
 }
 
+export async function preserveLastSuccessfulPublicMatches(
+  load: () => Promise<CachedPublicMatches>,
+  readFallback: () => Promise<CachedPublicMatches | null>,
+): Promise<{ value: CachedPublicMatches | null; fallback: boolean }> {
+  try {
+    return { value: await load(), fallback: false };
+  } catch {
+    return { value: await readFallback(), fallback: true };
+  }
+}
+
 const readPublishedMatchesCached = unstable_cache(
   async (): Promise<CachedPublicMatches> => {
     const rows = await getReviewRepository().listVisibleManualMatches();
@@ -136,8 +147,12 @@ export async function getPublishedDatabaseMatches(): Promise<{
     return { matches: [], state: publicState };
   }
 
-  try {
-    const value = await withTimeout(readPublishedMatchesCached());
+  const result = await preserveLastSuccessfulPublicMatches(
+    () => withTimeout(readPublishedMatchesCached()),
+    readLastSuccess,
+  );
+  if (result.value && !result.fallback) {
+    const value = result.value;
     publicState = {
       configured: true,
       status: "connected",
@@ -145,17 +160,17 @@ export async function getPublishedDatabaseMatches(): Promise<{
       cachedManualMatches: value.matches.length,
     };
     return { matches: value.matches, state: publicState };
-  } catch {
-    const cached = await readLastSuccess();
-    publicState = {
-      configured: true,
-      status: cached ? "cached" : "unavailable",
-      lastSuccessfulReadAt: cached?.fetchedAt ?? publicState.lastSuccessfulReadAt,
-      cachedManualMatches: cached?.matches.length ?? 0,
-    };
-    console.warn("[review-db] database read unavailable; preserving last successful public manual matches");
-    return { matches: cached?.matches ?? [], state: publicState };
   }
+
+  const cached = result.value;
+  publicState = {
+    configured: true,
+    status: cached ? "cached" : "unavailable",
+    lastSuccessfulReadAt: cached?.fetchedAt ?? publicState.lastSuccessfulReadAt,
+    cachedManualMatches: cached?.matches.length ?? 0,
+  };
+  console.warn("[review-db] database read unavailable; preserving last successful public manual matches");
+  return { matches: cached?.matches ?? [], state: publicState };
 }
 
 export function getDatabasePublicState(): DatabasePublicState {

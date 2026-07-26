@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { PublishedManualMatchRow } from "@/db/schema";
-import { publishedRowToMatch } from "./public-matches";
+import {
+  preserveLastSuccessfulPublicMatches,
+  publishedRowToMatch,
+} from "./public-matches";
 
 function row(overrides: Partial<PublishedManualMatchRow> = {}): PublishedManualMatchRow {
   return {
@@ -47,5 +50,36 @@ describe("published database manual matches", () => {
       url: "https://live.example/match",
       official: false,
     }]);
+  });
+
+  it("returns the last successful public snapshot when the database read fails", async () => {
+    const cached = {
+      matches: [publishedRowToMatch(row())],
+      fetchedAt: "2026-07-26T01:00:00.000Z",
+    };
+    const result = await preserveLastSuccessfulPublicMatches(
+      async () => {
+        throw new Error("database unavailable");
+      },
+      async () => cached,
+    );
+    expect(result).toEqual({ value: cached, fallback: true });
+  });
+
+  it("does not read fallback data after a successful database read", async () => {
+    const current = {
+      matches: [publishedRowToMatch(row())],
+      fetchedAt: "2026-07-26T02:00:00.000Z",
+    };
+    let fallbackRead = false;
+    const result = await preserveLastSuccessfulPublicMatches(
+      async () => current,
+      async () => {
+        fallbackRead = true;
+        return null;
+      },
+    );
+    expect(result).toEqual({ value: current, fallback: false });
+    expect(fallbackRead).toBe(false);
   });
 });
