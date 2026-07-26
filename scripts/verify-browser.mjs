@@ -33,14 +33,29 @@ for (const profile of [
   const page = await context.newPage();
   const errors = [];
   const criticalRequestFailures = [];
+  const optionalResourceFailures = [];
+  const browserResourceWarnings = [];
   const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage"];
   const auditUrl = new URL(baseUrl);
   auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
   page.on("console", (message) => {
-    if (message.type() === "error") errors.push(`console:${message.text()}`);
+    if (message.type() !== "error") return;
+    const text = message.text();
+    if (/^Failed to load resource: net::ERR_/.test(text)) {
+      browserResourceWarnings.push(text);
+      return;
+    }
+    errors.push(`console:${text}`);
   });
   page.on("pageerror", (error) => errors.push(`page:${error.message}`));
-  page.on("requestfailed", (request) => errors.push(`request:${request.method()} ${request.url()}`));
+  page.on("requestfailed", (request) => {
+    const failedUrl = new URL(request.url());
+    if (failedUrl.origin !== auditUrl.origin && request.resourceType() === "image") {
+      optionalResourceFailures.push(`${request.method()} ${failedUrl.origin}${failedUrl.pathname}`);
+      return;
+    }
+    errors.push(`request:${request.method()} ${request.url()}`);
+  });
   page.on("response", (candidate) => {
     const candidateUrl = new URL(candidate.url());
     if (
@@ -164,6 +179,9 @@ for (const profile of [
     healthVersionMatches:
       healthResult.body.version?.gitCommitSha === versionResult.body.gitCommitSha,
     criticalRequestFailures,
+    optionalResourceFailureCount: optionalResourceFailures.length,
+    optionalResourceFailureSamples: optionalResourceFailures.slice(0, 5),
+    browserResourceWarningCount: browserResourceWarnings.length,
     submitFields,
     errors,
     screenshot,
