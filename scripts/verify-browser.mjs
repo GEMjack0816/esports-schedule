@@ -50,6 +50,10 @@ for (const profile of [
   page.on("pageerror", (error) => errors.push(`page:${error.message}`));
   page.on("requestfailed", (request) => {
     const failedUrl = new URL(request.url());
+    if (request.failure()?.errorText === "net::ERR_ABORTED") {
+      optionalResourceFailures.push(`${request.method()} ${failedUrl.pathname} aborted`);
+      return;
+    }
     if (failedUrl.origin !== auditUrl.origin && request.resourceType() === "image") {
       optionalResourceFailures.push(`${request.method()} ${failedUrl.origin}${failedUrl.pathname}`);
       return;
@@ -150,6 +154,15 @@ for (const profile of [
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
+  const adminResponse = await page.goto(`${baseUrl}/admin`, {
+    waitUntil: "networkidle",
+    timeout: 120_000,
+  });
+  const adminBody = await page.locator("body").innerText();
+  const adminLegacyResponse = await context.request.post(
+    `${baseUrl}/api/admin/legacy-import`,
+    { failOnStatusCode: false },
+  );
 
   results.push({
     profile: profile.name,
@@ -195,6 +208,11 @@ for (const profile of [
     optionalResourceFailureSamples: optionalResourceFailures.slice(0, 5),
     browserResourceWarningCount: browserResourceWarnings.length,
     submitFields,
+    anonymousAdminStatus: adminResponse?.status() ?? null,
+    anonymousAdminAtLogin: new URL(page.url()).pathname === "/admin/login",
+    anonymousAdminContainsPrivateData:
+      adminBody.includes("最近操作") || adminBody.includes("待审核提交"),
+    anonymousAdminApiStatus: adminLegacyResponse.status(),
     errors,
     screenshot,
   });
@@ -225,6 +243,10 @@ for (const result of results) {
   if (!result.versionMatchesHomepage) failures.push(`${prefix}: homepage/version commit mismatch`);
   if (!result.healthVersionMatches) failures.push(`${prefix}: health/version commit mismatch`);
   if (result.submitFields < 6) failures.push(`${prefix}: submission form incomplete`);
+  if (result.anonymousAdminStatus !== 200) failures.push(`${prefix}: admin login HTTP ${result.anonymousAdminStatus}`);
+  if (!result.anonymousAdminAtLogin) failures.push(`${prefix}: anonymous admin page was not redirected to login`);
+  if (result.anonymousAdminContainsPrivateData) failures.push(`${prefix}: anonymous admin page exposed private data`);
+  if (result.anonymousAdminApiStatus !== 401) failures.push(`${prefix}: anonymous admin API HTTP ${result.anonymousAdminApiStatus}`);
   failures.push(...result.errors.map((error) => `${prefix}: ${error}`));
   failures.push(...result.criticalRequestFailures.map((error) => `${prefix}: ${error}`));
 }

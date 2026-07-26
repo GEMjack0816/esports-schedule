@@ -333,3 +333,124 @@ a { color: inherit; text-decoration: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+.submission-honeypot {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.admin-shell {
+  min-height: 100vh;
+  padding: clamp(1rem, 3vw, 3rem);
+  background: var(--background, #0b0d10);
+  color: var(--foreground, #f5f7fa);
+}
+
+.admin-card,
+.admin-page {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+}
+
+.admin-card {
+  width: min(560px, 100%);
+  padding: 2rem;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-radius: 1rem;
+}
+
+.admin-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.admin-nav form {
+  margin-left: auto;
+}
+
+.admin-primary {
+  display: inline-block;
+  padding: .7rem 1rem;
+  color: #fff;
+  background: #5b5ff0;
+  border: 0;
+  border-radius: .5rem;
+  text-decoration: none;
+}
+
+.admin-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+}
+
+.admin-stats article {
+  display: grid;
+  gap: .25rem;
+  padding: 1rem;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: .75rem;
+}
+
+.admin-stats strong {
+  font-size: 2rem;
+}
+
+.admin-table-wrap {
+  overflow-x: auto;
+}
+
+.admin-table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.admin-table-wrap th,
+.admin-table-wrap td {
+  padding: .7rem;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  text-align: left;
+}
+
+.admin-filters,
+.admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem;
+  margin: 1rem 0;
+}
+
+.admin-edit-form fieldset {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+  padding: 1rem;
+}
+
+.admin-edit-form label,
+.admin-reject label {
+  display: grid;
+  gap: .35rem;
+}
+
+.admin-edit-form input,
+.admin-edit-form select,
+.admin-edit-form textarea,
+.admin-reject textarea,
+.admin-filters input,
+.admin-filters select {
+  min-width: 0;
+  padding: .65rem;
+  color: inherit;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: .4rem;
+}

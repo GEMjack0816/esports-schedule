@@ -1,10 +1,14 @@
-import { getCache } from "@vercel/functions";
+import { createHash } from "node:crypto";
 import { gameKeys } from "./schedule/types";
 import type { GameKey } from "./schedule/types";
 
-const INDEX_KEY = "pending-index-v1";
-const TTL_SECONDS = 30 * 24 * 60 * 60;
-const MAX_PENDING_INDEX = 200;
+export const SUBMISSION_LIMITS = {
+  league: 120,
+  team: 80,
+  sourceUrl: 500,
+  notes: 1_000,
+  scheduledAt: 40,
+} as const;
 
 export type MatchSubmissionInput = {
   game: GameKey;
@@ -14,53 +18,61 @@ export type MatchSubmissionInput = {
   scheduledAt: string;
   bestOf: number | null;
   sourceUrl: string;
+  notes: string | null;
 };
 
-type PendingSubmission = MatchSubmissionInput & {
-  id: string;
-  status: "pending";
-  submittedAt: string;
-};
-
-function submissionCache() {
-  return getCache({ namespace: "esports-schedule-submissions" });
+export class SubmissionValidationError extends Error {
+  readonly code = "INVALID_SUBMISSION";
 }
 
-function text(value: unknown, maxLength: number): string | null {
-  if (typeof value !== "string") return null;
-  const normalized = value.trim();
-  return normalized.length > 0 && normalized.length <= maxLength ? normalized : null;
+function normalizedText(value: unknown, maxLength: number, required = true): string | null {
+  if (value === null || value === undefined || value === "") {
+    if (required) throw new SubmissionValidationError("请完整填写必填字段。");
+    return null;
+  }
+  if (typeof value !== "string") throw new SubmissionValidationError("提交内容格式无效。");
+  const normalized = value.normalize("NFKC").trim().replace(/\s+/g, " ");
+  if ((required && normalized.length === 0) || normalized.length > maxLength) {
+    throw new SubmissionValidationError("字段为空或超过允许长度。");
+  }
+  return normalized || null;
+}
+
+function validatedUrl(value: unknown, maxLength: number, httpsOnly = false): string {
+  const text = normalizedText(value, maxLength);
+  let parsed: URL;
+  try {
+    parsed = new URL(text!);
+  } catch {
+    throw new SubmissionValidationError("来源链接格式无效。");
+  }
+  const allowed = httpsOnly ? parsed.protocol === "https:" : ["http:", "https:"].includes(parsed.protocol);
+  if (!allowed) throw new SubmissionValidationError(httpsOnly ? "链接必须使用 HTTPS。" : "链接必须使用 HTTP 或 HTTPS。");
+  return parsed.toString();
 }
 
 export function validateSubmission(value: unknown): MatchSubmissionInput {
-  if (!value || typeof value !== "object") throw new Error("提交内容格式无效");
+  if (!value || typeof value !== "object") throw new SubmissionValidationError("提交内容格式无效。");
   const input = value as Record<string, unknown>;
-  if (!gameKeys.includes(input.game as GameKey)) throw new Error("请选择有效游戏");
+  if (!gameKeys.includes(input.game as GameKey)) throw new SubmissionValidationError("请选择有效游戏。");
 
-  const league = text(input.league, 120);
-  const teamA = text(input.teamA, 80);
-  const teamB = text(input.teamB, 80);
-  const sourceUrl = text(input.sourceUrl, 500);
-  const scheduledAt = text(input.scheduledAt, 40);
-  if (!league || !teamA || !teamB || !sourceUrl || !scheduledAt) {
-    throw new Error("请完整填写赛事、双方、时间和来源链接");
+  const league = normalizedText(input.league, SUBMISSION_LIMITS.league)!;
+  const teamA = normalizedText(input.teamA, SUBMISSION_LIMITS.team)!;
+  const teamB = normalizedText(input.teamB, SUBMISSION_LIMITS.team)!;
+  const notes = normalizedText(input.notes, SUBMISSION_LIMITS.notes, false);
+  if (teamA.localeCompare(teamB, undefined, { sensitivity: "base" }) === 0) {
+    throw new SubmissionValidationError("双方战队不能完全相同。");
   }
 
-  let parsedSource: URL;
-  try {
-    parsedSource = new URL(sourceUrl);
-  } catch {
-    throw new Error("来源链接格式无效");
-  }
-  if (parsedSource.protocol !== "https:" && parsedSource.protocol !== "http:") {
-    throw new Error("来源链接必须使用 HTTP 或 HTTPS");
-  }
-
+  const scheduledAt = normalizedText(input.scheduledAt, SUBMISSION_LIMITS.scheduledAt)!;
   const epoch = Date.parse(scheduledAt);
-  if (Number.isNaN(epoch)) throw new Error("比赛时间格式无效");
-  const bestOf = input.bestOf === null ? null : Number(input.bestOf);
+  if (Number.isNaN(epoch)) throw new SubmissionValidationError("比赛时间格式无效。");
+
+  const bestOf = input.bestOf === null || input.bestOf === undefined || input.bestOf === ""
+    ? null
+    : Number(input.bestOf);
   if (bestOf !== null && (!Number.isInteger(bestOf) || bestOf < 1 || bestOf > 9)) {
-    throw new Error("赛制必须为 BO1 到 BO9，或选择未知");
+    throw new SubmissionValidationError("赛制必须为 BO1 到 BO9，或选择未知。");
   }
 
   return {
@@ -70,34 +82,42 @@ export function validateSubmission(value: unknown): MatchSubmissionInput {
     teamB,
     scheduledAt: new Date(epoch).toISOString(),
     bestOf,
-    sourceUrl: parsedSource.toString(),
+    sourceUrl: validatedUrl(input.sourceUrl, SUBMISSION_LIMITS.sourceUrl),
+    notes,
   };
 }
 
-export async function savePendingSubmission(value: unknown): Promise<PendingSubmission> {
-  const input = validateSubmission(value);
-  const submission: PendingSubmission = {
-    ...input,
-    id: crypto.randomUUID(),
-    status: "pending",
-    submittedAt: new Date().toISOString(),
-  };
-  const cache = submissionCache();
-  await cache.set(`pending:${submission.id}`, submission, {
-    name: "Pending match submission",
-    tags: ["pending-match-submissions"],
-    ttl: TTL_SECONDS,
-  });
+function fingerprintPart(value: string): string {
+  return value.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
+}
 
-  const previous = await cache.get(INDEX_KEY);
-  const ids = Array.isArray(previous)
-    ? previous.filter((item): item is string => typeof item === "string")
-    : [];
-  await cache.set(INDEX_KEY, [submission.id, ...ids].slice(0, MAX_PENDING_INDEX), {
-    name: "Pending match submission index",
-    tags: ["pending-match-submissions"],
-    ttl: TTL_SECONDS,
-  });
+export function createSubmissionFingerprint(input: MatchSubmissionInput): string {
+  const canonicalTeams = [fingerprintPart(input.teamA), fingerprintPart(input.teamB)].sort();
+  const canonical = [
+    input.game,
+    fingerprintPart(input.league),
+    ...canonicalTeams,
+    new Date(input.scheduledAt).toISOString(),
+  ].join("\u001f");
+  return createHash("sha256").update(canonical).digest("hex");
+}
 
-  return submission;
+export function isHoneypotHit(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const candidate = (value as Record<string, unknown>).website;
+  return typeof candidate === "string" && candidate.trim().length > 0;
+}
+
+export function validateOptionalHttpsUrl(value: unknown, maxLength = 500): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  return validatedUrl(value, maxLength, true);
+}
+
+export function validateOptionalHttpUrl(value: unknown, maxLength = 500): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  return validatedUrl(value, maxLength);
+}
+
+export function validateOptionalText(value: unknown, maxLength: number): string | null {
+  return normalizedText(value, maxLength, false);
 }

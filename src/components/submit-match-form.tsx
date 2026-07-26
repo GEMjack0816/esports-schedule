@@ -30,6 +30,8 @@ export function SubmitMatchForm() {
           scheduledAt: new Date(localTime).toISOString(),
           bestOf: values.get("bestOf") ? Number(values.get("bestOf")) : null,
           sourceUrl: values.get("sourceUrl"),
+          notes: values.get("notes"),
+          website: values.get("website"),
         }),
       });
       const result = (await response.json()) as { ok: boolean; message?: string; error?: string };
@@ -95,6 +97,14 @@ export function SubmitMatchForm() {
         <label className="submit-wide">
           <span>来源链接</span>
           <input name="sourceUrl" type="url" required maxLength={500} placeholder="https://…" />
+        </label>
+        <label className="submit-wide">
+          <span>补充说明（选填）</span>
+          <textarea name="notes" maxLength={1000} rows={4} />
+        </label>
+        <label className="submission-honeypot" aria-hidden="true">
+          <span>Website</span>
+          <input name="website" tabIndex={-1} autoComplete="off" />
         </label>
         <div className="submit-actions submit-wide">
           <button type="submit" disabled={submitting}>{submitting ? "正在保存…" : "提交审核"}</button>
