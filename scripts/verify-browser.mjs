@@ -100,7 +100,18 @@ for (const profile of [
   );
   await page.locator(".refresh-button").click();
   const apiResponse = await apiResponsePromise;
-  const apiBody = await apiResponse.json();
+  let apiBody;
+  let apiBodyReadFallback = false;
+  try {
+    apiBody = await apiResponse.json();
+  } catch {
+    apiBodyReadFallback = true;
+    apiBody = await page.evaluate(async () => {
+      const response = await fetch("/api/matches", { cache: "no-store" });
+      if (!response.ok) throw new Error(`/api/matches fallback returned HTTP ${response.status}`);
+      return response.json();
+    });
+  }
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -166,6 +177,7 @@ for (const profile of [
     refreshedApiDemoMode: apiBody.demoMode,
     refreshedApiStale: apiBody.stale,
     refreshedApiDeployment: apiBody.deployment,
+    apiBodyReadFallback,
     healthStatus: healthResult.status,
     healthMode: healthResult.body.mode,
     healthDemoMode: healthResult.body.demoMode,
