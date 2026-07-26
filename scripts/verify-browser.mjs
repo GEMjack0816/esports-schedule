@@ -32,6 +32,8 @@ for (const profile of [
   });
   const page = await context.newPage();
   const errors = [];
+  const criticalRequestFailures = [];
+  const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage"];
   const auditUrl = new URL(baseUrl);
   auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
   page.on("console", (message) => {
@@ -39,10 +41,21 @@ for (const profile of [
   });
   page.on("pageerror", (error) => errors.push(`page:${error.message}`));
   page.on("requestfailed", (request) => errors.push(`request:${request.method()} ${request.url()}`));
+  page.on("response", (candidate) => {
+    const candidateUrl = new URL(candidate.url());
+    if (
+      candidateUrl.origin === auditUrl.origin
+      && criticalPaths.includes(candidateUrl.pathname)
+      && candidate.status() >= 400
+    ) {
+      criticalRequestFailures.push(`${candidate.request().method()} ${candidateUrl.pathname} HTTP ${candidate.status()}`);
+    }
+  });
 
   const response = await page.goto(auditUrl.toString(), { waitUntil: "networkidle", timeout: 120_000 });
   const bodyText = await page.locator("body").innerText();
   const html = await page.content();
+  const homepageCommit = await page.locator("#esports-schedule-version").getAttribute("data-git-commit");
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -93,14 +106,21 @@ for (const profile of [
   const screenshot = path.join(os.tmpdir(), `esports-schedule-${profile.name}.png`);
   await page.screenshot({ path: screenshot, fullPage: true });
 
+  let versionResult = { status: 0, body: {} };
   let healthResult = { status: 0, body: {} };
   try {
-    healthResult = await page.evaluate(async () => {
-      const response = await fetch("/api/health/data-coverage", { cache: "no-store" });
-      return { status: response.status, body: await response.json() };
+    [versionResult, healthResult] = await page.evaluate(async () => {
+      const [versionResponse, healthResponse] = await Promise.all([
+        fetch("/api/version", { cache: "no-store" }),
+        fetch("/api/health/data-coverage", { cache: "no-store" }),
+      ]);
+      return [
+        { status: versionResponse.status, body: await versionResponse.json() },
+        { status: healthResponse.status, body: await healthResponse.json() },
+      ];
     });
   } catch (error) {
-    errors.push(`health:${error instanceof Error ? error.message : "request failed"}`);
+    errors.push(`version-health:${error instanceof Error ? error.message : "request failed"}`);
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
@@ -115,6 +135,8 @@ for (const profile of [
     hasCoverageSummary: bodyText.includes("当前收录范围"),
     hasSubmitLink: bodyText.includes("提交遗漏比赛"),
     hasProfessionalCoverageCopy: bodyText.includes("聚合五大电竞项目的主要职业及半职业比赛"),
+    newPageMarkers: ["源快照时间", "提交遗漏比赛", "PandaScore 聚合数据"]
+      .filter((phrase) => bodyText.includes(phrase)),
     forbiddenVisiblePhrases: ["演示数据模式", "PandaScore Token 尚未配置", "当前展示演示赛程与王者荣耀人工数据"]
       .filter((phrase) => bodyText.includes(phrase)),
     forbiddenHtmlPhrases: ["演示数据模式", "PandaScore Token 尚未配置", "当前展示演示赛程与王者荣耀人工数据"]
@@ -133,6 +155,15 @@ for (const profile of [
     healthMode: healthResult.body.mode,
     healthDemoMode: healthResult.body.demoMode,
     healthGames: Object.keys(healthResult.body.games || {}),
+    versionStatus: versionResult.status,
+    versionGitCommitSha: versionResult.body.gitCommitSha ?? null,
+    homepageGitCommitSha: homepageCommit || null,
+    healthVersionGitCommitSha: healthResult.body.version?.gitCommitSha ?? null,
+    versionMatchesHomepage:
+      !!homepageCommit && homepageCommit === versionResult.body.gitCommitSha,
+    healthVersionMatches:
+      healthResult.body.version?.gitCommitSha === versionResult.body.gitCommitSha,
+    criticalRequestFailures,
     submitFields,
     errors,
     screenshot,
@@ -142,3 +173,34 @@ for (const profile of [
 
 await browser.close();
 console.log(JSON.stringify(results, null, 2));
+
+const failures = [];
+for (const result of results) {
+  const prefix = result.profile;
+  if (result.status !== 200) failures.push(`${prefix}: homepage HTTP ${result.status}`);
+  if (result.horizontalOverflow) failures.push(`${prefix}: horizontal overflow`);
+  if (!result.hasCoverageSummary) failures.push(`${prefix}: missing coverage summary`);
+  if (!result.hasSubmitLink) failures.push(`${prefix}: missing submission link`);
+  if (!result.hasProfessionalCoverageCopy) failures.push(`${prefix}: missing coverage copy`);
+  if (result.newPageMarkers.length !== 3) failures.push(`${prefix}: missing new page markers`);
+  if (result.forbiddenVisiblePhrases.length > 0) failures.push(`${prefix}: visible demo text`);
+  if (result.forbiddenHtmlPhrases.length > 0) failures.push(`${prefix}: demo text in HTML`);
+  if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
+  if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
+  if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
+  if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
+  if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
+  if (result.versionStatus !== 200) failures.push(`${prefix}: version HTTP ${result.versionStatus}`);
+  if (!result.versionMatchesHomepage) failures.push(`${prefix}: homepage/version commit mismatch`);
+  if (!result.healthVersionMatches) failures.push(`${prefix}: health/version commit mismatch`);
+  if (result.submitFields < 6) failures.push(`${prefix}: submission form incomplete`);
+  failures.push(...result.errors.map((error) => `${prefix}: ${error}`));
+  failures.push(...result.criticalRequestFailures.map((error) => `${prefix}: ${error}`));
+}
+
+if (failures.length > 0) {
+  for (const failure of failures) console.error(`FAIL ${failure}`);
+  process.exit(1);
+}
+console.log("Browser verification passed.");

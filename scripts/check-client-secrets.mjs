@@ -14,15 +14,18 @@ function javascriptFiles(directory) {
   });
 }
 
-const forbiddenMarkers = ["PANDASCORE_TOKEN"];
-const configuredToken = process.env.PANDASCORE_TOKEN?.trim();
-if (configuredToken) forbiddenMarkers.push(configuredToken);
+const serverCredentialNames = ["PANDASCORE_TOKEN", "CRON_SECRET"];
+const forbiddenMarkers = [...serverCredentialNames];
+for (const name of serverCredentialNames) {
+  const configuredValue = process.env[name]?.trim();
+  if (configuredValue) forbiddenMarkers.push(configuredValue);
+}
 
 const files = javascriptFiles(staticDirectory);
 for (const file of files) {
   const content = readFileSync(file, "utf8");
   if (forbiddenMarkers.some((marker) => content.includes(marker))) {
-    throw new Error(`A PandaScore credential marker was found in client asset ${path.relative(process.cwd(), file)}`);
+    throw new Error(`A server credential marker was found in client asset ${path.relative(process.cwd(), file)}`);
   }
 }
 
