@@ -17,6 +17,7 @@ import {
   adminAuditEvents,
   matchSubmissions,
   publishedManualMatches,
+  submissionRateLimits,
 } from "@/db/schema";
 import type {
   MatchSubmissionRow,
@@ -24,6 +25,8 @@ import type {
 } from "@/db/schema";
 import type { MatchSubmissionInput } from "@/lib/submissions";
 import { createSubmissionFingerprint } from "@/lib/submissions";
+import { PUBLIC_SUBMISSION_POLICY } from "./submission-protection";
+import type { PublicSubmissionPolicy } from "./submission-protection";
 import {
   DatabaseUnavailableError,
   DuplicateSubmissionError,
@@ -35,6 +38,7 @@ import type {
   ApprovalInput,
   LegacyInsertResult,
   ManualMatchPage,
+  PublicSubmissionResult,
   PublishedMatchWrite,
   SubmissionCounts,
   SubmissionListFilters,
@@ -46,7 +50,9 @@ type CreateOptions = {
   submittedAt?: Date;
 };
 
-function submissionValues(input: MatchSubmissionInput) {
+const PUBLIC_SUBMISSION_GATE_LOCK = 1_908_218_316;
+
+function submissionValues(input: MatchSubmissionInput, updatedAt = new Date()) {
   return {
     game: input.game,
     league: input.league,
@@ -57,16 +63,26 @@ function submissionValues(input: MatchSubmissionInput) {
     sourceUrl: input.sourceUrl,
     notes: input.notes,
     fingerprint: createSubmissionFingerprint(input),
-    updatedAt: new Date(),
+    updatedAt,
   };
 }
 
-function publishedValues(input: PublishedMatchWrite) {
+function publishedValues(input: PublishedMatchWrite, updatedAt = new Date()) {
   return {
     ...input,
     startTimeUtc: input.startTimeUtc ? new Date(input.startTimeUtc) : null,
-    updatedAt: new Date(),
+    updatedAt,
   };
+}
+
+function nextUpdatedAt(previous: Date, now = new Date()): Date {
+  return new Date(Math.max(now.getTime(), previous.getTime() + 1));
+}
+
+function assertExpectedVersion(actual: Date, expected: Date): void {
+  if (actual.getTime() !== expected.getTime()) {
+    throw new ReviewConflictError("记录已经被其他管理员修改，请重新加载后再操作。");
+  }
 }
 
 function auditSubmission(row: MatchSubmissionRow) {
@@ -123,6 +139,65 @@ export class DrizzleReviewRepository {
         })
         .returning();
       return row;
+    } catch (error) {
+      translateDatabaseError(error);
+    }
+  }
+
+  async createPublicSubmission(
+    input: MatchSubmissionInput,
+    sourceHash: string,
+    now = new Date(),
+    policy: PublicSubmissionPolicy = PUBLIC_SUBMISSION_POLICY,
+  ): Promise<PublicSubmissionResult> {
+    try {
+      return await getDatabase().transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(${PUBLIC_SUBMISSION_GATE_LOCK})`);
+        await tx.insert(submissionRateLimits).values({
+          sourceHash,
+          windowStartedAt: now,
+          requestCount: 0,
+          updatedAt: now,
+        }).onConflictDoNothing();
+
+        const [current] = await tx.select().from(submissionRateLimits)
+          .where(eq(submissionRateLimits.sourceHash, sourceHash)).for("update");
+        if (!current) throw new Error("SUBMISSION_RATE_LIMIT_ROW_MISSING");
+
+        const windowExpired = current.windowStartedAt.getTime() + policy.windowMs <= now.getTime();
+        const windowStartedAt = windowExpired ? now : current.windowStartedAt;
+        const requestCount = windowExpired ? 0 : current.requestCount;
+        if (requestCount >= policy.maxPerSource) {
+          return {
+            kind: "rate-limited" as const,
+            retryAfterSeconds: Math.max(
+              1,
+              Math.ceil((windowStartedAt.getTime() + policy.windowMs - now.getTime()) / 1_000),
+            ),
+          };
+        }
+
+        await tx.update(submissionRateLimits).set({
+          windowStartedAt,
+          requestCount: requestCount + 1,
+          updatedAt: now,
+        }).where(eq(submissionRateLimits.sourceHash, sourceHash));
+
+        const [pending] = await tx.select({ value: count() }).from(matchSubmissions)
+          .where(eq(matchSubmissions.status, "pending"));
+        if (Number(pending?.value ?? 0) >= policy.maxPending) {
+          return { kind: "queue-full" as const, retryAfterSeconds: policy.queueRetryAfterSeconds };
+        }
+
+        const rows = await tx.insert(matchSubmissions).values({
+          ...submissionValues(input, now),
+          submittedAt: now,
+          status: "pending",
+        }).onConflictDoNothing().returning();
+        return rows[0]
+          ? { kind: "created" as const, submission: rows[0] }
+          : { kind: "duplicate" as const };
+      });
     } catch (error) {
       translateDatabaseError(error);
     }
@@ -202,6 +277,7 @@ export class DrizzleReviewRepository {
     id: string,
     input: MatchSubmissionInput,
     actorId: string,
+    expectedUpdatedAt: Date,
   ): Promise<MatchSubmissionRow> {
     try {
       return await getDatabase().transaction(async (tx) => {
@@ -209,9 +285,15 @@ export class DrizzleReviewRepository {
           .where(eq(matchSubmissions.id, id)).for("update");
         if (!before) throw new ReviewNotFoundError("提交不存在。");
         if (before.status !== "pending") throw new ReviewConflictError("仅待审核提交可以编辑。");
+        assertExpectedVersion(before.updatedAt, expectedUpdatedAt);
+        const updatedAt = nextUpdatedAt(before.updatedAt);
         const [after] = await tx.update(matchSubmissions)
-          .set(submissionValues(input))
-          .where(and(eq(matchSubmissions.id, id), eq(matchSubmissions.status, "pending")))
+          .set(submissionValues(input, updatedAt))
+          .where(and(
+            eq(matchSubmissions.id, id),
+            eq(matchSubmissions.status, "pending"),
+            eq(matchSubmissions.updatedAt, expectedUpdatedAt),
+          ))
           .returning();
         if (!after) throw new ReviewConflictError("提交状态已经变化。");
         await tx.insert(adminAuditEvents).values({
@@ -230,31 +312,41 @@ export class DrizzleReviewRepository {
     }
   }
 
-  async approveSubmission(id: string, input: ApprovalInput, actorId: string): Promise<PublishedManualMatchRow> {
+  async approveSubmission(
+    id: string,
+    input: ApprovalInput,
+    actorId: string,
+    expectedUpdatedAt: Date,
+  ): Promise<PublishedManualMatchRow> {
     try {
       return await getDatabase().transaction(async (tx) => {
         const [before] = await tx.select().from(matchSubmissions)
           .where(eq(matchSubmissions.id, id)).for("update");
         if (!before) throw new ReviewNotFoundError("提交不存在。");
         if (before.status !== "pending") throw new ReviewConflictError("提交已被审核。");
+        assertExpectedVersion(before.updatedAt, expectedUpdatedAt);
+        const now = nextUpdatedAt(before.updatedAt);
 
         const [published] = await tx.insert(publishedManualMatches).values({
-          ...publishedValues(input.published),
+          ...publishedValues(input.published, now),
           sourceSubmissionId: id,
           publishedBy: actorId,
         }).returning();
 
-        const now = new Date();
         const [approved] = await tx.update(matchSubmissions)
           .set({
-            ...submissionValues(input.submission),
+            ...submissionValues(input.submission, now),
             status: "approved",
             reviewedAt: now,
             reviewedBy: actorId,
             rejectionReason: null,
             publishedMatchId: published.id,
           })
-          .where(and(eq(matchSubmissions.id, id), eq(matchSubmissions.status, "pending")))
+          .where(and(
+            eq(matchSubmissions.id, id),
+            eq(matchSubmissions.status, "pending"),
+            eq(matchSubmissions.updatedAt, expectedUpdatedAt),
+          ))
           .returning();
         if (!approved) throw new ReviewConflictError("提交已被其他管理员审核。");
 
@@ -277,20 +369,31 @@ export class DrizzleReviewRepository {
     }
   }
 
-  async rejectSubmission(id: string, reason: string, actorId: string): Promise<MatchSubmissionRow> {
+  async rejectSubmission(
+    id: string,
+    reason: string,
+    actorId: string,
+    expectedUpdatedAt: Date,
+  ): Promise<MatchSubmissionRow> {
     try {
       return await getDatabase().transaction(async (tx) => {
         const [before] = await tx.select().from(matchSubmissions)
           .where(eq(matchSubmissions.id, id)).for("update");
         if (!before) throw new ReviewNotFoundError("提交不存在。");
         if (before.status !== "pending") throw new ReviewConflictError("提交已被审核。");
+        assertExpectedVersion(before.updatedAt, expectedUpdatedAt);
+        const updatedAt = nextUpdatedAt(before.updatedAt);
         const [after] = await tx.update(matchSubmissions).set({
           status: "rejected",
           reviewedAt: new Date(),
           reviewedBy: actorId,
           rejectionReason: reason,
-          updatedAt: new Date(),
-        }).where(and(eq(matchSubmissions.id, id), eq(matchSubmissions.status, "pending"))).returning();
+          updatedAt,
+        }).where(and(
+          eq(matchSubmissions.id, id),
+          eq(matchSubmissions.status, "pending"),
+          eq(matchSubmissions.updatedAt, expectedUpdatedAt),
+        )).returning();
         if (!after) throw new ReviewConflictError("提交已被其他管理员审核。");
         await tx.insert(adminAuditEvents).values({
           actorId,
@@ -404,15 +507,22 @@ export class DrizzleReviewRepository {
     id: string,
     input: PublishedMatchWrite,
     actorId: string,
+    expectedUpdatedAt: Date,
   ): Promise<PublishedManualMatchRow> {
     try {
       return await getDatabase().transaction(async (tx) => {
         const [before] = await tx.select().from(publishedManualMatches)
           .where(eq(publishedManualMatches.id, id)).for("update");
         if (!before) throw new ReviewNotFoundError("人工比赛不存在。");
+        assertExpectedVersion(before.updatedAt, expectedUpdatedAt);
+        const updatedAt = nextUpdatedAt(before.updatedAt);
         const [after] = await tx.update(publishedManualMatches)
-          .set(publishedValues(input))
-          .where(eq(publishedManualMatches.id, id)).returning();
+          .set(publishedValues(input, updatedAt))
+          .where(and(
+            eq(publishedManualMatches.id, id),
+            eq(publishedManualMatches.updatedAt, expectedUpdatedAt),
+          )).returning();
+        if (!after) throw new ReviewConflictError("记录已经被其他管理员修改，请重新加载后再操作。");
         await tx.insert(adminAuditEvents).values({
           actorId,
           action: "manual_match.updated",
@@ -424,20 +534,31 @@ export class DrizzleReviewRepository {
         return after;
       });
     } catch (error) {
-      if (error instanceof ReviewNotFoundError) throw error;
+      if (error instanceof ReviewNotFoundError || error instanceof ReviewConflictError) throw error;
       translateDatabaseError(error);
     }
   }
 
-  async setManualMatchHidden(id: string, hidden: boolean, actorId: string): Promise<PublishedManualMatchRow> {
+  async setManualMatchHidden(
+    id: string,
+    hidden: boolean,
+    actorId: string,
+    expectedUpdatedAt: Date,
+  ): Promise<PublishedManualMatchRow> {
     try {
       return await getDatabase().transaction(async (tx) => {
         const [before] = await tx.select().from(publishedManualMatches)
           .where(eq(publishedManualMatches.id, id)).for("update");
         if (!before) throw new ReviewNotFoundError("人工比赛不存在。");
+        assertExpectedVersion(before.updatedAt, expectedUpdatedAt);
+        const updatedAt = nextUpdatedAt(before.updatedAt);
         const [after] = await tx.update(publishedManualMatches)
-          .set({ hidden, updatedAt: new Date() })
-          .where(eq(publishedManualMatches.id, id)).returning();
+          .set({ hidden, updatedAt })
+          .where(and(
+            eq(publishedManualMatches.id, id),
+            eq(publishedManualMatches.updatedAt, expectedUpdatedAt),
+          )).returning();
+        if (!after) throw new ReviewConflictError("记录已经被其他管理员修改，请重新加载后再操作。");
         await tx.insert(adminAuditEvents).values({
           actorId,
           action: hidden ? "manual_match.hidden" : "manual_match.restored",
@@ -449,21 +570,31 @@ export class DrizzleReviewRepository {
         return after;
       });
     } catch (error) {
-      if (error instanceof ReviewNotFoundError) throw error;
+      if (error instanceof ReviewNotFoundError || error instanceof ReviewConflictError) throw error;
       translateDatabaseError(error);
     }
   }
 
-  async toggleManualMatchHidden(id: string, actorId: string): Promise<PublishedManualMatchRow> {
+  async toggleManualMatchHidden(
+    id: string,
+    actorId: string,
+    expectedUpdatedAt: Date,
+  ): Promise<PublishedManualMatchRow> {
     try {
       return await getDatabase().transaction(async (tx) => {
         const [before] = await tx.select().from(publishedManualMatches)
           .where(eq(publishedManualMatches.id, id)).for("update");
         if (!before) throw new ReviewNotFoundError("人工比赛不存在。");
+        assertExpectedVersion(before.updatedAt, expectedUpdatedAt);
         const hidden = !before.hidden;
+        const updatedAt = nextUpdatedAt(before.updatedAt);
         const [after] = await tx.update(publishedManualMatches)
-          .set({ hidden, updatedAt: new Date() })
-          .where(eq(publishedManualMatches.id, id)).returning();
+          .set({ hidden, updatedAt })
+          .where(and(
+            eq(publishedManualMatches.id, id),
+            eq(publishedManualMatches.updatedAt, expectedUpdatedAt),
+          )).returning();
+        if (!after) throw new ReviewConflictError("记录已经被其他管理员修改，请重新加载后再操作。");
         await tx.insert(adminAuditEvents).values({
           actorId,
           action: hidden ? "manual_match.hidden" : "manual_match.restored",
@@ -475,7 +606,7 @@ export class DrizzleReviewRepository {
         return after;
       });
     } catch (error) {
-      if (error instanceof ReviewNotFoundError) throw error;
+      if (error instanceof ReviewNotFoundError || error instanceof ReviewConflictError) throw error;
       translateDatabaseError(error);
     }
   }

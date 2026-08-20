@@ -7,22 +7,27 @@ import { getReviewRepository } from "@/lib/review/repository";
 import {
   approveAndPublish,
   defaultPublishedFromSubmission,
+  validateExpectedUpdatedAt,
   validateRejectionReason,
 } from "@/lib/review/service";
+import { ReviewConflictError } from "@/lib/review/types";
 import { validateSubmission } from "@/lib/submissions";
 import type { MatchSubmissionInput } from "@/lib/submissions";
 import type { GameKey } from "@/lib/schedule";
 
 export default async function SubmissionReviewPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ conflict?: string }>;
 }) {
   const { id } = await params;
   await requireAdminPage(`/admin/submissions/${id}`);
   const repository = getReviewRepository();
   const row = await repository.getSubmission(id);
   if (!row) notFound();
+  const conflict = (await searchParams).conflict === "1";
   const submissionInput: MatchSubmissionInput = {
     game: row.game as GameKey,
     league: row.league,
@@ -37,32 +42,49 @@ export default async function SubmissionReviewPage({
   async function save(form: FormData) {
     "use server";
     const session = await requireAdminAction(`/admin/submissions/${id}`);
-    await getReviewRepository().saveSubmission(
-      id,
-      validateSubmission(submissionFromForm(form)),
-      session.sub,
-    );
+    try {
+      await getReviewRepository().saveSubmission(
+        id,
+        validateSubmission(submissionFromForm(form)),
+        session.sub,
+        validateExpectedUpdatedAt(form.get("expectedUpdatedAt")),
+      );
+    } catch (error) {
+      if (error instanceof ReviewConflictError) redirect(`/admin/submissions/${id}?conflict=1`);
+      throw error;
+    }
     redirect(`/admin/submissions/${id}`);
   }
 
   async function approve(form: FormData) {
     "use server";
     const session = await requireAdminAction(`/admin/submissions/${id}`);
-    await approveAndPublish(id, {
-      submission: submissionFromForm(form),
-      published: publishedFromForm(form),
-    }, session.sub);
+    try {
+      await approveAndPublish(id, {
+        submission: submissionFromForm(form),
+        published: publishedFromForm(form),
+      }, session.sub, form.get("expectedUpdatedAt"));
+    } catch (error) {
+      if (error instanceof ReviewConflictError) redirect(`/admin/submissions/${id}?conflict=1`);
+      throw error;
+    }
     redirect("/admin/submissions?status=approved");
   }
 
   async function reject(form: FormData) {
     "use server";
     const session = await requireAdminAction(`/admin/submissions/${id}`);
-    await getReviewRepository().rejectSubmission(
-      id,
-      validateRejectionReason(form.get("rejectionReason")),
-      session.sub,
-    );
+    try {
+      await getReviewRepository().rejectSubmission(
+        id,
+        validateRejectionReason(form.get("rejectionReason")),
+        session.sub,
+        validateExpectedUpdatedAt(form.get("expectedUpdatedAt")),
+      );
+    } catch (error) {
+      if (error instanceof ReviewConflictError) redirect(`/admin/submissions/${id}?conflict=1`);
+      throw error;
+    }
     redirect("/admin/submissions?status=rejected");
   }
 
@@ -71,7 +93,9 @@ export default async function SubmissionReviewPage({
       <AdminNav />
       <h1>审核提交</h1>
       <p>状态：{row.status} · 提交于 {row.submittedAt.toISOString()}</p>
+      {conflict && <p role="alert">记录已经被其他管理员修改，请重新加载后再操作。</p>}
       <form className="admin-edit-form">
+        <input type="hidden" name="expectedUpdatedAt" value={row.updatedAt.toISOString()} />
         <SubmissionFields row={row} />
         <PublishedMatchFields value={defaultPublishedFromSubmission(submissionInput)} />
         {row.status === "pending" && (
@@ -83,6 +107,7 @@ export default async function SubmissionReviewPage({
       </form>
       {row.status === "pending" && (
         <form action={reject} className="admin-reject">
+          <input type="hidden" name="expectedUpdatedAt" value={row.updatedAt.toISOString()} />
           <label>驳回原因<textarea name="rejectionReason" required maxLength={500} /></label>
           <button type="submit">驳回</button>
         </form>

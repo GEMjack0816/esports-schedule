@@ -1,6 +1,6 @@
 import "server-only";
 
-import { revalidateTag } from "next/cache";
+import { updateTag } from "next/cache";
 import { gameKeys } from "@/lib/schedule/types";
 import type { GameKey, MatchStatus } from "@/lib/schedule/types";
 import { normalizeStoredMatchStatus } from "@/lib/schedule/status";
@@ -14,6 +14,8 @@ import {
 import type { MatchSubmissionInput } from "@/lib/submissions";
 import { getReviewRepository } from "./repository";
 import type { DrizzleReviewRepository } from "./repository";
+import { synchronizePublishedManualMatchesSnapshot } from "./public-matches";
+import { ReviewConflictError } from "./types";
 import type {
   ApprovalInput,
   PublishedMatchWrite,
@@ -24,7 +26,32 @@ import type {
 export const PUBLISHED_MANUAL_MATCHES_TAG = "published-manual-matches";
 
 export function invalidatePublishedManualMatches(): void {
-  revalidateTag(PUBLISHED_MANUAL_MATCHES_TAG, "max");
+  updateTag(PUBLISHED_MANUAL_MATCHES_TAG);
+}
+
+export type PublishedManualCacheEffects = {
+  synchronize: (repository: DrizzleReviewRepository) => Promise<unknown>;
+  invalidate: () => void;
+};
+
+const defaultCacheEffects: PublishedManualCacheEffects = {
+  synchronize: synchronizePublishedManualMatchesSnapshot,
+  invalidate: invalidatePublishedManualMatches,
+};
+
+async function synchronizeMutationCaches(
+  repository: DrizzleReviewRepository,
+  effects: PublishedManualCacheEffects,
+): Promise<void> {
+  let synchronizationError: unknown;
+  try {
+    await effects.synchronize(repository);
+  } catch (error) {
+    synchronizationError = error;
+  } finally {
+    effects.invalidate();
+  }
+  if (synchronizationError) throw synchronizationError;
 }
 
 function integerOrNull(value: unknown, min: number, max: number, label: string): number | null {
@@ -42,6 +69,13 @@ function timeOrNull(value: unknown): string | null {
     throw new SubmissionValidationError("比赛时间格式无效。");
   }
   return new Date(value).toISOString();
+}
+
+export function validateExpectedUpdatedAt(value: unknown): Date {
+  if (typeof value !== "string" || !value || Number.isNaN(Date.parse(value))) {
+    throw new ReviewConflictError("记录版本无效，请重新加载后再操作。");
+  }
+  return new Date(value);
 }
 
 function requiredText(value: unknown, maxLength: number, label: string): string {
@@ -144,11 +178,17 @@ export async function approveAndPublish(
   id: string,
   value: unknown,
   actorId: string,
+  expectedUpdatedAt: unknown,
   repository: DrizzleReviewRepository = getReviewRepository(),
-  invalidate: () => void = invalidatePublishedManualMatches,
+  effects: PublishedManualCacheEffects = defaultCacheEffects,
 ) {
-  const result = await repository.approveSubmission(id, approvalFromRequest(value), actorId);
-  invalidate();
+  const result = await repository.approveSubmission(
+    id,
+    approvalFromRequest(value),
+    actorId,
+    validateExpectedUpdatedAt(expectedUpdatedAt),
+  );
+  await synchronizeMutationCaches(repository, effects);
   return result;
 }
 
@@ -156,10 +196,10 @@ export async function createManualMatch(
   value: unknown,
   actorId: string,
   repository: DrizzleReviewRepository = getReviewRepository(),
-  invalidate: () => void = invalidatePublishedManualMatches,
+  effects: PublishedManualCacheEffects = defaultCacheEffects,
 ) {
   const result = await repository.createManualMatch(validatePublishedMatch(value), actorId);
-  invalidate();
+  await synchronizeMutationCaches(repository, effects);
   return result;
 }
 
@@ -167,11 +207,17 @@ export async function updateManualMatch(
   id: string,
   value: unknown,
   actorId: string,
+  expectedUpdatedAt: unknown,
   repository: DrizzleReviewRepository = getReviewRepository(),
-  invalidate: () => void = invalidatePublishedManualMatches,
+  effects: PublishedManualCacheEffects = defaultCacheEffects,
 ) {
-  const result = await repository.updateManualMatch(id, validatePublishedMatch(value), actorId);
-  invalidate();
+  const result = await repository.updateManualMatch(
+    id,
+    validatePublishedMatch(value),
+    actorId,
+    validateExpectedUpdatedAt(expectedUpdatedAt),
+  );
+  await synchronizeMutationCaches(repository, effects);
   return result;
 }
 
@@ -179,21 +225,32 @@ export async function setManualMatchHidden(
   id: string,
   hidden: boolean,
   actorId: string,
+  expectedUpdatedAt: unknown,
   repository: DrizzleReviewRepository = getReviewRepository(),
-  invalidate: () => void = invalidatePublishedManualMatches,
+  effects: PublishedManualCacheEffects = defaultCacheEffects,
 ) {
-  const result = await repository.setManualMatchHidden(id, hidden, actorId);
-  invalidate();
+  const result = await repository.setManualMatchHidden(
+    id,
+    hidden,
+    actorId,
+    validateExpectedUpdatedAt(expectedUpdatedAt),
+  );
+  await synchronizeMutationCaches(repository, effects);
   return result;
 }
 
 export async function toggleManualMatchHidden(
   id: string,
   actorId: string,
+  expectedUpdatedAt: unknown,
   repository: DrizzleReviewRepository = getReviewRepository(),
-  invalidate: () => void = invalidatePublishedManualMatches,
+  effects: PublishedManualCacheEffects = defaultCacheEffects,
 ) {
-  const result = await repository.toggleManualMatchHidden(id, actorId);
-  invalidate();
+  const result = await repository.toggleManualMatchHidden(
+    id,
+    actorId,
+    validateExpectedUpdatedAt(expectedUpdatedAt),
+  );
+  await synchronizeMutationCaches(repository, effects);
   return result;
 }

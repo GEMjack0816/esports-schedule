@@ -3,6 +3,7 @@ import {
   boolean,
   check,
   index,
+  integer,
   jsonb,
   pgTable,
   smallint,
@@ -104,6 +105,16 @@ export const publishedManualMatches = pgTable("published_manual_matches", {
   index("published_manual_matches_game_idx").on(table.game),
 ]);
 
+export const submissionRateLimits = pgTable("submission_rate_limits", {
+  sourceHash: text("source_hash").primaryKey(),
+  windowStartedAt: timestamp("window_started_at", { withTimezone: true, mode: "date" }).notNull(),
+  requestCount: integer("request_count").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+}, (table) => [
+  check("submission_rate_limits_request_count_check", sql`${table.requestCount} >= 0`),
+  index("submission_rate_limits_updated_idx").on(table.updatedAt),
+]);
+
 export const adminAuditEvents = pgTable("admin_audit_events", {
   id: uuid("id").primaryKey().defaultRandom(),
   actorId: text("actor_id").notNull(),
@@ -123,3 +134,4 @@ export type NewMatchSubmissionRow = typeof matchSubmissions.$inferInsert;
 export type PublishedManualMatchRow = typeof publishedManualMatches.$inferSelect;
 export type NewPublishedManualMatchRow = typeof publishedManualMatches.$inferInsert;
 export type AdminAuditEventRow = typeof adminAuditEvents.$inferSelect;
+export type SubmissionRateLimitRow = typeof submissionRateLimits.$inferSelect;

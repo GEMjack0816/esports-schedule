@@ -3,6 +3,7 @@ import postgres from "postgres";
 const requiredTables = [
   "match_submissions",
   "published_manual_matches",
+  "submission_rate_limits",
   "admin_audit_events",
 ];
 const url = process.env.DATABASE_URL?.trim();

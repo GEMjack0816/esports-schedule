@@ -74,6 +74,12 @@ export type SubmissionCounts = {
 
 export type LegacyInsertResult = "imported" | "duplicate";
 
+export type PublicSubmissionResult =
+  | { kind: "created"; submission: MatchSubmissionRow }
+  | { kind: "duplicate" }
+  | { kind: "rate-limited"; retryAfterSeconds: number }
+  | { kind: "queue-full"; retryAfterSeconds: number };
+
 export class ReviewConflictError extends Error {
   readonly code = "REVIEW_CONFLICT";
 }

@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { DrizzleReviewRepository } from "./repository";
 
 vi.mock("next/cache", () => ({
-  revalidateTag: vi.fn(),
+  updateTag: vi.fn(),
+  unstable_cache: (callback: unknown) => callback,
 }));
 
 import { toggleManualMatchHidden } from "./service";
@@ -13,11 +14,26 @@ describe("manual match visibility service", () => {
     const repository = {
       toggleManualMatchHidden: vi.fn().mockResolvedValue(row),
     } as unknown as DrizzleReviewRepository;
-    const invalidate = vi.fn();
+    const effects = {
+      synchronize: vi.fn().mockResolvedValue(undefined),
+      invalidate: vi.fn(),
+    };
+    const expectedUpdatedAt = "2026-08-20T00:00:00.000Z";
 
-    await expect(toggleManualMatchHidden("match-1", "admin-1", repository, invalidate))
+    await expect(toggleManualMatchHidden(
+      "match-1",
+      "admin-1",
+      expectedUpdatedAt,
+      repository,
+      effects,
+    ))
       .resolves.toBe(row);
-    expect(repository.toggleManualMatchHidden).toHaveBeenCalledWith("match-1", "admin-1");
-    expect(invalidate).toHaveBeenCalledOnce();
+    expect(repository.toggleManualMatchHidden).toHaveBeenCalledWith(
+      "match-1",
+      "admin-1",
+      new Date(expectedUpdatedAt),
+    );
+    expect(effects.synchronize).toHaveBeenCalledWith(repository);
+    expect(effects.invalidate).toHaveBeenCalledOnce();
   });
 });

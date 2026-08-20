@@ -16,20 +16,26 @@ const valid = {
 function request(body: unknown) {
   return new Request("https://example.com/api/submissions", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-real-ip": "203.0.113.10" },
     body: JSON.stringify(body),
   });
 }
 
 describe("POST /api/submissions", () => {
   it("returns only the public receipt fields and no-store headers", async () => {
-    const createSubmission = vi.fn(async () => ({
-      id: "11111111-1111-4111-8111-111111111111",
-      status: "pending",
-      submittedAt: new Date("2026-07-26T00:00:00.000Z"),
-      sourceUrl: "https://secret-ish.example/source",
-      notes: "not returned",
-    }));
+    const createSubmission = vi.fn(async (...args: unknown[]) => {
+      expect(args).toHaveLength(2);
+      return {
+        kind: "created" as const,
+        submission: {
+          id: "11111111-1111-4111-8111-111111111111",
+          status: "pending",
+          submittedAt: new Date("2026-07-26T00:00:00.000Z"),
+          sourceUrl: "https://secret-ish.example/source",
+          notes: "not returned",
+        },
+      };
+    });
     const response = await handleSubmissionPost(request(valid), createSubmission);
     const payload = await response.json();
     expect(response.status).toBe(201);
@@ -41,14 +47,33 @@ describe("POST /api/submissions", () => {
       submittedAt: "2026-07-26T00:00:00.000Z",
       message: "已保存为待审核，审核通过前不会公开。",
     });
+    expect(createSubmission.mock.calls[0]?.[1]).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("returns 409 for an active duplicate fingerprint", async () => {
-    const createSubmission = async () => {
-      throw Object.assign(new Error("duplicate"), { code: "DUPLICATE_SUBMISSION" });
-    };
+    const createSubmission = async () => ({ kind: "duplicate" as const });
     const response = await handleSubmissionPost(request(valid), createSubmission);
     expect(response.status).toBe(409);
+  });
+
+  it("returns 429 with Retry-After when the source window is exhausted", async () => {
+    const response = await handleSubmissionPost(
+      request(valid),
+      async () => ({ kind: "rate-limited", retryAfterSeconds: 321 }),
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("321");
+    expect(await response.json()).toMatchObject({ ok: false, error: expect.stringContaining("频繁") });
+  });
+
+  it("returns 429 with Retry-After when the global pending queue is full", async () => {
+    const response = await handleSubmissionPost(
+      request(valid),
+      async () => ({ kind: "queue-full", retryAfterSeconds: 900 }),
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("900");
+    expect(await response.json()).toMatchObject({ ok: false, error: expect.stringContaining("队列") });
   });
 
   it("returns 503 without pretending success when PostgreSQL is unavailable", async () => {

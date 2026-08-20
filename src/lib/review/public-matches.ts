@@ -10,10 +10,11 @@ import { getReviewRepository } from "./repository";
 import type { SubmissionCounts } from "./types";
 
 const CACHE_KEY = "published-manual-matches-v1";
+const RUNTIME_FALLBACK_TAG = "published-manual-matches-fallback-v1";
 const CACHE_TTL_SECONDS = 30 * 24 * 60 * 60;
 const DB_TIMEOUT_MS = 2_500;
 
-type CachedPublicMatches = {
+export type CachedPublicMatches = {
   matches: EsportsMatch[];
   fetchedAt: string;
 };
@@ -94,14 +95,31 @@ async function readLastSuccess(): Promise<CachedPublicMatches | null> {
 
 async function writeLastSuccess(value: CachedPublicMatches): Promise<void> {
   try {
-    await publicCache().set(CACHE_KEY, value, {
-      name: "Published manual matches last successful database read",
-      tags: ["published-manual-matches"],
-      ttl: CACHE_TTL_SECONDS,
-    });
+    await writeRuntimeFallback(value);
   } catch {
     console.warn("[review-db] public manual match fallback cache could not be written");
   }
+}
+
+async function writeRuntimeFallback(value: CachedPublicMatches): Promise<void> {
+  await publicCache().set(CACHE_KEY, value, {
+    name: "Published manual matches last successful database read",
+    tags: [RUNTIME_FALLBACK_TAG],
+    ttl: CACHE_TTL_SECONDS,
+  });
+}
+
+export async function synchronizePublishedManualMatchesSnapshot(
+  repository: Pick<ReturnType<typeof getReviewRepository>, "listVisibleManualMatches"> = getReviewRepository(),
+  write: (value: CachedPublicMatches) => Promise<void> = writeRuntimeFallback,
+): Promise<CachedPublicMatches> {
+  const rows = await repository.listVisibleManualMatches();
+  const value = {
+    matches: uniqueAndSort(rows.map(publishedRowToMatch)),
+    fetchedAt: new Date().toISOString(),
+  };
+  await write(value);
+  return value;
 }
 
 export async function preserveLastSuccessfulPublicMatches(
