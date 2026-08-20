@@ -1,10 +1,10 @@
 import { notFound, redirect } from "next/navigation";
 import { PublishedMatchFields } from "@/components/admin-match-fields";
 import { AdminNav } from "@/components/admin-nav";
-import { requireAdminPage } from "@/lib/auth/admin-page";
+import { requireAdminAction, requireAdminPage } from "@/lib/auth/admin-page";
 import { publishedFromForm } from "@/lib/review/form-data";
 import {
-  setManualMatchHidden,
+  toggleManualMatchHidden,
   updateManualMatch,
 } from "@/lib/review/service";
 import { getReviewRepository } from "@/lib/review/repository";
@@ -15,21 +15,22 @@ export default async function EditManualMatchPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const session = await requireAdminPage(`/admin/matches/${id}`);
+  await requireAdminPage(`/admin/matches/${id}`);
   const repository = getReviewRepository();
   const row = await repository.getManualMatch(id);
   if (!row) notFound();
-  const isHidden = row.hidden;
 
   async function save(form: FormData) {
     "use server";
-    await updateManualMatch(id, publishedFromForm(form), session.sub, repository);
+    const session = await requireAdminAction(`/admin/matches/${id}`);
+    await updateManualMatch(id, publishedFromForm(form), session.sub);
     redirect(`/admin/matches/${id}`);
   }
 
   async function toggleVisibility() {
     "use server";
-    await setManualMatchHidden(id, !isHidden, session.sub, repository);
+    const session = await requireAdminAction(`/admin/matches/${id}`);
+    await toggleManualMatchHidden(id, session.sub);
     redirect(`/admin/matches/${id}`);
   }
 

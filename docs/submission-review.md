@@ -14,9 +14,9 @@
 
 ## 管理员 OAuth
 
-管理员入口为 `/admin/login`，使用 Sign in with Vercel Authorization Code + PKCE。服务端验证 OAuth state、PKCE verifier、ID Token 签名、issuer、audience、expiry、nonce，并以 ID Token 的稳定 `sub` 对照 `ADMIN_VERCEL_USER_IDS`。会话 Cookie 为 Secure、HttpOnly、SameSite=Lax；访问令牌只保存在加密 HttpOnly Cookie 中，并仅在退出时用于撤销。管理页面设置 `noindex, nofollow`，所有数据查询都在服务端重新鉴权。
+管理员入口为 `/admin/login`，使用 Sign in with Vercel Authorization Code + PKCE。服务端验证 OAuth state、PKCE verifier、ID Token 签名、issuer、audience、expiry、nonce，并以 ID Token 的稳定 `sub` 对照 `ADMIN_VERCEL_USER_IDS`。Vercel Preview/Production 会话 Cookie 使用 `__Host-` 前缀并设置 Secure、HttpOnly、SameSite=Lax；本地 HTTP 验证使用不带 `__Host-` 的 HttpOnly、SameSite=Lax Cookie，避免浏览器拒绝不符合前缀约束的 Cookie。访问令牌只保存在加密 HttpOnly Cookie 中，并仅在退出时用于撤销。管理页面设置 `noindex, nofollow`，所有数据查询和每一次 Server Action 都在服务端重新鉴权；管理 Route Handler 的写请求还会校验同源 `Origin`。
 
-审核通过使用单一数据库事务：锁定待审核行、创建公开比赛、更新提交状态并写审计事件。驳回不会创建公开比赛。人工比赛更新、隐藏和恢复后会重新验证 `published-manual-matches` 标签。
+审核通过使用单一数据库事务：锁定待审核行、创建公开比赛、更新提交状态并写审计事件。驳回不会创建公开比赛。人工比赛更新、隐藏和恢复后会重新验证 `published-manual-matches` 标签；可见性切换会在事务锁内读取当前状态，避免过期页面或并发请求覆盖较新的状态。
 
 公开赛程按 PandaScore 快照 → 静态 JSON 补录/覆盖 → PostgreSQL 已发布比赛合并，并继续以 `provider + providerMatchId` 去重。数据库读超时或暂时失败时，公开赛程保留最近一次成功读取的已发布人工比赛缓存，不会删除 PandaScore 或静态人工数据，也不会进入演示模式。健康接口的 `database` 字段只返回连接状态、最近成功读取时间、缓存人工比赛数和聚合提交计数；不返回连接信息、SQL、原始错误或任何 Secret。
 

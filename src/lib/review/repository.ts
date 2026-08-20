@@ -454,6 +454,32 @@ export class DrizzleReviewRepository {
     }
   }
 
+  async toggleManualMatchHidden(id: string, actorId: string): Promise<PublishedManualMatchRow> {
+    try {
+      return await getDatabase().transaction(async (tx) => {
+        const [before] = await tx.select().from(publishedManualMatches)
+          .where(eq(publishedManualMatches.id, id)).for("update");
+        if (!before) throw new ReviewNotFoundError("人工比赛不存在。");
+        const hidden = !before.hidden;
+        const [after] = await tx.update(publishedManualMatches)
+          .set({ hidden, updatedAt: new Date() })
+          .where(eq(publishedManualMatches.id, id)).returning();
+        await tx.insert(adminAuditEvents).values({
+          actorId,
+          action: hidden ? "manual_match.hidden" : "manual_match.restored",
+          entityType: "published_manual_match",
+          entityId: id,
+          beforeJson: auditMatch(before),
+          afterJson: auditMatch(after),
+        });
+        return after;
+      });
+    } catch (error) {
+      if (error instanceof ReviewNotFoundError) throw error;
+      translateDatabaseError(error);
+    }
+  }
+
   async auditLegacyImport(actorId: string, counts: Record<string, number>): Promise<void> {
     try {
       await getDatabase().insert(adminAuditEvents).values({

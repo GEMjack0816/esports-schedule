@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { PublishedMatchFields } from "@/components/admin-match-fields";
 import { AdminNav } from "@/components/admin-nav";
-import { requireAdminPage } from "@/lib/auth/admin-page";
+import { requireAdminAction, requireAdminPage } from "@/lib/auth/admin-page";
 import { publishedFromForm } from "@/lib/review/form-data";
 import { createManualMatch } from "@/lib/review/service";
 import type { PublishedMatchWrite } from "@/lib/review/types";
@@ -27,10 +27,11 @@ const blank: PublishedMatchWrite = {
 };
 
 export default async function NewManualMatchPage() {
-  const session = await requireAdminPage("/admin/matches/new");
+  await requireAdminPage("/admin/matches/new");
 
   async function create(form: FormData) {
     "use server";
+    const session = await requireAdminAction("/admin/matches/new");
     const row = await createManualMatch(publishedFromForm(form), session.sub);
     redirect(`/admin/matches/${row.id}`);
   }

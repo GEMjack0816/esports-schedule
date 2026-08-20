@@ -14,6 +14,7 @@ import {
   SignJWT,
 } from "jose";
 import type { JWTVerifyGetKey } from "jose";
+import { safeAdminReturnPath } from "./paths";
 
 const AUTHORIZATION_ENDPOINT = "https://vercel.com/oauth/authorize";
 const TOKEN_ENDPOINT = "https://api.vercel.com/login/oauth/token";
@@ -21,12 +22,14 @@ const REVOKE_ENDPOINT = "https://api.vercel.com/login/oauth/token/revoke";
 const ISSUER = "https://vercel.com";
 const JWKS = createRemoteJWKSet(new URL("https://vercel.com/.well-known/jwks"));
 
-const COOKIE_STATE = "__Host-esports_oauth_state";
-const COOKIE_NONCE = "__Host-esports_oauth_nonce";
-const COOKIE_VERIFIER = "__Host-esports_oauth_verifier";
-const COOKIE_RETURN_TO = "__Host-esports_oauth_return";
-const COOKIE_SESSION = "__Host-esports_admin_session";
-const COOKIE_ACCESS = "__Host-esports_admin_access";
+const COOKIE_SUFFIXES = {
+  state: "esports_oauth_state",
+  nonce: "esports_oauth_nonce",
+  verifier: "esports_oauth_verifier",
+  returnTo: "esports_oauth_return",
+  session: "esports_admin_session",
+  access: "esports_admin_access",
+} as const;
 const TEMP_MAX_AGE_SECONDS = 10 * 60;
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
 
@@ -94,13 +97,31 @@ function sameText(left: string, right: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+export function usesSecureAuthCookies(
+  vercelEnvironment = process.env.VERCEL_ENV,
+): boolean {
+  return vercelEnvironment === "production" || vercelEnvironment === "preview";
+}
+
 function cookieOptions(maxAge: number) {
   return {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: usesSecureAuthCookies(),
     sameSite: "lax" as const,
     path: "/",
     maxAge,
+  };
+}
+
+export function authCookieNames(secure = usesSecureAuthCookies()) {
+  const prefix = secure ? "__Host-" : "";
+  return {
+    state: `${prefix}${COOKIE_SUFFIXES.state}`,
+    nonce: `${prefix}${COOKIE_SUFFIXES.nonce}`,
+    verifier: `${prefix}${COOKIE_SUFFIXES.verifier}`,
+    returnTo: `${prefix}${COOKIE_SUFFIXES.returnTo}`,
+    session: `${prefix}${COOKIE_SUFFIXES.session}`,
+    access: `${prefix}${COOKIE_SUFFIXES.access}`,
   };
 }
 
@@ -109,6 +130,7 @@ function allowedOrigins(): Set<string> {
   for (const value of [
     process.env.VERCEL_PROJECT_PRODUCTION_URL,
     process.env.VERCEL_BRANCH_URL,
+    process.env.VERCEL_URL,
   ]) {
     if (!value?.trim()) continue;
     const host = value.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
@@ -129,6 +151,22 @@ export function trustedRequestOrigin(request: Request): string {
   return origin;
 }
 
+export function trustedMutationOrigin(request: Request): string {
+  const requestOrigin = trustedRequestOrigin(request);
+  const header = request.headers.get("origin");
+  if (!header) throw new AuthForbiddenError("缺少请求来源。");
+  let headerOrigin: string;
+  try {
+    headerOrigin = new URL(header).origin;
+  } catch {
+    throw new AuthForbiddenError("请求来源无效。");
+  }
+  if (headerOrigin !== requestOrigin) {
+    throw new AuthForbiddenError("跨站写入请求被拒绝。");
+  }
+  return requestOrigin;
+}
+
 export async function verifyVercelIdentityToken(
   idToken: string,
   expectedNonce: string,
@@ -147,11 +185,6 @@ export async function verifyVercelIdentityToken(
   return subject;
 }
 
-function safeReturnPath(value: string | null): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/admin";
-  return value.startsWith("/admin") ? value : "/admin";
-}
-
 export async function beginVercelAuthorization(request: Request): Promise<URL> {
   const config = requiredConfig();
   const origin = trustedRequestOrigin(request);
@@ -159,12 +192,13 @@ export async function beginVercelAuthorization(request: Request): Promise<URL> {
   const nonce = randomBase64Url();
   const verifier = randomBase64Url(48);
   const challenge = createHash("sha256").update(verifier).digest("base64url");
-  const returnTo = safeReturnPath(new URL(request.url).searchParams.get("returnTo"));
+  const returnTo = safeAdminReturnPath(new URL(request.url).searchParams.get("returnTo"));
   const store = await cookies();
-  store.set(COOKIE_STATE, state, cookieOptions(TEMP_MAX_AGE_SECONDS));
-  store.set(COOKIE_NONCE, nonce, cookieOptions(TEMP_MAX_AGE_SECONDS));
-  store.set(COOKIE_VERIFIER, verifier, cookieOptions(TEMP_MAX_AGE_SECONDS));
-  store.set(COOKIE_RETURN_TO, returnTo, cookieOptions(TEMP_MAX_AGE_SECONDS));
+  const names = authCookieNames();
+  store.set(names.state, state, cookieOptions(TEMP_MAX_AGE_SECONDS));
+  store.set(names.nonce, nonce, cookieOptions(TEMP_MAX_AGE_SECONDS));
+  store.set(names.verifier, verifier, cookieOptions(TEMP_MAX_AGE_SECONDS));
+  store.set(names.returnTo, returnTo, cookieOptions(TEMP_MAX_AGE_SECONDS));
 
   const url = new URL(AUTHORIZATION_ENDPOINT);
   url.searchParams.set("client_id", config.clientId);
@@ -190,13 +224,17 @@ export async function completeVercelAuthorization(request: Request): Promise<str
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   const store = await cookies();
-  const expectedState = store.get(COOKIE_STATE)?.value;
-  const nonce = store.get(COOKIE_NONCE)?.value;
-  const verifier = store.get(COOKIE_VERIFIER)?.value;
-  const returnTo = safeReturnPath(store.get(COOKIE_RETURN_TO)?.value ?? null);
+  const names = authCookieNames();
+  const expectedState = store.get(names.state)?.value;
+  const nonce = store.get(names.nonce)?.value;
+  const verifier = store.get(names.verifier)?.value;
+  const returnTo = safeAdminReturnPath(store.get(names.returnTo)?.value ?? null);
 
-  for (const name of [COOKIE_STATE, COOKIE_NONCE, COOKIE_VERIFIER, COOKIE_RETURN_TO]) {
-    store.delete(name);
+  for (const name of [names.state, names.nonce, names.verifier, names.returnTo]) {
+    store.set(name, "", {
+      ...cookieOptions(0),
+      expires: new Date(0),
+    });
   }
   if (!code || !state || !expectedState || !nonce || !verifier || !sameText(state, expectedState)) {
     throw new AuthForbiddenError("OAuth 状态校验失败。");
@@ -238,15 +276,15 @@ export async function completeVercelAuthorization(request: Request): Promise<str
     .setIssuedAt(issuedAt)
     .setExpirationTime(issuedAt + SESSION_MAX_AGE_SECONDS)
     .encrypt(digestSecret(config.clientSecret, "access-token"));
-  store.set(COOKIE_SESSION, session, cookieOptions(SESSION_MAX_AGE_SECONDS));
-  store.set(COOKIE_ACCESS, encryptedAccess, cookieOptions(SESSION_MAX_AGE_SECONDS));
+  store.set(names.session, session, cookieOptions(SESSION_MAX_AGE_SECONDS));
+  store.set(names.access, encryptedAccess, cookieOptions(SESSION_MAX_AGE_SECONDS));
   return returnTo;
 }
 
 export async function getAdminSession(): Promise<AdminSession | null> {
   try {
     const config = requiredConfig();
-    const value = (await cookies()).get(COOKIE_SESSION)?.value;
+    const value = (await cookies()).get(authCookieNames().session)?.value;
     if (!value) return null;
     const verified = await jwtVerify(value, digestSecret(config.clientSecret, "session"), {
       issuer: "esports-schedule",
@@ -265,7 +303,7 @@ export async function revokeAndClearSession(): Promise<void> {
   try {
     config = requiredConfig();
     const store = await cookies();
-    const encrypted = store.get(COOKIE_ACCESS)?.value;
+    const encrypted = store.get(authCookieNames().access)?.value;
     if (encrypted) {
       const decrypted = await jwtDecrypt(encrypted, digestSecret(config.clientSecret, "access-token"), {
         issuer: "esports-schedule",
@@ -289,15 +327,11 @@ export async function revokeAndClearSession(): Promise<void> {
     // Logout remains local even when upstream revocation is temporarily unavailable.
   } finally {
     const store = await cookies();
-    for (const name of [
-      COOKIE_STATE,
-      COOKIE_NONCE,
-      COOKIE_VERIFIER,
-      COOKIE_RETURN_TO,
-      COOKIE_SESSION,
-      COOKIE_ACCESS,
-    ]) {
-      store.delete(name);
+    for (const name of Object.values(authCookieNames())) {
+      store.set(name, "", {
+        ...cookieOptions(0),
+        expires: new Date(0),
+      });
     }
   }
 }

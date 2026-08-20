@@ -186,3 +186,14 @@ export async function setManualMatchHidden(
   invalidate();
   return result;
 }
+
+export async function toggleManualMatchHidden(
+  id: string,
+  actorId: string,
+  repository: DrizzleReviewRepository = getReviewRepository(),
+  invalidate: () => void = invalidatePublishedManualMatches,
+) {
+  const result = await repository.toggleManualMatchHidden(id, actorId);
+  invalidate();
+  return result;
+}

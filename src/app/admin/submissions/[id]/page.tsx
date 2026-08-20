@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { PublishedMatchFields, SubmissionFields } from "@/components/admin-match-fields";
 import { AdminNav } from "@/components/admin-nav";
-import { requireAdminPage } from "@/lib/auth/admin-page";
+import { requireAdminAction, requireAdminPage } from "@/lib/auth/admin-page";
 import { publishedFromForm, submissionFromForm } from "@/lib/review/form-data";
 import { getReviewRepository } from "@/lib/review/repository";
 import {
@@ -19,7 +19,7 @@ export default async function SubmissionReviewPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const session = await requireAdminPage(`/admin/submissions/${id}`);
+  await requireAdminPage(`/admin/submissions/${id}`);
   const repository = getReviewRepository();
   const row = await repository.getSubmission(id);
   if (!row) notFound();
@@ -36,22 +36,29 @@ export default async function SubmissionReviewPage({
 
   async function save(form: FormData) {
     "use server";
-    await repository.saveSubmission(id, validateSubmission(submissionFromForm(form)), session.sub);
+    const session = await requireAdminAction(`/admin/submissions/${id}`);
+    await getReviewRepository().saveSubmission(
+      id,
+      validateSubmission(submissionFromForm(form)),
+      session.sub,
+    );
     redirect(`/admin/submissions/${id}`);
   }
 
   async function approve(form: FormData) {
     "use server";
+    const session = await requireAdminAction(`/admin/submissions/${id}`);
     await approveAndPublish(id, {
       submission: submissionFromForm(form),
       published: publishedFromForm(form),
-    }, session.sub, repository);
+    }, session.sub);
     redirect("/admin/submissions?status=approved");
   }
 
   async function reject(form: FormData) {
     "use server";
-    await repository.rejectSubmission(
+    const session = await requireAdminAction(`/admin/submissions/${id}`);
+    await getReviewRepository().rejectSubmission(
       id,
       validateRejectionReason(form.get("rejectionReason")),
       session.sub,

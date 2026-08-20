@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { safeAdminReturnPath } from "@/lib/auth/paths";
 import { getAdminSession, isAdminAuthConfigured } from "@/lib/auth/vercel";
 
 export default async function AdminLoginPage({
@@ -9,7 +10,7 @@ export default async function AdminLoginPage({
 }) {
   if (await getAdminSession()) redirect("/admin");
   const returnTo = (await searchParams).returnTo;
-  const target = returnTo?.startsWith("/admin") ? returnTo : "/admin";
+  const target = safeAdminReturnPath(returnTo);
   const configured = isAdminAuthConfigured();
   return (
     <main className="admin-card">

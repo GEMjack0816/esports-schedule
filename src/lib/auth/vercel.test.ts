@@ -6,10 +6,14 @@ import {
 } from "jose";
 import { describe, expect, it } from "vitest";
 import {
+  authCookieNames,
   isAuthorizedAdminSubject,
+  trustedMutationOrigin,
   trustedRequestOrigin,
+  usesSecureAuthCookies,
   verifyVercelIdentityToken,
 } from "./vercel";
+import { safeAdminReturnPath } from "./paths";
 
 async function identityToken(overrides: {
   nonce?: string;
@@ -60,5 +64,45 @@ describe("Vercel administrator identity validation", () => {
     expect(trustedRequestOrigin(new Request("https://esports-schedule-two.vercel.app/admin")))
       .toBe("https://esports-schedule-two.vercel.app");
     expect(() => trustedRequestOrigin(new Request("https://evil.example/admin"))).toThrow();
+  });
+
+  it("requires browser mutations to come from the same trusted origin", () => {
+    const accepted = new Request("https://esports-schedule-two.vercel.app/api/auth/signout", {
+      method: "POST",
+      headers: { Origin: "https://esports-schedule-two.vercel.app" },
+    });
+    expect(trustedMutationOrigin(accepted)).toBe("https://esports-schedule-two.vercel.app");
+
+    const missing = new Request("https://esports-schedule-two.vercel.app/api/auth/signout", {
+      method: "POST",
+    });
+    expect(() => trustedMutationOrigin(missing)).toThrow();
+
+    const crossSite = new Request("https://esports-schedule-two.vercel.app/api/auth/signout", {
+      method: "POST",
+      headers: { Origin: "https://evil.example" },
+    });
+    expect(() => trustedMutationOrigin(crossSite)).toThrow();
+  });
+
+  it("uses __Host cookies only on secure production origins", () => {
+    expect(usesSecureAuthCookies("production")).toBe(true);
+    expect(usesSecureAuthCookies("preview")).toBe(true);
+    expect(usesSecureAuthCookies("development")).toBe(false);
+    expect(usesSecureAuthCookies(undefined)).toBe(false);
+    expect(Object.values(authCookieNames(true)).every((name) => name.startsWith("__Host-")))
+      .toBe(true);
+    expect(Object.values(authCookieNames(false)).every((name) => !name.startsWith("__Host-")))
+      .toBe(true);
+  });
+
+  it.each([
+    ["/admin", "/admin"],
+    ["/admin/submissions?status=pending", "/admin/submissions?status=pending"],
+    ["/administrator", "/admin"],
+    ["//evil.example/admin", "/admin"],
+    ["https://evil.example/admin", "/admin"],
+  ])("keeps administrator return paths internal: %s", (input, expected) => {
+    expect(safeAdminReturnPath(input)).toBe(expected);
   });
 });

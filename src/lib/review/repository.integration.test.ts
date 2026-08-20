@@ -113,6 +113,7 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       published: published(approved.input),
     }, "admin-a");
     expect((await repository.setManualMatchHidden(match.id, true, "admin-a")).hidden).toBe(true);
-    expect((await repository.setManualMatchHidden(match.id, false, "admin-a")).hidden).toBe(false);
+    expect((await repository.toggleManualMatchHidden(match.id, "admin-a")).hidden).toBe(false);
+    expect((await repository.toggleManualMatchHidden(match.id, "admin-a")).hidden).toBe(true);
   });
 });
