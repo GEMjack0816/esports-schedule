@@ -40,6 +40,13 @@
 
 ## 隔离环境验证
 
+<!-- TODO(PR6-PREVIEW-OAUTH-SUB-DIAGNOSTIC): 获取并确认管理员 sub 后删除本段及对应代码。 -->
+Preview 临时 OIDC `sub` 诊断入口为
+`/api/auth/authorize?returnTo=/admin/oauth-sub-diagnostic`。它只在 Vercel Preview
+环境中生效，复用完整的 state、PKCE、nonce、签名、issuer 与 audience 校验，成功后只返回
+`{"sub":"..."}`；不会创建管理员会话，也不会返回或记录 ID Token、Access Token 或 Client Secret。
+Production 环境仍执行原管理员白名单校验，不会进入该诊断分支。
+
 ```powershell
 npm run db:migrate
 npm run db:check

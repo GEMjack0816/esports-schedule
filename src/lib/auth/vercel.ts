@@ -32,6 +32,7 @@ const COOKIE_SUFFIXES = {
 } as const;
 const TEMP_MAX_AGE_SECONDS = 10 * 60;
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
+export const PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH = "/admin/oauth-sub-diagnostic";
 
 type AuthConfig = {
   clientId: string;
@@ -42,6 +43,10 @@ type AuthConfig = {
 export type AdminSession = {
   sub: string;
 };
+
+export type VercelAuthorizationResult =
+  | { kind: "admin"; returnTo: string }
+  | { kind: "preview-sub-diagnostic"; sub: string };
 
 export class AuthConfigurationError extends Error {
   readonly code = "AUTH_NOT_CONFIGURED";
@@ -81,6 +86,13 @@ export function isAuthorizedAdminSubject(subject: string, configuredIds: string)
     .map((value) => value.trim())
     .filter(Boolean)
     .includes(subject);
+}
+
+export function isPreviewOauthSubDiagnostic(
+  returnTo: string,
+  vercelEnvironment = process.env.VERCEL_ENV,
+): boolean {
+  return vercelEnvironment === "preview" && returnTo === PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH;
 }
 
 function digestSecret(secret: string, purpose: string): Uint8Array {
@@ -217,7 +229,22 @@ type TokenResponse = {
   id_token?: string;
 };
 
-export async function completeVercelAuthorization(request: Request): Promise<string> {
+async function revokeVercelAccessToken(config: AuthConfig, accessToken: string): Promise<void> {
+  await fetch(REVOKE_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({ token: accessToken }),
+    cache: "no-store",
+    signal: AbortSignal.timeout(10_000),
+  });
+}
+
+export async function completeVercelAuthorization(
+  request: Request,
+): Promise<VercelAuthorizationResult> {
   const config = requiredConfig();
   const origin = trustedRequestOrigin(request);
   const url = new URL(request.url);
@@ -259,6 +286,12 @@ export async function completeVercelAuthorization(request: Request): Promise<str
   if (!token.id_token || !token.access_token) throw new AuthForbiddenError("Vercel 登录响应不完整。");
 
   const subject = await verifyVercelIdentityToken(token.id_token, nonce, config.clientId);
+  // TODO(PR6-PREVIEW-OAUTH-SUB-DIAGNOSTIC): Remove this Preview-only branch after the
+  // correct ADMIN_VERCEL_USER_IDS value has been captured and verified.
+  if (isPreviewOauthSubDiagnostic(returnTo)) {
+    await revokeVercelAccessToken(config, token.access_token).catch(() => undefined);
+    return { kind: "preview-sub-diagnostic", sub: subject };
+  }
   if (!config.adminIds.has(subject)) throw new AuthForbiddenError("此 Vercel 账户不在管理员白名单中。");
 
   const issuedAt = Math.floor(Date.now() / 1_000);
@@ -278,7 +311,7 @@ export async function completeVercelAuthorization(request: Request): Promise<str
     .encrypt(digestSecret(config.clientSecret, "access-token"));
   store.set(names.session, session, cookieOptions(SESSION_MAX_AGE_SECONDS));
   store.set(names.access, encryptedAccess, cookieOptions(SESSION_MAX_AGE_SECONDS));
-  return returnTo;
+  return { kind: "admin", returnTo };
 }
 
 export async function getAdminSession(): Promise<AdminSession | null> {
@@ -311,16 +344,7 @@ export async function revokeAndClearSession(): Promise<void> {
       });
       const token = decrypted.payload.token;
       if (typeof token === "string") {
-        await fetch(REVOKE_ENDPOINT, {
-          method: "POST",
-          headers: {
-            Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
-            "Content-Type": "application/x-www-form-urlencoded",
-          },
-          body: new URLSearchParams({ token }),
-          cache: "no-store",
-          signal: AbortSignal.timeout(10_000),
-        }).catch(() => undefined);
+        await revokeVercelAccessToken(config, token).catch(() => undefined);
       }
     }
   } catch {
