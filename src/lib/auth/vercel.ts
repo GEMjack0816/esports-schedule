@@ -33,6 +33,7 @@ const COOKIE_SUFFIXES = {
 const TEMP_MAX_AGE_SECONDS = 10 * 60;
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
 export const PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH = "/admin/oauth-sub-diagnostic";
+const PREVIEW_OAUTH_SUB_DIAGNOSTIC_BRANCH = "agent/add-submission-review-workflow";
 
 type AuthConfig = {
   clientId: string;
@@ -91,8 +92,17 @@ export function isAuthorizedAdminSubject(subject: string, configuredIds: string)
 export function isPreviewOauthSubDiagnostic(
   returnTo: string,
   vercelEnvironment = process.env.VERCEL_ENV,
+  origin?: string,
+  branchUrl = process.env.VERCEL_BRANCH_URL,
+  gitCommitRef = process.env.VERCEL_GIT_COMMIT_REF,
 ): boolean {
-  return vercelEnvironment === "preview" && returnTo === PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH;
+  if (returnTo !== PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH) return false;
+  if (vercelEnvironment === "preview") return true;
+
+  return vercelEnvironment !== "production"
+    && gitCommitRef === PREVIEW_OAUTH_SUB_DIAGNOSTIC_BRANCH
+    && Boolean(branchUrl)
+    && origin === `https://${branchUrl}`;
 }
 
 function digestSecret(secret: string, purpose: string): Uint8Array {
@@ -288,7 +298,7 @@ export async function completeVercelAuthorization(
   const subject = await verifyVercelIdentityToken(token.id_token, nonce, config.clientId);
   // TODO(PR6-PREVIEW-OAUTH-SUB-DIAGNOSTIC): Remove this Preview-only branch after the
   // correct ADMIN_VERCEL_USER_IDS value has been captured and verified.
-  if (isPreviewOauthSubDiagnostic(returnTo)) {
+  if (isPreviewOauthSubDiagnostic(returnTo, process.env.VERCEL_ENV, origin)) {
     await revokeVercelAccessToken(config, token.access_token).catch(() => undefined);
     return { kind: "preview-sub-diagnostic", sub: subject };
   }

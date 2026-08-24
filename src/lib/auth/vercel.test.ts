@@ -66,6 +66,20 @@ describe("Vercel administrator identity validation", () => {
     expect(isPreviewOauthSubDiagnostic(PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH, "preview")).toBe(true);
     expect(isPreviewOauthSubDiagnostic(PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH, "production")).toBe(false);
     expect(isPreviewOauthSubDiagnostic("/admin", "preview")).toBe(false);
+    expect(isPreviewOauthSubDiagnostic(
+      PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH,
+      undefined,
+      "https://preview.example",
+      "preview.example",
+      "agent/add-submission-review-workflow",
+    )).toBe(true);
+    expect(isPreviewOauthSubDiagnostic(
+      PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH,
+      undefined,
+      "https://production.example",
+      "preview.example",
+      "agent/add-submission-review-workflow",
+    )).toBe(false);
   });
 
   it("accepts only explicitly configured production and local origins", () => {
