@@ -286,10 +286,11 @@ export async function completeVercelAuthorization(
 
   const response = await fetch(TOKEN_ENDPOINT, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
     body: new URLSearchParams({
-      client_id: config.clientId,
-      client_secret: config.clientSecret,
       code,
       code_verifier: verifier,
       grant_type: "authorization_code",
