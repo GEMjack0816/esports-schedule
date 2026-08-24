@@ -34,6 +34,7 @@ const TEMP_MAX_AGE_SECONDS = 10 * 60;
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
 export const PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH = "/admin/oauth-sub-diagnostic";
 const PREVIEW_OAUTH_SUB_DIAGNOSTIC_BRANCH = "agent/add-submission-review-workflow";
+const PREVIEW_OAUTH_SUB_DIAGNOSTIC_STATE_PREFIX = "preview-sub-diagnostic.";
 
 type AuthConfig = {
   clientId: string;
@@ -210,11 +211,12 @@ export async function verifyVercelIdentityToken(
 export async function beginVercelAuthorization(request: Request): Promise<URL> {
   const config = requiredConfig();
   const origin = trustedRequestOrigin(request);
-  const state = randomBase64Url();
+  const returnTo = safeAdminReturnPath(new URL(request.url).searchParams.get("returnTo"));
+  const diagnostic = isPreviewOauthSubDiagnostic(returnTo, process.env.VERCEL_ENV, origin);
+  const state = `${diagnostic ? PREVIEW_OAUTH_SUB_DIAGNOSTIC_STATE_PREFIX : ""}${randomBase64Url()}`;
   const nonce = randomBase64Url();
   const verifier = randomBase64Url(48);
   const challenge = createHash("sha256").update(verifier).digest("base64url");
-  const returnTo = safeAdminReturnPath(new URL(request.url).searchParams.get("returnTo"));
   const store = await cookies();
   const names = authCookieNames();
   store.set(names.state, state, cookieOptions(TEMP_MAX_AGE_SECONDS));
@@ -276,6 +278,7 @@ export async function completeVercelAuthorization(
   if (!code || !state || !expectedState || !nonce || !verifier || !sameText(state, expectedState)) {
     throw new AuthForbiddenError("OAuth 状态校验失败。");
   }
+  const diagnostic = state.startsWith(PREVIEW_OAUTH_SUB_DIAGNOSTIC_STATE_PREFIX);
 
   const response = await fetch(TOKEN_ENDPOINT, {
     method: "POST",
@@ -298,7 +301,7 @@ export async function completeVercelAuthorization(
   const subject = await verifyVercelIdentityToken(token.id_token, nonce, config.clientId);
   // TODO(PR6-PREVIEW-OAUTH-SUB-DIAGNOSTIC): Remove this Preview-only branch after the
   // correct ADMIN_VERCEL_USER_IDS value has been captured and verified.
-  if (isPreviewOauthSubDiagnostic(returnTo, process.env.VERCEL_ENV, origin)) {
+  if (diagnostic) {
     await revokeVercelAccessToken(config, token.access_token).catch(() => undefined);
     return { kind: "preview-sub-diagnostic", sub: subject };
   }
