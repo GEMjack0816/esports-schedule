@@ -56,6 +56,10 @@ export class AuthConfigurationError extends Error {
 
 export class AuthForbiddenError extends Error {
   readonly code = "AUTH_FORBIDDEN";
+
+  constructor(message: string, readonly diagnosticStage?: string) {
+    super(message);
+  }
 }
 
 function requiredConfig(): AuthConfig {
@@ -294,7 +298,22 @@ export async function completeVercelAuthorization(
     cache: "no-store",
     signal: AbortSignal.timeout(10_000),
   });
-  if (!response.ok) throw new AuthForbiddenError("Vercel 登录令牌交换失败。");
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => null) as { error?: unknown } | null;
+    const upstreamCode = typeof errorBody?.error === "string" ? errorBody.error : "";
+    const knownCodes = new Set([
+      "invalid_request",
+      "invalid_client",
+      "invalid_grant",
+      "unauthorized_client",
+      "unsupported_grant_type",
+      "invalid_scope",
+    ]);
+    const diagnosticStage = knownCodes.has(upstreamCode)
+      ? `tokenExchange_${upstreamCode}`
+      : `tokenExchange_http_${response.status}`;
+    throw new AuthForbiddenError("Vercel 登录令牌交换失败。", diagnosticStage);
+  }
   const token = await response.json() as TokenResponse;
   if (!token.id_token || !token.access_token) throw new AuthForbiddenError("Vercel 登录响应不完整。");
 

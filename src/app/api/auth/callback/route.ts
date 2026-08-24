@@ -16,6 +16,7 @@ function previewDiagnosticFailureKey(error: unknown): string | null {
   }
   if (error instanceof AuthConfigurationError) return "authConfigurationFailed";
   if (!(error instanceof AuthForbiddenError)) return "authorizationUnavailable";
+  if (error.diagnosticStage) return error.diagnosticStage;
   if (error.message.includes("状态校验")) return "oauthStateFailed";
   if (error.message.includes("令牌交换")) return "tokenExchangeFailed";
   if (error.message.includes("响应不完整")) return "tokenResponseIncomplete";
