@@ -32,9 +32,6 @@ const COOKIE_SUFFIXES = {
 } as const;
 const TEMP_MAX_AGE_SECONDS = 10 * 60;
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
-export const PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH = "/admin/oauth-sub-diagnostic";
-const PREVIEW_OAUTH_SUB_DIAGNOSTIC_BRANCH = "agent/add-submission-review-workflow";
-const PREVIEW_OAUTH_SUB_DIAGNOSTIC_STATE_PREFIX = "preview-sub-diagnostic.";
 
 type AuthConfig = {
   clientId: string;
@@ -46,20 +43,12 @@ export type AdminSession = {
   sub: string;
 };
 
-export type VercelAuthorizationResult =
-  | { kind: "admin"; returnTo: string }
-  | { kind: "preview-sub-diagnostic"; sub: string };
-
 export class AuthConfigurationError extends Error {
   readonly code = "AUTH_NOT_CONFIGURED";
 }
 
 export class AuthForbiddenError extends Error {
   readonly code = "AUTH_FORBIDDEN";
-
-  constructor(message: string, readonly diagnosticStage?: string) {
-    super(message);
-  }
 }
 
 function requiredConfig(): AuthConfig {
@@ -92,22 +81,6 @@ export function isAuthorizedAdminSubject(subject: string, configuredIds: string)
     .map((value) => value.trim())
     .filter(Boolean)
     .includes(subject);
-}
-
-export function isPreviewOauthSubDiagnostic(
-  returnTo: string,
-  vercelEnvironment = process.env.VERCEL_ENV,
-  origin?: string,
-  branchUrl = process.env.VERCEL_BRANCH_URL,
-  gitCommitRef = process.env.VERCEL_GIT_COMMIT_REF,
-): boolean {
-  if (returnTo !== PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH) return false;
-  if (vercelEnvironment === "preview") return true;
-
-  return vercelEnvironment !== "production"
-    && gitCommitRef === PREVIEW_OAUTH_SUB_DIAGNOSTIC_BRANCH
-    && Boolean(branchUrl)
-    && origin === `https://${branchUrl}`;
 }
 
 function digestSecret(secret: string, purpose: string): Uint8Array {
@@ -216,8 +189,7 @@ export async function beginVercelAuthorization(request: Request): Promise<URL> {
   const config = requiredConfig();
   const origin = trustedRequestOrigin(request);
   const returnTo = safeAdminReturnPath(new URL(request.url).searchParams.get("returnTo"));
-  const diagnostic = isPreviewOauthSubDiagnostic(returnTo, process.env.VERCEL_ENV, origin);
-  const state = `${diagnostic ? PREVIEW_OAUTH_SUB_DIAGNOSTIC_STATE_PREFIX : ""}${randomBase64Url()}`;
+  const state = randomBase64Url();
   const nonce = randomBase64Url();
   const verifier = randomBase64Url(48);
   const challenge = createHash("sha256").update(verifier).digest("base64url");
@@ -258,9 +230,7 @@ async function revokeVercelAccessToken(config: AuthConfig, accessToken: string):
   });
 }
 
-export async function completeVercelAuthorization(
-  request: Request,
-): Promise<VercelAuthorizationResult> {
+export async function completeVercelAuthorization(request: Request): Promise<string> {
   const config = requiredConfig();
   const origin = trustedRequestOrigin(request);
   const url = new URL(request.url);
@@ -282,8 +252,6 @@ export async function completeVercelAuthorization(
   if (!code || !state || !expectedState || !nonce || !verifier || !sameText(state, expectedState)) {
     throw new AuthForbiddenError("OAuth 状态校验失败。");
   }
-  const diagnostic = state.startsWith(PREVIEW_OAUTH_SUB_DIAGNOSTIC_STATE_PREFIX);
-
   const response = await fetch(TOKEN_ENDPOINT, {
     method: "POST",
     headers: {
@@ -299,32 +267,11 @@ export async function completeVercelAuthorization(
     cache: "no-store",
     signal: AbortSignal.timeout(10_000),
   });
-  if (!response.ok) {
-    const errorBody = await response.json().catch(() => null) as { error?: unknown } | null;
-    const upstreamCode = typeof errorBody?.error === "string" ? errorBody.error : "";
-    const knownCodes = new Set([
-      "invalid_request",
-      "invalid_client",
-      "invalid_grant",
-      "unauthorized_client",
-      "unsupported_grant_type",
-      "invalid_scope",
-    ]);
-    const diagnosticStage = knownCodes.has(upstreamCode)
-      ? `tokenExchange_${upstreamCode}`
-      : `tokenExchange_http_${response.status}`;
-    throw new AuthForbiddenError("Vercel 登录令牌交换失败。", diagnosticStage);
-  }
+  if (!response.ok) throw new AuthForbiddenError("Vercel 登录令牌交换失败。");
   const token = await response.json() as TokenResponse;
   if (!token.id_token || !token.access_token) throw new AuthForbiddenError("Vercel 登录响应不完整。");
 
   const subject = await verifyVercelIdentityToken(token.id_token, nonce, config.clientId);
-  // TODO(PR6-PREVIEW-OAUTH-SUB-DIAGNOSTIC): Remove this Preview-only branch after the
-  // correct ADMIN_VERCEL_USER_IDS value has been captured and verified.
-  if (diagnostic) {
-    await revokeVercelAccessToken(config, token.access_token).catch(() => undefined);
-    return { kind: "preview-sub-diagnostic", sub: subject };
-  }
   if (!config.adminIds.has(subject)) throw new AuthForbiddenError("此 Vercel 账户不在管理员白名单中。");
 
   const issuedAt = Math.floor(Date.now() / 1_000);
@@ -344,7 +291,7 @@ export async function completeVercelAuthorization(
     .encrypt(digestSecret(config.clientSecret, "access-token"));
   store.set(names.session, session, cookieOptions(SESSION_MAX_AGE_SECONDS));
   store.set(names.access, encryptedAccess, cookieOptions(SESSION_MAX_AGE_SECONDS));
-  return { kind: "admin", returnTo };
+  return returnTo;
 }
 
 export async function getAdminSession(): Promise<AdminSession | null> {

@@ -8,8 +8,6 @@ import { describe, expect, it } from "vitest";
 import {
   authCookieNames,
   isAuthorizedAdminSubject,
-  isPreviewOauthSubDiagnostic,
-  PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH,
   trustedMutationOrigin,
   trustedRequestOrigin,
   usesSecureAuthCookies,
@@ -60,26 +58,6 @@ describe("Vercel administrator identity validation", () => {
   it("uses a stable subject whitelist with exact matching", () => {
     expect(isAuthorizedAdminSubject("user_2", "user_1, user_2")).toBe(true);
     expect(isAuthorizedAdminSubject("user", "user_1, user_2")).toBe(false);
-  });
-
-  it("enables the temporary OIDC sub diagnostic only for the exact Preview path", () => {
-    expect(isPreviewOauthSubDiagnostic(PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH, "preview")).toBe(true);
-    expect(isPreviewOauthSubDiagnostic(PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH, "production")).toBe(false);
-    expect(isPreviewOauthSubDiagnostic("/admin", "preview")).toBe(false);
-    expect(isPreviewOauthSubDiagnostic(
-      PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH,
-      undefined,
-      "https://preview.example",
-      "preview.example",
-      "agent/add-submission-review-workflow",
-    )).toBe(true);
-    expect(isPreviewOauthSubDiagnostic(
-      PREVIEW_OAUTH_SUB_DIAGNOSTIC_PATH,
-      undefined,
-      "https://production.example",
-      "preview.example",
-      "agent/add-submission-review-workflow",
-    )).toBe(false);
   });
 
   it("accepts only explicitly configured production and local origins", () => {
