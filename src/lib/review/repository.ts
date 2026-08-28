@@ -18,6 +18,7 @@ import {
   matchSubmissions,
   publishedManualMatches,
   submissionRateLimits,
+  submissionRateLimitWindows,
 } from "@/db/schema";
 import type {
   MatchSubmissionRow,
@@ -25,7 +26,11 @@ import type {
 } from "@/db/schema";
 import type { MatchSubmissionInput } from "@/lib/submissions";
 import { createSubmissionFingerprint } from "@/lib/submissions";
-import { PUBLIC_SUBMISSION_POLICY } from "./submission-protection";
+import {
+  PUBLIC_SUBMISSION_GATE_LOCK,
+  PUBLIC_SUBMISSION_POLICY,
+  submissionControlWindowKey,
+} from "./submission-protection";
 import type { PublicSubmissionPolicy } from "./submission-protection";
 import {
   DatabaseUnavailableError,
@@ -49,8 +54,6 @@ type CreateOptions = {
   id?: string;
   submittedAt?: Date;
 };
-
-const PUBLIC_SUBMISSION_GATE_LOCK = 1_908_218_316;
 
 function submissionValues(input: MatchSubmissionInput, updatedAt = new Date()) {
   return {
@@ -83,6 +86,17 @@ function assertExpectedVersion(actual: Date, expected: Date): void {
   if (actual.getTime() !== expected.getTime()) {
     throw new ReviewConflictError("记录已经被其他管理员修改，请重新加载后再操作。");
   }
+}
+
+function waitFor(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function windowRetryAfterSeconds(windowStartedAt: Date, windowMs: number, now: Date): number {
+  return Math.max(
+    1,
+    Math.ceil((windowStartedAt.getTime() + windowMs - now.getTime()) / 1_000),
+  );
 }
 
 function auditSubmission(row: MatchSubmissionRow) {
@@ -152,36 +166,134 @@ export class DrizzleReviewRepository {
   ): Promise<PublicSubmissionResult> {
     try {
       return await getDatabase().transaction(async (tx) => {
-        await tx.execute(sql`select pg_advisory_xact_lock(${PUBLIC_SUBMISSION_GATE_LOCK})`);
-        await tx.insert(submissionRateLimits).values({
-          sourceHash,
+        await tx.execute(sql`select set_config(
+          'statement_timeout',
+          ${`${policy.statementTimeoutMs}ms`},
+          true
+        )`);
+        await tx.execute(sql`select set_config(
+          'lock_timeout',
+          ${`${policy.rowLockTimeoutMs}ms`},
+          true
+        )`);
+
+        const lockDeadline = Date.now() + policy.gateLockMaxWaitMs;
+        let gateAcquired = false;
+        do {
+          const lockRows = await tx.execute<{ acquired: boolean }>(sql`
+            select pg_try_advisory_xact_lock(${PUBLIC_SUBMISSION_GATE_LOCK}) as acquired
+          `);
+          gateAcquired = Boolean(lockRows[0]?.acquired);
+          if (gateAcquired || Date.now() >= lockDeadline) break;
+          await waitFor(Math.min(policy.gateLockRetryMs, Math.max(1, lockDeadline - Date.now())));
+        } while (!gateAcquired);
+        if (!gateAcquired) {
+          return {
+            kind: "service-busy" as const,
+            retryAfterSeconds: policy.busyRetryAfterSeconds,
+          };
+        }
+
+        const consumeControlWindow = async (
+          kind: "global-requests" | "new-sources",
+          maximum: number,
+        ) => {
+          const windowKey = submissionControlWindowKey(policy.counterNamespace, kind);
+          await tx.insert(submissionRateLimitWindows).values({
+            windowKey,
+            windowStartedAt: now,
+            requestCount: 0,
+            updatedAt: now,
+          }).onConflictDoNothing();
+          const [current] = await tx.select().from(submissionRateLimitWindows)
+            .where(eq(submissionRateLimitWindows.windowKey, windowKey)).for("update");
+          if (!current) throw new Error("SUBMISSION_CONTROL_WINDOW_MISSING");
+
+          const expired = current.windowStartedAt.getTime() + policy.windowMs <= now.getTime();
+          const windowStartedAt = expired ? now : current.windowStartedAt;
+          const requestCount = expired ? 0 : current.requestCount;
+          if (requestCount >= maximum) {
+            return {
+              allowed: false as const,
+              windowKey,
+              retryAfterSeconds: windowRetryAfterSeconds(windowStartedAt, policy.windowMs, now),
+            };
+          }
+          await tx.update(submissionRateLimitWindows).set({
+            windowStartedAt,
+            requestCount: requestCount + 1,
+            updatedAt: now,
+          }).where(eq(submissionRateLimitWindows.windowKey, windowKey));
+          return { allowed: true as const, windowKey, retryAfterSeconds: 0 };
+        };
+
+        const cleanupKey = submissionControlWindowKey(policy.counterNamespace, "cleanup");
+        await tx.insert(submissionRateLimitWindows).values({
+          windowKey: cleanupKey,
           windowStartedAt: now,
           requestCount: 0,
           updatedAt: now,
         }).onConflictDoNothing();
+        const [cleanupState] = await tx.select().from(submissionRateLimitWindows)
+          .where(eq(submissionRateLimitWindows.windowKey, cleanupKey)).for("update");
+        if (!cleanupState) throw new Error("SUBMISSION_CLEANUP_WINDOW_MISSING");
+        if (cleanupState.updatedAt.getTime() + policy.cleanupIntervalMs <= now.getTime()) {
+          const cutoff = new Date(now.getTime() - policy.sourceRetentionMs);
+          await tx.execute(sql`
+            with expired_source_limits as (
+              select ${submissionRateLimits.sourceHash}
+              from ${submissionRateLimits}
+              where ${submissionRateLimits.updatedAt} < ${cutoff.toISOString()}
+              order by ${submissionRateLimits.updatedAt} asc
+              limit ${policy.cleanupBatchSize}
+              for update skip locked
+            )
+            delete from ${submissionRateLimits}
+            using expired_source_limits
+            where ${submissionRateLimits.sourceHash} = expired_source_limits.source_hash
+          `);
+          await tx.update(submissionRateLimitWindows).set({ updatedAt: now })
+            .where(eq(submissionRateLimitWindows.windowKey, cleanupKey));
+        }
 
-        const [current] = await tx.select().from(submissionRateLimits)
-          .where(eq(submissionRateLimits.sourceHash, sourceHash)).for("update");
-        if (!current) throw new Error("SUBMISSION_RATE_LIMIT_ROW_MISSING");
-
-        const windowExpired = current.windowStartedAt.getTime() + policy.windowMs <= now.getTime();
-        const windowStartedAt = windowExpired ? now : current.windowStartedAt;
-        const requestCount = windowExpired ? 0 : current.requestCount;
-        if (requestCount >= policy.maxPerSource) {
+        const globalWindow = await consumeControlWindow("global-requests", policy.maxGlobalRequests);
+        if (!globalWindow.allowed) {
           return {
-            kind: "rate-limited" as const,
-            retryAfterSeconds: Math.max(
-              1,
-              Math.ceil((windowStartedAt.getTime() + policy.windowMs - now.getTime()) / 1_000),
-            ),
+            kind: "global-rate-limited" as const,
+            retryAfterSeconds: globalWindow.retryAfterSeconds,
           };
         }
 
-        await tx.update(submissionRateLimits).set({
-          windowStartedAt,
-          requestCount: requestCount + 1,
-          updatedAt: now,
-        }).where(eq(submissionRateLimits.sourceHash, sourceHash));
+        const [currentSource] = await tx.select().from(submissionRateLimits)
+          .where(eq(submissionRateLimits.sourceHash, sourceHash)).for("update");
+        if (currentSource) {
+          const expired = currentSource.windowStartedAt.getTime() + policy.windowMs <= now.getTime();
+          const windowStartedAt = expired ? now : currentSource.windowStartedAt;
+          const requestCount = expired ? 0 : currentSource.requestCount;
+          if (requestCount >= policy.maxPerSource) {
+            return {
+              kind: "source-rate-limited" as const,
+              retryAfterSeconds: windowRetryAfterSeconds(windowStartedAt, policy.windowMs, now),
+            };
+          }
+          await tx.update(submissionRateLimits).set({
+            windowStartedAt,
+            requestCount: requestCount + 1,
+            updatedAt: now,
+          }).where(eq(submissionRateLimits.sourceHash, sourceHash));
+        }
+
+        const fingerprint = createSubmissionFingerprint(input);
+        const [duplicate] = await tx.select({ id: matchSubmissions.id }).from(matchSubmissions)
+          .where(and(
+            eq(matchSubmissions.fingerprint, fingerprint),
+            or(
+              eq(matchSubmissions.status, "pending"),
+              eq(matchSubmissions.status, "approved"),
+            ),
+          ))
+          .limit(1);
+        if (duplicate) return { kind: "duplicate" as const };
 
         const [pending] = await tx.select({ value: count() }).from(matchSubmissions)
           .where(eq(matchSubmissions.status, "pending"));
@@ -189,16 +301,52 @@ export class DrizzleReviewRepository {
           return { kind: "queue-full" as const, retryAfterSeconds: policy.queueRetryAfterSeconds };
         }
 
+        let createdSourceState = false;
+        let newSourceWindowKey: string | null = null;
+        if (!currentSource) {
+          const newSourceWindow = await consumeControlWindow("new-sources", policy.maxNewSources);
+          if (!newSourceWindow.allowed) {
+            return {
+              kind: "new-source-rate-limited" as const,
+              retryAfterSeconds: newSourceWindow.retryAfterSeconds,
+            };
+          }
+          newSourceWindowKey = newSourceWindow.windowKey;
+          const sourceRows = await tx.insert(submissionRateLimits).values({
+            sourceHash,
+            windowStartedAt: now,
+            requestCount: 1,
+            updatedAt: now,
+          }).onConflictDoNothing().returning({ sourceHash: submissionRateLimits.sourceHash });
+          createdSourceState = sourceRows.length === 1;
+          if (!createdSourceState) throw new Error("SUBMISSION_RATE_LIMIT_ROW_RACE");
+        }
+
         const rows = await tx.insert(matchSubmissions).values({
           ...submissionValues(input, now),
           submittedAt: now,
           status: "pending",
         }).onConflictDoNothing().returning();
-        return rows[0]
-          ? { kind: "created" as const, submission: rows[0] }
-          : { kind: "duplicate" as const };
+        if (rows[0]) return { kind: "created" as const, submission: rows[0] };
+
+        if (createdSourceState && newSourceWindowKey) {
+          await tx.delete(submissionRateLimits)
+            .where(eq(submissionRateLimits.sourceHash, sourceHash));
+          await tx.update(submissionRateLimitWindows).set({
+            requestCount: sql`greatest(${submissionRateLimitWindows.requestCount} - 1, 0)`,
+            updatedAt: now,
+          }).where(eq(submissionRateLimitWindows.windowKey, newSourceWindowKey));
+        }
+        return { kind: "duplicate" as const };
       });
     } catch (error) {
+      const code = safeDatabaseErrorCode(error);
+      if (code === "TIMEOUT" || code === "LOCK_TIMEOUT") {
+        return {
+          kind: "service-busy" as const,
+          retryAfterSeconds: policy.busyRetryAfterSeconds,
+        };
+      }
       translateDatabaseError(error);
     }
   }

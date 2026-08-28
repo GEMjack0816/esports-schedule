@@ -115,6 +115,15 @@ export const submissionRateLimits = pgTable("submission_rate_limits", {
   index("submission_rate_limits_updated_idx").on(table.updatedAt),
 ]);
 
+export const submissionRateLimitWindows = pgTable("submission_rate_limit_windows", {
+  windowKey: text("window_key").primaryKey(),
+  windowStartedAt: timestamp("window_started_at", { withTimezone: true, mode: "date" }).notNull(),
+  requestCount: integer("request_count").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+}, (table) => [
+  check("submission_rate_limit_windows_request_count_check", sql`${table.requestCount} >= 0`),
+]);
+
 export const adminAuditEvents = pgTable("admin_audit_events", {
   id: uuid("id").primaryKey().defaultRandom(),
   actorId: text("actor_id").notNull(),
@@ -135,3 +144,4 @@ export type PublishedManualMatchRow = typeof publishedManualMatches.$inferSelect
 export type NewPublishedManualMatchRow = typeof publishedManualMatches.$inferInsert;
 export type AdminAuditEventRow = typeof adminAuditEvents.$inferSelect;
 export type SubmissionRateLimitRow = typeof submissionRateLimits.$inferSelect;
+export type SubmissionRateLimitWindowRow = typeof submissionRateLimitWindows.$inferSelect;

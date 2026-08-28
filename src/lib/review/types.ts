@@ -77,8 +77,11 @@ export type LegacyInsertResult = "imported" | "duplicate";
 export type PublicSubmissionResult =
   | { kind: "created"; submission: MatchSubmissionRow }
   | { kind: "duplicate" }
-  | { kind: "rate-limited"; retryAfterSeconds: number }
-  | { kind: "queue-full"; retryAfterSeconds: number };
+  | { kind: "source-rate-limited"; retryAfterSeconds: number }
+  | { kind: "global-rate-limited"; retryAfterSeconds: number }
+  | { kind: "new-source-rate-limited"; retryAfterSeconds: number }
+  | { kind: "queue-full"; retryAfterSeconds: number }
+  | { kind: "service-busy"; retryAfterSeconds: number };
 
 export class ReviewConflictError extends Error {
   readonly code = "REVIEW_CONFLICT";

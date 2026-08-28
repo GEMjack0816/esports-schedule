@@ -24,8 +24,11 @@ type PublicSubmissionOutcome =
     submission: { id: string; status: string; submittedAt: Date };
   }
   | { kind: "duplicate" }
-  | { kind: "rate-limited"; retryAfterSeconds: number }
-  | { kind: "queue-full"; retryAfterSeconds: number };
+  | { kind: "source-rate-limited"; retryAfterSeconds: number }
+  | { kind: "global-rate-limited"; retryAfterSeconds: number }
+  | { kind: "new-source-rate-limited"; retryAfterSeconds: number }
+  | { kind: "queue-full"; retryAfterSeconds: number }
+  | { kind: "service-busy"; retryAfterSeconds: number };
 
 export async function handleSubmissionPost(
   request: Request,
@@ -59,12 +62,23 @@ export async function handleSubmissionPost(
       }, { status: 201, headers: NO_STORE_HEADERS });
     }
     const result = await createSubmission(validateSubmission(parsed), submissionSourceHash(request));
-    if (result.kind === "rate-limited" || result.kind === "queue-full") {
+    if (
+      result.kind === "source-rate-limited"
+      || result.kind === "global-rate-limited"
+      || result.kind === "new-source-rate-limited"
+      || result.kind === "queue-full"
+      || result.kind === "service-busy"
+    ) {
+      const error = result.kind === "source-rate-limited"
+        ? "提交过于频繁，请稍后重试。"
+        : result.kind === "queue-full"
+          ? "待审核队列暂时已满，请稍后重试。"
+          : result.kind === "service-busy"
+            ? "提交服务繁忙，请稍后重试。"
+            : "公开提交流量较高，请稍后重试。";
       return Response.json({
         ok: false,
-        error: result.kind === "rate-limited"
-          ? "提交过于频繁，请稍后重试。"
-          : "待审核队列暂时已满，请稍后重试。",
+        error,
       }, {
         status: 429,
         headers: {

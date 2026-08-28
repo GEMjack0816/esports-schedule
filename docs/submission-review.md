@@ -1,6 +1,8 @@
 # 比赛提交与审核运维
 
-公开的 `POST /api/submissions` 把经过大小、类型、URL、时间和 BO 赛制校验的记录写入 PostgreSQL。接口使用 Vercel 提供的来源 IP 生成不可逆摘要，在 PostgreSQL 事务内执行每来源 15 分钟最多 5 次的窗口限制，并把全局 pending 队列限制为 500 条；计数、队列检查和写入由事务级 advisory lock 串行保护。超限或队列已满返回 `429` 与 `Retry-After`。蜜罐只作为补充信号，不是主要保护。相同游戏、赛事、双方和开赛时间的待审核/已批准记录继续使用指纹约束去重。数据库不可用时接口返回 `503`，不会伪装成成功或退回易失缓存。
+公开的 `POST /api/submissions` 把经过大小、类型、URL、时间和 BO 赛制校验的记录写入 PostgreSQL。接口使用 Vercel 提供的来源 IP 生成不可逆摘要，同时执行三层原子窗口保护：每来源 15 分钟最多 5 次、全站 15 分钟最多 300 次有效请求、每 15 分钟最多为 100 个新来源创建持久化状态；全局 pending 队列仍限制为 500 条。计数、队列检查和写入由事务保护，入口 gate 使用有 200 ms 总等待上限的 `pg_try_advisory_xact_lock` 重试，竞争时返回 `429`，不会无限排队。超限、服务繁忙或队列已满都返回 `Retry-After`。蜜罐只作为补充信号，不是主要保护。相同游戏、赛事、双方和开赛时间的待审核/已批准记录继续使用指纹约束去重。
+
+新来源的限流行只在比赛不是重复项且队列仍有容量时创建；queue-full 和来自新来源的 duplicate 不会扩张 `submission_rate_limits`。全局请求计数仍会覆盖 duplicate 流量，因此不能通过重复内容绕过请求级保护。来源行至少保留一小时；清理每五分钟至多运行一次，每次按 `updated_at` 索引最多删除 200 条，避免全表删除或把清理本身变成高成本路径。数据库不可用时接口返回 `503`，不会伪装成成功或退回易失缓存。
 
 ## 数据库
 
@@ -9,6 +11,7 @@
 - `match_submissions`：公开提交及审核状态；
 - `published_manual_matches`：审核通过后公开的人工比赛；
 - `submission_rate_limits`：只保存来源摘要和当前限流窗口，不保存原始 IP；
+- `submission_rate_limit_windows`：固定 key 的全局请求、新来源数量和清理节流窗口；
 - `admin_audit_events`：编辑、批准、驳回、隐藏和恢复的审计记录。
 
 `npm run db:generate` 生成迁移；`npm run db:migrate` 只应对明确选择的数据库执行。Preview 必须使用独立数据库或独立分支，禁止把验证脚本连接到 Production 数据库。`npm run db:check` 只检查连接和表是否存在，不打印连接字符串。

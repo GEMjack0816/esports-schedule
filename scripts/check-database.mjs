@@ -4,6 +4,7 @@ const requiredTables = [
   "match_submissions",
   "published_manual_matches",
   "submission_rate_limits",
+  "submission_rate_limit_windows",
   "admin_audit_events",
 ];
 const url = process.env.DATABASE_URL?.trim();

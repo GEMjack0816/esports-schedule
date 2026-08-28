@@ -3,7 +3,11 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { DrizzleReviewRepository } from "./repository";
 import type { MatchSubmissionInput } from "@/lib/submissions";
-import type { PublicSubmissionPolicy } from "./submission-protection";
+import {
+  PUBLIC_SUBMISSION_GATE_LOCK,
+  submissionControlWindowKey,
+} from "./submission-protection";
+import type { PublicSubmissionPolicy, SubmissionControlWindowKind } from "./submission-protection";
 import type { PublishedMatchWrite } from "./types";
 import {
   preserveLastSuccessfulPublicMatches,
@@ -17,6 +21,8 @@ import {
 } from "./service";
 import type { PublishedManualCacheEffects } from "./service";
 
+type PublicSubmissionResult = Awaited<ReturnType<DrizzleReviewRepository["createPublicSubmission"]>>;
+
 const testUrl = process.env.REVIEW_TEST_DATABASE_URL?.trim();
 const enabled = process.env.ALLOW_REVIEW_DATABASE_TESTS === "1" && !!testUrl;
 
@@ -26,6 +32,7 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
   const submissionIds: string[] = [];
   const manualMatchIds: string[] = [];
   const rateLimitSources: string[] = [];
+  const rateLimitWindowKeys: string[] = [];
 
   beforeAll(async () => {
     process.env.DATABASE_URL = testUrl;
@@ -52,6 +59,9 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     }
     if (rateLimitSources.length > 0) {
       await cleanup`delete from submission_rate_limits where source_hash = any(${rateLimitSources}::text[])`;
+    }
+    if (rateLimitWindowKeys.length > 0) {
+      await cleanup`delete from submission_rate_limit_windows where window_key = any(${rateLimitWindowKeys}::text[])`;
     }
     await cleanup.end();
   });
@@ -100,13 +110,34 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
   }
 
   function policy(overrides: Partial<PublicSubmissionPolicy> = {}): PublicSubmissionPolicy {
-    return {
+    const value: PublicSubmissionPolicy = {
       maxPerSource: 5,
       windowMs: 60_000,
+      maxGlobalRequests: 10_000,
+      maxNewSources: 10_000,
       maxPending: 10_000,
       queueRetryAfterSeconds: 300,
+      busyRetryAfterSeconds: 1,
+      gateLockMaxWaitMs: 1_000,
+      gateLockRetryMs: 10,
+      statementTimeoutMs: 5_000,
+      rowLockTimeoutMs: 500,
+      cleanupIntervalMs: 60 * 60 * 1_000,
+      sourceRetentionMs: 60 * 60 * 1_000,
+      cleanupBatchSize: 20,
+      counterNamespace: `test-${randomUUID()}`,
       ...overrides,
     };
+    for (const kind of ["global-requests", "new-sources", "cleanup"] satisfies SubmissionControlWindowKind[]) {
+      rateLimitWindowKeys.push(submissionControlWindowKey(value.counterNamespace, kind));
+    }
+    return value;
+  }
+
+  function rememberCreated(results: PublicSubmissionResult[]) {
+    for (const result of results) {
+      if (result.kind === "created") submissionIds.push(result.submission.id);
+    }
   }
 
   function snapshotEffects(holder: { value: CachedPublicMatches | null }): PublishedManualCacheEffects {
@@ -179,17 +210,16 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     const source = `source-${randomUUID()}`;
     rateLimitSources.push(source);
     const now = new Date("2026-08-20T00:00:00.000Z");
+    const limiterPolicy = policy({ maxPerSource: 2 });
     const results = await Promise.all([
-      repository.createPublicSubmission(submission(`limit-a-${randomUUID()}`), source, now, policy({ maxPerSource: 2 })),
-      repository.createPublicSubmission(submission(`limit-b-${randomUUID()}`), source, now, policy({ maxPerSource: 2 })),
-      repository.createPublicSubmission(submission(`limit-c-${randomUUID()}`), source, now, policy({ maxPerSource: 2 })),
+      repository.createPublicSubmission(submission(`limit-a-${randomUUID()}`), source, now, limiterPolicy),
+      repository.createPublicSubmission(submission(`limit-b-${randomUUID()}`), source, now, limiterPolicy),
+      repository.createPublicSubmission(submission(`limit-c-${randomUUID()}`), source, now, limiterPolicy),
     ]);
-    for (const result of results) {
-      if (result.kind === "created") submissionIds.push(result.submission.id);
-    }
+    rememberCreated(results);
     expect(results.filter((result) => result.kind === "created")).toHaveLength(2);
-    expect(results.find((result) => result.kind === "rate-limited"))
-      .toMatchObject({ kind: "rate-limited", retryAfterSeconds: 60 });
+    expect(results.find((result) => result.kind === "source-rate-limited"))
+      .toMatchObject({ kind: "source-rate-limited", retryAfterSeconds: 60 });
   });
 
   it("atomically admits only one concurrent submission when the pending queue has one slot", async () => {
@@ -201,11 +231,197 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       repository.createPublicSubmission(submission(`queue-a-${randomUUID()}`), sources[0], new Date(), queuePolicy),
       repository.createPublicSubmission(submission(`queue-b-${randomUUID()}`), sources[1], new Date(), queuePolicy),
     ]);
-    for (const result of results) {
-      if (result.kind === "created") submissionIds.push(result.submission.id);
-    }
+    rememberCreated(results);
     expect(results.filter((result) => result.kind === "created")).toHaveLength(1);
     expect(results.filter((result) => result.kind === "queue-full")).toHaveLength(1);
+    const [persisted] = await cleanup`
+      select count(*)::int as value
+      from submission_rate_limits
+      where source_hash = any(${sources}::text[])
+    `;
+    expect(Number(persisted.value)).toBe(1);
+  });
+
+  it("bounds persistent limiter rows during a flood of unique sources", async () => {
+    const floodPolicy = policy({ maxNewSources: 3, maxGlobalRequests: 100 });
+    const sources = Array.from({ length: 7 }, () => `flood-${randomUUID()}`);
+    rateLimitSources.push(...sources);
+    const results: PublicSubmissionResult[] = [];
+    for (const [index, source] of sources.entries()) {
+      results.push(await repository.createPublicSubmission(
+        submission(`source-flood-${index}-${randomUUID()}`),
+        source,
+        new Date("2026-08-21T00:00:00.000Z"),
+        floodPolicy,
+      ));
+    }
+    rememberCreated(results);
+    expect(results.filter((result) => result.kind === "created")).toHaveLength(3);
+    expect(results.filter((result) => result.kind === "new-source-rate-limited")).toHaveLength(4);
+    const [persisted] = await cleanup`
+      select count(*)::int as value
+      from submission_rate_limits
+      where source_hash = any(${sources}::text[])
+    `;
+    expect(Number(persisted.value)).toBe(3);
+  });
+
+  it("does not create source limiter state when the pending queue is already full", async () => {
+    const baseline = (await repository.getSubmissionCounts()).pending;
+    const source = `queue-full-${randomUUID()}`;
+    rateLimitSources.push(source);
+    const result = await repository.createPublicSubmission(
+      submission(`queue-full-${randomUUID()}`),
+      source,
+      new Date(),
+      policy({ maxPending: baseline }),
+    );
+    expect(result.kind).toBe("queue-full");
+    const [persisted] = await cleanup`
+      select count(*)::int as value from submission_rate_limits where source_hash = ${source}
+    `;
+    expect(Number(persisted.value)).toBe(0);
+  });
+
+  it("does not grow source limiter state during a duplicate flood", async () => {
+    const duplicate = await create(`duplicate-flood-${randomUUID()}`);
+    const duplicatePolicy = policy({ maxGlobalRequests: 100, maxNewSources: 2 });
+    const sources = Array.from({ length: 20 }, () => `duplicate-${randomUUID()}`);
+    rateLimitSources.push(...sources);
+    const results: PublicSubmissionResult[] = [];
+    for (const source of sources) {
+      results.push(await repository.createPublicSubmission(
+        duplicate.input,
+        source,
+        new Date("2026-08-22T00:00:00.000Z"),
+        duplicatePolicy,
+      ));
+    }
+    expect(results.every((result) => result.kind === "duplicate")).toBe(true);
+    const [persisted] = await cleanup`
+      select count(*)::int as value
+      from submission_rate_limits
+      where source_hash = any(${sources}::text[])
+    `;
+    expect(Number(persisted.value)).toBe(0);
+  });
+
+  it("enforces a fixed-key global request window across many sources", async () => {
+    const globalPolicy = policy({ maxGlobalRequests: 3, maxNewSources: 100 });
+    const sources = Array.from({ length: 4 }, () => `global-${randomUUID()}`);
+    rateLimitSources.push(...sources);
+    const results: PublicSubmissionResult[] = [];
+    for (const [index, source] of sources.entries()) {
+      results.push(await repository.createPublicSubmission(
+        submission(`global-${index}-${randomUUID()}`),
+        source,
+        new Date("2026-08-23T00:00:00.000Z"),
+        globalPolicy,
+      ));
+    }
+    rememberCreated(results);
+    expect(results.filter((result) => result.kind === "created")).toHaveLength(3);
+    expect(results[3]).toMatchObject({ kind: "global-rate-limited", retryAfterSeconds: 60 });
+  });
+
+  it("does not exceed the global limit under concurrent multi-source requests", async () => {
+    const globalPolicy = policy({
+      maxGlobalRequests: 4,
+      maxNewSources: 100,
+      gateLockMaxWaitMs: 2_000,
+    });
+    const sources = Array.from({ length: 12 }, () => `global-race-${randomUUID()}`);
+    rateLimitSources.push(...sources);
+    const results = await Promise.all(sources.map((source, index) => repository.createPublicSubmission(
+      submission(`global-race-${index}-${randomUUID()}`),
+      source,
+      new Date("2026-08-24T00:00:00.000Z"),
+      globalPolicy,
+    )));
+    rememberCreated(results);
+    expect(results.filter((result) => result.kind === "created")).toHaveLength(4);
+    expect(results.filter((result) => result.kind === "global-rate-limited")).toHaveLength(8);
+    const globalKey = submissionControlWindowKey(globalPolicy.counterNamespace, "global-requests");
+    const [counter] = await cleanup`
+      select request_count from submission_rate_limit_windows where window_key = ${globalKey}
+    `;
+    expect(Number(counter.request_count)).toBe(4);
+  });
+
+  it("deletes only a bounded batch of expired source rows and preserves active rows", async () => {
+    const now = new Date("2030-01-01T00:00:00.000Z");
+    const cleanupPolicy = policy({
+      maxPending: (await repository.getSubmissionCounts()).pending,
+      cleanupIntervalMs: 1,
+      sourceRetentionMs: 60 * 60 * 1_000,
+      cleanupBatchSize: 2,
+    });
+    const expiredSources = Array.from({ length: 3 }, () => `expired-${randomUUID()}`);
+    const activeSources = Array.from({ length: 2 }, () => `active-${randomUUID()}`);
+    const candidateSource = `cleanup-candidate-${randomUUID()}`;
+    rateLimitSources.push(...expiredSources, ...activeSources, candidateSource);
+    for (const source of expiredSources) {
+      await cleanup`
+        insert into submission_rate_limits (source_hash, window_started_at, request_count, updated_at)
+        values (${source}, ${new Date("2000-01-01T00:00:00.000Z")}, 1, ${new Date("2000-01-01T00:00:00.000Z")})
+      `;
+    }
+    for (const source of activeSources) {
+      await cleanup`
+        insert into submission_rate_limits (source_hash, window_started_at, request_count, updated_at)
+        values (${source}, ${new Date("2029-12-31T23:30:00.000Z")}, 1, ${new Date("2029-12-31T23:30:00.000Z")})
+      `;
+    }
+    const cleanupKey = submissionControlWindowKey(cleanupPolicy.counterNamespace, "cleanup");
+    await cleanup`
+      insert into submission_rate_limit_windows (window_key, window_started_at, request_count, updated_at)
+      values (${cleanupKey}, ${new Date("2000-01-01T00:00:00.000Z")}, 0, ${new Date("2000-01-01T00:00:00.000Z")})
+      on conflict (window_key) do update set updated_at = excluded.updated_at
+    `;
+
+    const result = await repository.createPublicSubmission(
+      submission(`cleanup-${randomUUID()}`),
+      candidateSource,
+      now,
+      cleanupPolicy,
+    );
+    expect(result.kind).toBe("queue-full");
+    const [expired] = await cleanup`
+      select count(*)::int as value
+      from submission_rate_limits
+      where source_hash = any(${expiredSources}::text[])
+    `;
+    const [active] = await cleanup`
+      select count(*)::int as value
+      from submission_rate_limits
+      where source_hash = any(${activeSources}::text[])
+    `;
+    const [candidate] = await cleanup`
+      select count(*)::int as value from submission_rate_limits where source_hash = ${candidateSource}
+    `;
+    expect(Number(expired.value)).toBe(1);
+    expect(Number(active.value)).toBe(2);
+    expect(Number(candidate.value)).toBe(0);
+  });
+
+  it("returns service-busy within a bounded time when the advisory gate is held", async () => {
+    const source = `lock-contention-${randomUUID()}`;
+    rateLimitSources.push(source);
+    const lockPolicy = policy({ gateLockMaxWaitMs: 100, gateLockRetryMs: 10 });
+    await cleanup`select pg_advisory_lock(${PUBLIC_SUBMISSION_GATE_LOCK})`;
+    try {
+      const startedAt = Date.now();
+      const result = await repository.createPublicSubmission(
+        submission(`lock-contention-${randomUUID()}`),
+        source,
+        new Date(),
+        lockPolicy,
+      );
+      expect(result).toMatchObject({ kind: "service-busy", retryAfterSeconds: 1 });
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    } finally {
+      await cleanup`select pg_advisory_unlock(${PUBLIC_SUBMISSION_GATE_LOCK})`;
+    }
   });
 
   it("prevents stale save/save and save/approve overwrites", async () => {

@@ -59,11 +59,25 @@ describe("POST /api/submissions", () => {
   it("returns 429 with Retry-After when the source window is exhausted", async () => {
     const response = await handleSubmissionPost(
       request(valid),
-      async () => ({ kind: "rate-limited", retryAfterSeconds: 321 }),
+      async () => ({ kind: "source-rate-limited", retryAfterSeconds: 321 }),
     );
     expect(response.status).toBe(429);
     expect(response.headers.get("retry-after")).toBe("321");
     expect(await response.json()).toMatchObject({ ok: false, error: expect.stringContaining("频繁") });
+  });
+
+  it.each([
+    ["global-rate-limited" as const, "流量"],
+    ["new-source-rate-limited" as const, "流量"],
+    ["service-busy" as const, "繁忙"],
+  ])("returns a bounded 429 response for %s", async (kind, message) => {
+    const response = await handleSubmissionPost(
+      request(valid),
+      async () => ({ kind, retryAfterSeconds: 5 }),
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("5");
+    expect(await response.json()).toMatchObject({ ok: false, error: expect.stringContaining(message) });
   });
 
   it("returns 429 with Retry-After when the global pending queue is full", async () => {

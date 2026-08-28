@@ -36,6 +36,7 @@ export function safeDatabaseErrorCode(error: unknown): string {
     if (code === "23503") return "FOREIGN_KEY";
     if (code === "23514") return "CONSTRAINT";
     if (code === "57014") return "TIMEOUT";
+    if (code === "55P03") return "LOCK_TIMEOUT";
   }
   return "UNAVAILABLE";
 }
