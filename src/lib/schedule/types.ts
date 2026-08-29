@@ -144,6 +144,7 @@ export type DataCoverage = {
     overrides: number;
     hidden: number;
     published: number;
+    database: number;
   };
 };
 
@@ -156,7 +157,7 @@ export type SchedulePayload = {
   lastSuccessfulSyncAt: string | null;
   providers: {
     pandascore: "connected" | "stale-cache" | "not-configured" | "error";
-    manual: "json";
+    manual: "json+database";
   };
   coverage: DataCoverage;
   deployment: {

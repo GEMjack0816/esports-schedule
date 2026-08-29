@@ -14,7 +14,12 @@ function javascriptFiles(directory) {
   });
 }
 
-const serverCredentialNames = ["PANDASCORE_TOKEN", "CRON_SECRET"];
+const serverCredentialNames = [
+  "PANDASCORE_TOKEN",
+  "CRON_SECRET",
+  "DATABASE_URL",
+  "VERCEL_APP_CLIENT_SECRET",
+];
 const forbiddenMarkers = [...serverCredentialNames];
 for (const name of serverCredentialNames) {
   const configuredValue = process.env[name]?.trim();

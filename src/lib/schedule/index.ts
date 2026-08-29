@@ -20,6 +20,7 @@ import type {
   PandaSyncFailure,
 } from "./pandascore";
 import { createSingleFlight } from "./single-flight";
+import { getPublishedDatabaseMatches } from "@/lib/review/public-matches";
 import type {
   DataCoverage,
   EndpointCoverage,
@@ -32,6 +33,7 @@ import type {
   SyncErrorInfo,
 } from "./types";
 import { pandaEndpointKeys, pandaGameKeys } from "./types";
+import { uniqueAndSort } from "./utils";
 
 export const FRESH_FOR_MS = 15 * 60 * 1_000;
 const FAILED_AFTER_MS = 60 * 60 * 1_000;
@@ -190,6 +192,7 @@ function makeCoverage(
   states: SyncStateMap,
   matches: EsportsMatch[],
   manual: ReturnType<typeof applyManualData>,
+  databaseManualCount: number,
   refreshInProgress: boolean,
 ): DataCoverage {
   const range = bounds(matches);
@@ -232,12 +235,13 @@ function makeCoverage(
       supplemental: manual.supplementalCount,
       overrides: manual.overrideCount,
       hidden: manual.hiddenCount,
-      published: manual.honorOfKingsCount + manual.supplementalCount,
+      published: manual.honorOfKingsCount + manual.supplementalCount + databaseManualCount,
+      database: databaseManualCount,
     },
   };
 }
 
-function buildPayload(
+async function buildPayload(
   panda: PandaScoreResult | null,
   states: SyncStateMap,
   mode: SchedulePayload["mode"],
@@ -245,14 +249,25 @@ function buildPayload(
   now: Date,
   refreshInProgress: boolean,
   warning?: string,
-): SchedulePayload {
+): Promise<SchedulePayload> {
   const manual = applyManualData(panda?.matches ?? [], now);
-  const matches = manual.matches;
+  const databaseManual = await getPublishedDatabaseMatches();
+  const matches = uniqueAndSort([...manual.matches, ...databaseManual.matches]);
   const games = deriveGameCoverage(panda?.snapshots ?? {}, states, now, refreshInProgress);
   const stale = panda
     ? pandaGameKeys.some((game) => games[game].syncStatus !== "normal")
     : true;
-  const coverage = makeCoverage(mode, stale, now, panda, states, matches, manual, refreshInProgress);
+  const coverage = makeCoverage(
+    mode,
+    stale,
+    now,
+    panda,
+    states,
+    matches,
+    manual,
+    databaseManual.matches.length,
+    refreshInProgress,
+  );
 
   return {
     matches,
@@ -263,7 +278,7 @@ function buildPayload(
     lastSuccessfulSyncAt: coverage.lastSuccessfulSyncAt,
     providers: {
       pandascore: provider,
-      manual: "json",
+      manual: "json+database",
     },
     coverage,
     deployment: {
