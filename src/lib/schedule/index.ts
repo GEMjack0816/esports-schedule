@@ -718,7 +718,7 @@ export async function buildScheduleFromParts(
     return buildPayload(
       cachedPanda,
       states,
-      token ? "live" : "unavailable",
+      "live",
       token ? (stale ? "stale-cache" : "connected") : "not-configured",
       now,
       refreshInProgress,

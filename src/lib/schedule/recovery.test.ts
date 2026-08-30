@@ -154,6 +154,23 @@ describe("persistent schedule recovery", () => {
     expect(payload.coverage.totals.finalPandaScore).toBe(5);
     expect(payload.coverage.games.lol.dataSource).toBe("persistent");
   });
+
+  it("keeps persistent real data available when the provider token is not configured", async () => {
+    const snapshots = Object.fromEntries(pandaGameKeys.map((game) => [game, snapshot(game)]));
+    const states = Object.fromEntries(pandaGameKeys.map((game) => [game, state(game)]));
+    const snapshotSources = Object.fromEntries(
+      pandaGameKeys.map((game) => [game, "persistent-snapshot" as const]),
+    );
+    const payload = await buildScheduleFromParts({
+      snapshots,
+      states,
+      snapshotSources,
+      refreshInProgress: false,
+    }, undefined, new Date("2026-08-30T00:10:00.000Z"));
+    expect(payload.mode).toBe("live");
+    expect(payload.providers.pandascore).toBe("not-configured");
+    expect(payload.coverage.totals.finalPandaScore).toBe(5);
+  });
 });
 
 describe("durable sync persistence", () => {
