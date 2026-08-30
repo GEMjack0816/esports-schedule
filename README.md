@@ -11,18 +11,24 @@ Vercel Cron（每日保底） ──────┼─> /api/cron/sync
                                       ├─ 区域租约 + 实例 single-flight
                                       ├─ PandaScore 五游戏 × 3 端点
                                       ├─ 每页 100 + 完整分页 + 超时/重试
-                                      └─ 按游戏写入最后成功 Runtime Cache 快照
+                                      └─ 按游戏 CAS 写入 PostgreSQL 最后成功快照
+                                           └─ 再写入 Runtime Cache 快速层
 
-/ 和 /api/matches ─> 快速读取快照 ─> 合并人工比赛与覆盖 ─> 返回客户端
+/ 和 /api/matches ─> Runtime Cache ─miss─> PostgreSQL 最后成功快照
+                                     │          │
+                                     │          └─ best-effort 回填 Runtime Cache
+                                     └─> 合并人工比赛与覆盖 ─> 返回客户端
 ```
 
 生产 Vercel 团队当前是 Hobby 套餐，Vercel Cron 的最短可用频率是每天一次。因此 `vercel.json` 保留每日保底任务，15 分钟独立调度由 `.github/workflows/sync-schedule.yml` 承担。GitHub 仓库必须配置与 Vercel 相同值的 Actions Secret `CRON_SECRET`；工作流和接口都不会打印该值。
 
-页面和 `/api/matches` 不等待 PandaScore。发现快照过期时，Next.js `after()` 会把刷新登记到当前 Vercel Function 的 `waitUntil` 生命周期，然后立即返回上一次成功快照。外部定时任务仍是保持低流量时段新鲜度的主要机制，访问触发只是补救。
+页面和 `/api/matches` 不等待 PandaScore。发现快照过期时，Next.js `after()` 会把刷新登记到当前 Vercel Function 的 `waitUntil` 生命周期，然后立即返回上一次成功快照。外部定时任务仍是保持低流量时段新鲜度的主要机制，访问触发只是补救；它不能替代持久化快照或提供严格调度保证。
 
-所有函数固定在 `iad1`。实例内 single-flight 复用同一个 Promise，Runtime Cache 租约负责同一区域实例间互斥；租约为 6 分钟，长于函数 5 分钟上限。Runtime Cache 没有原子 CAS，因此它不是跨区域数据库锁，本项目通过单区域部署、GitHub Actions `concurrency` 和租约确认共同避免重复同步。如果未来改成多区域，应把锁和快照迁移到支持原子 `SET NX` 的 Redis 或数据库。
+所有函数固定在 `iad1`。实例内 single-flight 复用同一个 Promise，Runtime Cache 租约负责同一区域实例间互斥；租约为 6 分钟，长于函数 5 分钟上限。Runtime Cache 没有原子 CAS，因此它不是跨区域数据库锁，本项目通过单区域部署、GitHub Actions `concurrency` 和租约确认共同避免重复同步。持久快照写入使用 `sourceFetchedAt` 条件更新，即使旧同步晚于新同步结束也不能覆盖新数据；如果未来改成多区域，仍应把刷新租约迁移到支持原子互斥的数据库或 Redis。
 
-同步失败或 API 返回异常空列表时不会覆盖该游戏最后成功快照。五个游戏使用 `Promise.allSettled()` 隔离失败。人工王者荣耀数据和 `manual-matches.json` 在 API 数据之后合并，不会被同步删除。
+`pandascore_game_snapshots` 每个游戏保存一行规范化 JSONB 快照、源时间、成功/尝试/错误元数据和 generation。PostgreSQL JSONB 会通过 TOAST 管理较大的单游戏值；五行主键读取避免逐比赛查询和写放大。同步失败、持久写失败或 API 返回异常空列表时不会清空该游戏最后成功快照。五个游戏使用 `Promise.allSettled()` 隔离失败。人工王者荣耀数据和 `manual-matches.json` 在 API 数据之后合并，不会被同步删除。
+
+`/api/cron/sync` 返回 `lockAcquired`、`gamesAttempted`、`gamesSucceeded`、`gamesFailed`、`snapshotsPersisted`、时间和安全错误代码。GitHub Actions 使用 `scripts/validate-sync-response.mjs` 解析 JSON；HTTP 2xx 但未取得有效更新不再被判定为同步成功。锁竞争明确报告为 `busy`，不冒充一次刷新。
 
 ## 状态标准化
 
@@ -46,6 +52,7 @@ Vercel Cron（每日保底） ──────┼─> /api/cron/sync
 | --- | --- | --- |
 | Vercel Production | `PANDASCORE_TOKEN` | PandaScore 服务端请求 |
 | Vercel Production | `CRON_SECRET` | 保护同步接口 |
+| Vercel Production | `DATABASE_URL` | 持久化最后成功 PandaScore 快照和人工审核数据 |
 | GitHub Actions Secret | `CRON_SECRET` | 调用生产同步接口；值需与 Vercel 一致 |
 
 项目不会把 Token 返回给浏览器、健康接口或日志。`npm run test:client-bundle` 会扫描客户端构建产物。
@@ -61,8 +68,9 @@ Vercel Cron（每日保底） ──────┼─> /api/cron/sync
 - `stale`：任一游戏缺失、失败或源快照超过 15 分钟；
 - `refreshInProgress`：当前区域租约或本实例刷新是否运行；
 - `lastError`：最近错误的时间、代码和 HTTP 状态，不含响应正文或密钥。
+- `games.*.dataSource`：`fresh` / `cache` / `persistent` / `unavailable`，明确区分 Runtime Cache 与 PostgreSQL 恢复。
 
-每个游戏也返回同样的时间和状态字段，以及端点分页、X-Total、原始/规范化/去重/最终数量。同步尝试不会让快照变新；只有成功写入最后成功快照才会更新源时间。
+每个游戏也返回同样的时间和状态字段，以及端点分页、X-Total、原始/规范化/去重/最终数量。同步尝试不会让快照变新；只有成功写入 PostgreSQL 最后成功快照才会更新源时间。Runtime Cache miss 会读取 PostgreSQL 并回填快速层；只要持久快照存在，接口不会因为缓存逐出进入 `mode=unavailable`。快照超过 15 分钟仍会准确显示 `stale=true`。
 
 ## 生产版本指纹
 
@@ -99,7 +107,7 @@ npm run verify:production -- http://localhost:3000 <expected-git-sha>
 1. 确认本地目录仍链接到 Vercel 项目 `esports-schedule`，Production 环境存在 `PANDASCORE_TOKEN` 和 `CRON_SECRET`。
 2. 在 GitHub 私有仓库的 Actions secrets 添加同名 `CRON_SECRET`，值与 Vercel Production 一致。
 3. 推送 `main`，等待现有 Vercel 项目的 Production Deployment 变为 Ready；不要新建项目。
-4. 手动运行一次 GitHub Actions 的 `Sync esports fixtures`，确认成功。
+4. 手动运行一次 GitHub Actions 的 `Sync esports fixtures`，确认 JSON 校验报告至少一个游戏成功且 `snapshotsPersisted > 0`。
 5. 请求 `https://esports-schedule-two.vercel.app/api/health/data-coverage`，确认 `mode=live`、`demoMode=false`，并核对上述七个健康字段。
 6. 连续并发请求 `/api/matches`；响应应快速返回同一快照，日志中同一时刻只能有一条 `regional refresh lock acquired`。
 7. 等待一次定时周期，确认 `sourceFetchedAt` 和各游戏 `sourceFetchedAt` 前进；失败测试时确认旧快照数量仍可用且 `lastSuccessfulSyncAt` 不变。

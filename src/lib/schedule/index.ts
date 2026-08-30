@@ -8,6 +8,12 @@ import {
   writePandaScoreGameSyncState,
 } from "./cache";
 import type { PandaScoreGameSyncState } from "./cache";
+import {
+  readPersistentPandaScoreSnapshots,
+  recordPersistentPandaScoreFailure,
+  writePersistentPandaScoreSnapshot,
+} from "./persistent-snapshots";
+import type { PersistentSnapshotRead, PersistentSnapshotWriteResult } from "./persistent-snapshots";
 import { applyManualData } from "./manual";
 import {
   aggregatePandaScoreSnapshots,
@@ -40,12 +46,31 @@ const FAILED_AFTER_MS = 60 * 60 * 1_000;
 
 type SnapshotMap = Partial<Record<PandaGameKey, PandaGameSnapshot>>;
 type SyncStateMap = Partial<Record<PandaGameKey, PandaScoreGameSyncState>>;
+type SnapshotSourceMap = Partial<Record<PandaGameKey, "runtime-cache" | "persistent-snapshot">>;
+export type ScheduleSyncError = {
+  game: PandaGameKey | null;
+  code: string;
+  httpStatus: number | null;
+};
+export type ScheduleSyncSummary = {
+  status: "success" | "partial" | "failed" | "busy" | "not-configured" | "fresh";
+  lockAcquired: boolean;
+  gamesAttempted: number;
+  gamesSucceeded: number;
+  gamesFailed: number;
+  snapshotsPersisted: number;
+  sourceFetchedAt: string | null;
+  lastSuccessfulSyncAt: string | null;
+  errors: ScheduleSyncError[];
+};
 type RefreshResult = {
   batch: PandaScoreSyncBatch | null;
   states: SyncStateMap;
+  summary: ScheduleSyncSummary;
 };
 
 const refreshSingleFlight = createSingleFlight<RefreshResult>();
+const persistentRecoverySingleFlight = createSingleFlight<PersistentSnapshotRead>();
 
 function emptyEndpointCoverage(): EndpointCoverage {
   return {
@@ -131,6 +156,7 @@ export function deriveGameCoverage(
   states: SyncStateMap,
   now: Date,
   refreshInProgress: boolean,
+  snapshotSources: SnapshotSourceMap = {},
 ): Record<PandaGameKey, GameCoverage> {
   const games = {} as Record<PandaGameKey, GameCoverage>;
   for (const game of pandaGameKeys) {
@@ -160,7 +186,11 @@ export function deriveGameCoverage(
       refreshInProgress,
       syncStatus,
       staleMinutes: snapshotAgeMs === null ? null : Math.floor(snapshotAgeMs / 60_000),
-      dataSource: snapshot ? (syncStatus === "normal" ? "fresh" : "cache") : "unavailable",
+      dataSource: snapshot
+        ? snapshotSources[game] === "persistent-snapshot"
+          ? "persistent"
+          : syncStatus === "normal" ? "fresh" : "cache"
+        : "unavailable",
       lastErrorCode: state?.lastErrorCode ?? null,
       lastError: errorFromState(state),
     };
@@ -194,10 +224,11 @@ function makeCoverage(
   manual: ReturnType<typeof applyManualData>,
   databaseManualCount: number,
   refreshInProgress: boolean,
+  snapshotSources: SnapshotSourceMap,
 ): DataCoverage {
   const range = bounds(matches);
   const snapshots = panda?.snapshots ?? {};
-  const games = deriveGameCoverage(snapshots, states, now, refreshInProgress);
+  const games = deriveGameCoverage(snapshots, states, now, refreshInProgress, snapshotSources);
   const lastAttemptAt = maxDate(Object.values(states).map((state) => state?.lastAttemptAt));
   const sourceFetchedAt = minDate(pandaGameKeys.map((game) => snapshots[game]?.fetchedAt));
   const snapshotAgeSeconds = sourceFetchedAt
@@ -248,12 +279,13 @@ async function buildPayload(
   provider: SchedulePayload["providers"]["pandascore"],
   now: Date,
   refreshInProgress: boolean,
+  snapshotSources: SnapshotSourceMap,
   warning?: string,
 ): Promise<SchedulePayload> {
   const manual = applyManualData(panda?.matches ?? [], now);
   const databaseManual = await getPublishedDatabaseMatches();
   const matches = uniqueAndSort([...manual.matches, ...databaseManual.matches]);
-  const games = deriveGameCoverage(panda?.snapshots ?? {}, states, now, refreshInProgress);
+  const games = deriveGameCoverage(panda?.snapshots ?? {}, states, now, refreshInProgress, snapshotSources);
   const stale = panda
     ? pandaGameKeys.some((game) => games[game].syncStatus !== "normal")
     : true;
@@ -267,6 +299,7 @@ async function buildPayload(
     manual,
     databaseManual.matches.length,
     refreshInProgress,
+    snapshotSources,
   );
 
   return {
@@ -368,42 +401,110 @@ async function markSyncAttemptStarted(
   return states;
 }
 
-async function persistSyncBatch(
+type PersistBatchResult = {
+  states: SyncStateMap;
+  gamesSucceeded: number;
+  gamesFailed: number;
+  snapshotsPersisted: number;
+  errors: ScheduleSyncError[];
+};
+
+type SnapshotPersistenceEffects = {
+  writePersistent: (
+    snapshot: PandaGameSnapshot,
+    state: PandaScoreGameSyncState,
+  ) => Promise<PersistentSnapshotWriteResult>;
+  recordFailure: (state: PandaScoreGameSyncState) => Promise<boolean>;
+  writeRuntimeSnapshot: (snapshot: PandaGameSnapshot) => Promise<boolean>;
+  writeRuntimeState: (state: PandaScoreGameSyncState) => Promise<boolean>;
+};
+
+const defaultSnapshotPersistenceEffects: SnapshotPersistenceEffects = {
+  writePersistent: writePersistentPandaScoreSnapshot,
+  recordFailure: recordPersistentPandaScoreFailure,
+  writeRuntimeSnapshot: writePandaScoreGameSnapshot,
+  writeRuntimeState: writePandaScoreGameSyncState,
+};
+
+export async function persistPandaScoreSyncBatch(
   batch: PandaScoreSyncBatch,
   attemptedStates: SyncStateMap,
   now: Date,
-): Promise<SyncStateMap> {
+  effects: SnapshotPersistenceEffects = defaultSnapshotPersistenceEffects,
+): Promise<PersistBatchResult> {
   const nextStates: SyncStateMap = { ...attemptedStates };
-  await Promise.allSettled(pandaGameKeys.map(async (game) => {
+  const outcomes = await Promise.all(pandaGameKeys.map(async (game) => {
     const snapshot = batch.snapshots[game];
     const failure = batch.failures[game];
     if (batch.updatedGames.includes(game) && snapshot) {
-      const snapshotWritten = await writePandaScoreGameSnapshot(snapshot);
-      if (snapshotWritten) {
-        const state = stateAfterSuccess(game, snapshot, now);
+      const state = stateAfterSuccess(game, snapshot, now);
+      const persistentResult = await effects.writePersistent(snapshot, state);
+      if (persistentResult === "written") {
         nextStates[game] = state;
-        await writePandaScoreGameSyncState(state);
-        return;
+        const runtimeSnapshotWritten = await effects.writeRuntimeSnapshot(snapshot);
+        await effects.writeRuntimeState(state);
+        return {
+          succeeded: 1,
+          failed: 0,
+          persisted: 1,
+          errors: runtimeSnapshotWritten
+            ? []
+            : [{ game, code: "CACHE_WRITE", httpStatus: null } satisfies ScheduleSyncError],
+        };
       }
-      const cacheFailure = stateAfterFailure(
+      if (persistentResult === "superseded") {
+        return {
+          succeeded: 0,
+          failed: 1,
+          persisted: 0,
+          errors: [{ game, code: "SNAPSHOT_SUPERSEDED", httpStatus: null } satisfies ScheduleSyncError],
+        };
+      }
+      const persistenceFailure = stateAfterFailure(
         game,
         attemptedStates[game],
         snapshot,
-        { code: "CACHE_WRITE", status: null },
+        { code: "PERSISTENT_WRITE", status: null },
         now,
       );
-      nextStates[game] = cacheFailure;
-      await writePandaScoreGameSyncState(cacheFailure);
-      return;
+      nextStates[game] = persistenceFailure;
+      await effects.writeRuntimeState(persistenceFailure);
+      return {
+        succeeded: 0,
+        failed: 1,
+        persisted: 0,
+        errors: [{ game, code: persistenceFailure.lastErrorCode!, httpStatus: null } satisfies ScheduleSyncError],
+      };
     }
     if (failure) {
       const state = stateAfterFailure(game, attemptedStates[game], snapshot, failure, now);
       nextStates[game] = state;
-      await writePandaScoreGameSyncState(state);
+      await Promise.allSettled([
+        effects.recordFailure(state),
+        effects.writeRuntimeState(state),
+      ]);
       console.error(`[schedule] ${game} sync failed (${failure.code}${failure.status ? ` HTTP ${failure.status}` : ""})`);
+      return {
+        succeeded: 0,
+        failed: 1,
+        persisted: 0,
+        errors: [{ game, code: failure.code, httpStatus: failure.status } satisfies ScheduleSyncError],
+      };
     }
+    return {
+      succeeded: 0,
+      failed: 1,
+      persisted: 0,
+      errors: [{ game, code: "MISSING_SYNC_OUTCOME", httpStatus: null } satisfies ScheduleSyncError],
+    };
   }));
-  return nextStates;
+  return {
+    states: nextStates,
+    gamesSucceeded: outcomes.reduce((sum, value) => sum + value.succeeded, 0),
+    gamesFailed: outcomes.reduce((sum, value) => sum + value.failed, 0),
+    snapshotsPersisted: outcomes.reduce((sum, value) => sum + value.persisted, 0),
+    errors: outcomes.flatMap((value) => value.errors),
+  };
 }
 
 async function persistUnexpectedFailure(
@@ -421,7 +522,10 @@ async function persistUnexpectedFailure(
       now,
     );
     nextStates[game] = state;
-    await writePandaScoreGameSyncState(state);
+    await Promise.allSettled([
+      recordPersistentPandaScoreFailure(state),
+      writePandaScoreGameSyncState(state),
+    ]);
   }));
   console.error("[schedule] PandaScore refresh stopped by an unexpected error");
   return nextStates;
@@ -437,18 +541,66 @@ async function synchronize(
     const lockOwner = await acquirePandaScoreSyncLock(now);
     if (!lockOwner) {
       console.info("[schedule] sync skipped because another regional instance owns the refresh lock");
-      return { batch: null, states: previousStates };
+      return {
+        batch: null,
+        states: previousStates,
+        summary: {
+          status: "busy",
+          lockAcquired: false,
+          gamesAttempted: 0,
+          gamesSucceeded: 0,
+          gamesFailed: 0,
+          snapshotsPersisted: 0,
+          sourceFetchedAt: minDate(pandaGameKeys.map((game) => snapshots[game]?.fetchedAt)),
+          lastSuccessfulSyncAt: maxDate(Object.values(previousStates).map((state) => state?.lastSuccessfulSyncAt)),
+          errors: [],
+        },
+      };
     }
 
     console.info("[schedule] regional refresh lock acquired");
     let states = await markSyncAttemptStarted(snapshots, previousStates, now);
     try {
       const batch = await syncPandaScoreGames(token, snapshots, { now });
-      states = await persistSyncBatch(batch, states, now);
-      return { batch, states };
+      const persisted = await persistPandaScoreSyncBatch(batch, states, now);
+      states = persisted.states;
+      const status = persisted.gamesSucceeded === pandaGameKeys.length && persisted.errors.length === 0
+        ? "success"
+        : persisted.gamesSucceeded > 0
+          ? "partial"
+          : "failed";
+      return {
+        batch,
+        states,
+        summary: {
+          status,
+          lockAcquired: true,
+          gamesAttempted: pandaGameKeys.length,
+          gamesSucceeded: persisted.gamesSucceeded,
+          gamesFailed: persisted.gamesFailed,
+          snapshotsPersisted: persisted.snapshotsPersisted,
+          sourceFetchedAt: minDate(pandaGameKeys.map((game) => batch.snapshots[game]?.fetchedAt)),
+          lastSuccessfulSyncAt: maxDate(Object.values(states).map((state) => state?.lastSuccessfulSyncAt)),
+          errors: persisted.errors,
+        },
+      };
     } catch {
       states = await persistUnexpectedFailure(snapshots, states, now);
-      return { batch: null, states };
+      return {
+        batch: null,
+        states,
+        summary: {
+          status: "failed",
+          lockAcquired: true,
+          gamesAttempted: pandaGameKeys.length,
+          gamesSucceeded: 0,
+          gamesFailed: pandaGameKeys.length,
+          snapshotsPersisted: 0,
+          sourceFetchedAt: minDate(pandaGameKeys.map((game) => snapshots[game]?.fetchedAt)),
+          lastSuccessfulSyncAt: maxDate(Object.values(states).map((state) => state?.lastSuccessfulSyncAt)),
+          errors: [{ game: null, code: "UNEXPECTED_SYNC_ERROR", httpStatus: null }],
+        },
+      };
     } finally {
       await releasePandaScoreSyncLock(lockOwner);
     }
@@ -461,15 +613,67 @@ function failureWarning(batch: PandaScoreSyncBatch): string | undefined {
   return `部分项目同步失败（${failedGames.join("、")}），已分别保留这些项目上一次成功的真实数据；其他项目已继续更新。`;
 }
 
+type ScheduleRecoveryEffects = {
+  readPersistent: (games: readonly PandaGameKey[]) => Promise<PersistentSnapshotRead>;
+  writeRuntimeSnapshot: (snapshot: PandaGameSnapshot) => Promise<boolean>;
+  writeRuntimeState: (state: PandaScoreGameSyncState) => Promise<boolean>;
+};
+
+const defaultScheduleRecoveryEffects: ScheduleRecoveryEffects = {
+  readPersistent: (games) => persistentRecoverySingleFlight.run(
+    () => readPersistentPandaScoreSnapshots(games),
+  ),
+  writeRuntimeSnapshot: writePandaScoreGameSnapshot,
+  writeRuntimeState: writePandaScoreGameSyncState,
+};
+
+export async function recoverScheduleParts(
+  runtimeSnapshots: SnapshotMap,
+  runtimeStates: SyncStateMap,
+  effects: ScheduleRecoveryEffects = defaultScheduleRecoveryEffects,
+) {
+  const snapshots: SnapshotMap = { ...runtimeSnapshots };
+  const states: SyncStateMap = { ...runtimeStates };
+  const snapshotSources: SnapshotSourceMap = {};
+  for (const game of pandaGameKeys) {
+    if (runtimeSnapshots[game]) snapshotSources[game] = "runtime-cache";
+  }
+  const missingGames = pandaGameKeys.filter((game) => !snapshots[game] || !states[game]);
+  if (missingGames.length === 0) {
+    return { snapshots, states, snapshotSources, recoveredGames: [] as PandaGameKey[] };
+  }
+
+  const persistent = await effects.readPersistent(missingGames);
+  const recoveredGames: PandaGameKey[] = [];
+  await Promise.allSettled(missingGames.map(async (game) => {
+    const persistentSnapshot = persistent.snapshots[game];
+    const persistentState = persistent.states[game];
+    if (!snapshots[game] && persistentSnapshot) {
+      snapshots[game] = persistentSnapshot;
+      snapshotSources[game] = "persistent-snapshot";
+      recoveredGames.push(game);
+      await effects.writeRuntimeSnapshot(persistentSnapshot);
+    }
+    if (!states[game] && persistentState) {
+      states[game] = persistentState;
+      await effects.writeRuntimeState(persistentState);
+    }
+  }));
+  return { snapshots, states, snapshotSources, recoveredGames };
+}
+
 async function readScheduleParts(now: Date) {
   const reads = await Promise.allSettled([
     readAllPandaScoreGameSnapshots(),
     readAllPandaScoreGameSyncStates(),
     readPandaScoreSyncLockStatus(now),
   ]);
+  const recovered = await recoverScheduleParts(
+    reads[0].status === "fulfilled" ? reads[0].value : {},
+    reads[1].status === "fulfilled" ? reads[1].value : {},
+  );
   return {
-    snapshots: reads[0].status === "fulfilled" ? reads[0].value : {},
-    states: reads[1].status === "fulfilled" ? reads[1].value : {},
+    ...recovered,
     refreshInProgress: refreshSingleFlight.isRunning()
       || (reads[2].status === "fulfilled" && reads[2].value.refreshInProgress),
   };
@@ -484,12 +688,33 @@ export async function getSchedule(options: {
 
   const now = options.now ?? new Date();
   const token = process.env.PANDASCORE_TOKEN?.trim();
-  const { snapshots, states, refreshInProgress } = await readScheduleParts(now);
+  const { snapshots, states, snapshotSources, refreshInProgress } = await readScheduleParts(now);
+  return buildScheduleFromParts(
+    { snapshots, states, snapshotSources, refreshInProgress },
+    token,
+    now,
+  );
+}
+
+export async function buildScheduleFromParts(
+  parts: {
+    snapshots: SnapshotMap;
+    states: SyncStateMap;
+    snapshotSources: SnapshotSourceMap;
+    refreshInProgress: boolean;
+  },
+  token: string | undefined,
+  now: Date,
+): Promise<SchedulePayload> {
+  const { snapshots, states, snapshotSources, refreshInProgress } = parts;
   const cachedPanda = aggregatePandaScoreSnapshots(snapshots);
 
   if (cachedPanda) {
-    const games = deriveGameCoverage(snapshots, states, now, refreshInProgress);
+    const games = deriveGameCoverage(snapshots, states, now, refreshInProgress, snapshotSources);
     const stale = pandaGameKeys.some((game) => games[game].syncStatus !== "normal");
+    const persistentFallback = pandaGameKeys.some(
+      (game) => snapshotSources[game] === "persistent-snapshot",
+    );
     return buildPayload(
       cachedPanda,
       states,
@@ -497,12 +722,15 @@ export async function getSchedule(options: {
       token ? (stale ? "stale-cache" : "connected") : "not-configured",
       now,
       refreshInProgress,
+      snapshotSources,
       !token
         ? "生产数据源配置错误；当前响应仅保留上一次成功同步的真实数据。"
         : stale
           ? refreshInProgress
             ? "数据快照已过期，后台同步正在进行；当前快速返回上一次成功的真实数据。"
             : "一个或多个项目的数据同步延迟，当前继续提供各项目上一次成功的真实数据。"
+          : persistentFallback
+            ? "Runtime Cache 未命中，当前数据已从持久化的最后成功快照恢复。"
           : undefined,
     );
   }
@@ -514,27 +742,70 @@ export async function getSchedule(options: {
     token ? "error" : "not-configured",
     now,
     refreshInProgress,
+    snapshotSources,
     token
       ? refreshInProgress ? "首批真实赛程正在后台同步，请稍后重试。" : "尚未生成首批真实数据缓存。"
       : "生产数据源配置错误，暂时没有可用的真实赛程。",
   );
 }
 
-export async function refreshSchedule(options: { force?: boolean; now?: Date } = {}): Promise<SchedulePayload> {
+export async function refreshScheduleDetailed(
+  options: { force?: boolean; now?: Date } = {},
+): Promise<{ schedule: SchedulePayload; sync: ScheduleSyncSummary }> {
   const now = options.now ?? new Date();
   const token = process.env.PANDASCORE_TOKEN?.trim();
-  if (!token) return getSchedule({ cachedOnly: true, now });
+  if (!token) {
+    const schedule = await getSchedule({ cachedOnly: true, now });
+    return {
+      schedule,
+      sync: {
+        status: "not-configured",
+        lockAcquired: false,
+        gamesAttempted: 0,
+        gamesSucceeded: 0,
+        gamesFailed: 0,
+        snapshotsPersisted: 0,
+        sourceFetchedAt: schedule.coverage.sourceFetchedAt,
+        lastSuccessfulSyncAt: schedule.lastSuccessfulSyncAt,
+        errors: [{ game: null, code: "PANDASCORE_NOT_CONFIGURED", httpStatus: null }],
+      },
+    };
+  }
 
   const { snapshots, states } = await readScheduleParts(now);
   if (!options.force && allGamesFresh(snapshots, states, now)) {
-    return getSchedule({ cachedOnly: true, now });
+    const schedule = await getSchedule({ cachedOnly: true, now });
+    return {
+      schedule,
+      sync: {
+        status: "fresh",
+        lockAcquired: false,
+        gamesAttempted: 0,
+        gamesSucceeded: 0,
+        gamesFailed: 0,
+        snapshotsPersisted: 0,
+        sourceFetchedAt: schedule.coverage.sourceFetchedAt,
+        lastSuccessfulSyncAt: schedule.lastSuccessfulSyncAt,
+        errors: [],
+      },
+    };
   }
 
   const result = await synchronize(token, snapshots, states, now);
   const payload = await getSchedule({ cachedOnly: true, now });
-  if (!result.batch) return payload;
-  const warning = failureWarning(result.batch);
-  return warning ? { ...payload, warning } : payload;
+  const warning = result.batch ? failureWarning(result.batch) : undefined;
+  return {
+    schedule: warning ? { ...payload, warning } : payload,
+    sync: {
+      ...result.summary,
+      sourceFetchedAt: payload.coverage.sourceFetchedAt,
+      lastSuccessfulSyncAt: payload.lastSuccessfulSyncAt,
+    },
+  };
+}
+
+export async function refreshSchedule(options: { force?: boolean; now?: Date } = {}): Promise<SchedulePayload> {
+  return (await refreshScheduleDetailed(options)).schedule;
 }
 
 export function shouldRefreshSchedule(payload: SchedulePayload): boolean {

@@ -1,7 +1,7 @@
 import { getCache } from "@vercel/functions";
 import type { PandaGameSnapshot } from "./pandascore";
-import { normalizeStoredMatchStatus } from "./status";
-import type { MatchStatus, PandaGameKey } from "./types";
+import { normalizePandaGameSnapshot } from "./snapshot";
+import type { PandaGameKey } from "./types";
 import { pandaGameKeys } from "./types";
 
 const CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -109,44 +109,10 @@ export async function releasePandaScoreSyncLock(owner: string): Promise<void> {
   }
 }
 
-function isPandaGameSnapshot(value: unknown, game: PandaGameKey): value is PandaGameSnapshot {
-  if (!value || typeof value !== "object") return false;
-  const cached = value as Partial<PandaGameSnapshot>;
-  return cached.game === game
-    && Array.isArray(cached.matches)
-    && typeof cached.fetchedAt === "string"
-    && !!cached.coverage;
-}
-
-function migrateSnapshot(snapshot: PandaGameSnapshot): PandaGameSnapshot {
-  const matches = snapshot.matches.map((match) => ({
-    ...match,
-    status: normalizeStoredMatchStatus(match.status) ?? "unknown",
-  }));
-  const statusCounts: Record<MatchStatus, number> = {
-    scheduled: 0,
-    running: 0,
-    finished: 0,
-    postponed: 0,
-    cancelled: 0,
-    forfeit: 0,
-    unknown: 0,
-  };
-  for (const match of matches) statusCounts[match.status] += 1;
-  return {
-    ...snapshot,
-    matches,
-    coverage: {
-      ...snapshot.coverage,
-      statusCounts,
-    },
-  };
-}
-
 export async function readPandaScoreGameSnapshot(game: PandaGameKey): Promise<PandaGameSnapshot | null> {
   try {
     const cached = await scheduleCache().get(snapshotKey(game));
-    return isPandaGameSnapshot(cached, game) ? migrateSnapshot(cached) : null;
+    return normalizePandaGameSnapshot(cached, game);
   } catch {
     console.warn(`[schedule-cache] ${game} last-success cache could not be read`);
     return null;

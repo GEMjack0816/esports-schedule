@@ -6,6 +6,7 @@ const requiredTables = [
   "submission_rate_limits",
   "submission_rate_limit_windows",
   "admin_audit_events",
+  "pandascore_game_snapshots",
 ];
 const url = process.env.DATABASE_URL?.trim();
 

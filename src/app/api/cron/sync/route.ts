@@ -1,4 +1,4 @@
-import { refreshSchedule } from "@/lib/schedule";
+import { refreshScheduleDetailed } from "@/lib/schedule";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -11,10 +11,22 @@ export async function GET(request: Request) {
     return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  const schedule = await refreshSchedule({ force: true });
+  const { schedule, sync } = await refreshScheduleDetailed({ force: true });
+  const responseStatus = sync.status === "busy"
+    ? 409
+    : sync.status === "failed" || sync.status === "not-configured"
+      ? 503
+      : 200;
 
   return Response.json({
-    ok: true,
+    ok: sync.status === "success" || sync.status === "partial" || sync.status === "fresh",
+    status: sync.status,
+    lockAcquired: sync.lockAcquired,
+    gamesAttempted: sync.gamesAttempted,
+    gamesSucceeded: sync.gamesSucceeded,
+    gamesFailed: sync.gamesFailed,
+    snapshotsPersisted: sync.snapshotsPersisted,
+    errors: sync.errors,
     refreshedAt: schedule.generatedAt,
     matches: schedule.matches.length,
     mode: schedule.mode,
@@ -26,5 +38,5 @@ export async function GET(request: Request) {
     refreshInProgress: schedule.coverage.refreshInProgress,
     lastError: schedule.coverage.lastError,
     providers: schedule.providers,
-  });
+  }, { status: responseStatus });
 }
