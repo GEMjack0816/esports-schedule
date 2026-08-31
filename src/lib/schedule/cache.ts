@@ -6,7 +6,7 @@ import { pandaGameKeys } from "./types";
 
 const CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
 const SYNC_LOCK_TTL_SECONDS = 6 * 60;
-const SYNC_LOCK_KEY = "pandascore-sync-lock-v1";
+const SYNC_LOCK_BASE_KEY = "pandascore-sync-lock-v1";
 
 export type PandaScoreGameSyncState = {
   game: PandaGameKey;
@@ -21,12 +21,33 @@ function scheduleCache() {
   return getCache({ namespace: "esports-schedule" });
 }
 
+export function runtimeCacheScope(
+  environment = process.env.VERCEL_ENV,
+  gitRef = process.env.VERCEL_GIT_COMMIT_REF,
+  gitSha = process.env.VERCEL_GIT_COMMIT_SHA,
+): string {
+  // Preserve the existing Production keys during rollout. Preview deployments
+  // share a cache target, so branch-scoping prevents one PR from reading another
+  // PR's fixtures or lock state.
+  if (environment === "production") return "";
+  if (environment === "preview") return `preview:${gitRef?.trim() || gitSha?.trim() || "unknown"}:`;
+  return `${environment?.trim() || "local"}:`;
+}
+
+function scopedKey(key: string): string {
+  return `${runtimeCacheScope()}${key}`;
+}
+
+function syncLockKey(): string {
+  return scopedKey(SYNC_LOCK_BASE_KEY);
+}
+
 function snapshotKey(game: PandaGameKey): string {
-  return `last-success-v4:${game}`;
+  return scopedKey(`last-success-v4:${game}`);
 }
 
 function syncStateKey(game: PandaGameKey): string {
-  return `sync-state-v4:${game}`;
+  return scopedKey(`sync-state-v4:${game}`);
 }
 
 type SyncLock = {
@@ -51,8 +72,9 @@ function isActiveSyncLock(value: unknown, now: Date): value is SyncLock {
 
 export async function acquirePandaScoreSyncLock(now = new Date()): Promise<string | null> {
   const cache = scheduleCache();
+  const lockKey = syncLockKey();
   try {
-    const existing = await cache.get(SYNC_LOCK_KEY);
+    const existing = await cache.get(lockKey);
     if (isActiveSyncLock(existing, now)) return null;
 
     const owner = crypto.randomUUID();
@@ -61,7 +83,7 @@ export async function acquirePandaScoreSyncLock(now = new Date()): Promise<strin
       startedAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + SYNC_LOCK_TTL_SECONDS * 1_000).toISOString(),
     };
-    await cache.set(SYNC_LOCK_KEY, lock, {
+    await cache.set(lockKey, lock, {
       name: "PandaScore regional sync lock",
       tags: ["pandascore-sync-lock"],
       ttl: SYNC_LOCK_TTL_SECONDS,
@@ -70,7 +92,7 @@ export async function acquirePandaScoreSyncLock(now = new Date()): Promise<strin
     // A brief claim-confirmation step prevents concurrent regional instances from
     // both proceeding when they observed an expired lock at the same instant.
     await new Promise((resolve) => setTimeout(resolve, 40));
-    const confirmed = await cache.get(SYNC_LOCK_KEY);
+    const confirmed = await cache.get(lockKey);
     return isActiveSyncLock(confirmed, now) && confirmed.owner === owner ? owner : null;
   } catch {
     console.warn("[schedule-cache] regional sync lock unavailable; using instance lock only");
@@ -80,7 +102,7 @@ export async function acquirePandaScoreSyncLock(now = new Date()): Promise<strin
 
 export async function readPandaScoreSyncLockStatus(now = new Date()): Promise<PandaScoreSyncLockStatus> {
   try {
-    const value = await scheduleCache().get(SYNC_LOCK_KEY);
+    const value = await scheduleCache().get(syncLockKey());
     if (!isActiveSyncLock(value, now)) {
       return { refreshInProgress: false, startedAt: null, expiresAt: null };
     }
@@ -99,10 +121,11 @@ export async function readPandaScoreSyncLockStatus(now = new Date()): Promise<Pa
 export async function releasePandaScoreSyncLock(owner: string): Promise<void> {
   if (owner === "instance-lock-fallback") return;
   const cache = scheduleCache();
+  const lockKey = syncLockKey();
   try {
-    const current = await cache.get(SYNC_LOCK_KEY);
+    const current = await cache.get(lockKey);
     if (current && typeof current === "object" && (current as Partial<SyncLock>).owner === owner) {
-      await cache.delete(SYNC_LOCK_KEY);
+      await cache.delete(lockKey);
     }
   } catch {
     console.warn("[schedule-cache] regional sync lock release failed; TTL will expire it");
