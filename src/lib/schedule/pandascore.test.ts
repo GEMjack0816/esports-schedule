@@ -291,6 +291,16 @@ describe("PandaScore normalization", () => {
 });
 
 describe("per-game failure isolation", () => {
+  it("accepts an empty provider result only when no last-known-good snapshot exists", async () => {
+    const batch = await syncPandaScoreGames("test-token", {}, {
+      now: new Date("2026-07-18T00:00:00.000Z"),
+      fetchImpl: (async () => response([])) as typeof fetch,
+    });
+    expect(batch.updatedGames).toEqual(pandaGameKeys);
+    expect(batch.failures).toEqual({});
+    for (const game of pandaGameKeys) expect(batch.snapshots[game]?.matches).toEqual([]);
+  });
+
   it("keeps one failed game's prior snapshot while other games update", async () => {
     const previous = Object.fromEntries(pandaGameKeys.map((game) => [game, snapshot(game)]));
     const fetchImpl = async (input: string | URL | Request) => {

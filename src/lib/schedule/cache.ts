@@ -1,12 +1,12 @@
 import { getCache } from "@vercel/functions";
 import type { PandaGameSnapshot } from "./pandascore";
-import { normalizeStoredMatchStatus } from "./status";
-import type { MatchStatus, PandaGameKey } from "./types";
+import { normalizePandaGameSnapshot } from "./snapshot";
+import type { PandaGameKey } from "./types";
 import { pandaGameKeys } from "./types";
 
 const CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
 const SYNC_LOCK_TTL_SECONDS = 6 * 60;
-const SYNC_LOCK_KEY = "pandascore-sync-lock-v1";
+const SYNC_LOCK_BASE_KEY = "pandascore-sync-lock-v1";
 
 export type PandaScoreGameSyncState = {
   game: PandaGameKey;
@@ -21,12 +21,33 @@ function scheduleCache() {
   return getCache({ namespace: "esports-schedule" });
 }
 
+export function runtimeCacheScope(
+  environment = process.env.VERCEL_ENV,
+  gitRef = process.env.VERCEL_GIT_COMMIT_REF,
+  gitSha = process.env.VERCEL_GIT_COMMIT_SHA,
+): string {
+  // Preserve the existing Production keys during rollout. Preview deployments
+  // share a cache target, so branch-scoping prevents one PR from reading another
+  // PR's fixtures or lock state.
+  if (environment === "production") return "";
+  if (environment === "preview") return `preview:${gitRef?.trim() || gitSha?.trim() || "unknown"}:`;
+  return `${environment?.trim() || "local"}:`;
+}
+
+function scopedKey(key: string): string {
+  return `${runtimeCacheScope()}${key}`;
+}
+
+function syncLockKey(): string {
+  return scopedKey(SYNC_LOCK_BASE_KEY);
+}
+
 function snapshotKey(game: PandaGameKey): string {
-  return `last-success-v4:${game}`;
+  return scopedKey(`last-success-v4:${game}`);
 }
 
 function syncStateKey(game: PandaGameKey): string {
-  return `sync-state-v4:${game}`;
+  return scopedKey(`sync-state-v4:${game}`);
 }
 
 type SyncLock = {
@@ -51,8 +72,9 @@ function isActiveSyncLock(value: unknown, now: Date): value is SyncLock {
 
 export async function acquirePandaScoreSyncLock(now = new Date()): Promise<string | null> {
   const cache = scheduleCache();
+  const lockKey = syncLockKey();
   try {
-    const existing = await cache.get(SYNC_LOCK_KEY);
+    const existing = await cache.get(lockKey);
     if (isActiveSyncLock(existing, now)) return null;
 
     const owner = crypto.randomUUID();
@@ -61,7 +83,7 @@ export async function acquirePandaScoreSyncLock(now = new Date()): Promise<strin
       startedAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + SYNC_LOCK_TTL_SECONDS * 1_000).toISOString(),
     };
-    await cache.set(SYNC_LOCK_KEY, lock, {
+    await cache.set(lockKey, lock, {
       name: "PandaScore regional sync lock",
       tags: ["pandascore-sync-lock"],
       ttl: SYNC_LOCK_TTL_SECONDS,
@@ -70,7 +92,7 @@ export async function acquirePandaScoreSyncLock(now = new Date()): Promise<strin
     // A brief claim-confirmation step prevents concurrent regional instances from
     // both proceeding when they observed an expired lock at the same instant.
     await new Promise((resolve) => setTimeout(resolve, 40));
-    const confirmed = await cache.get(SYNC_LOCK_KEY);
+    const confirmed = await cache.get(lockKey);
     return isActiveSyncLock(confirmed, now) && confirmed.owner === owner ? owner : null;
   } catch {
     console.warn("[schedule-cache] regional sync lock unavailable; using instance lock only");
@@ -80,7 +102,7 @@ export async function acquirePandaScoreSyncLock(now = new Date()): Promise<strin
 
 export async function readPandaScoreSyncLockStatus(now = new Date()): Promise<PandaScoreSyncLockStatus> {
   try {
-    const value = await scheduleCache().get(SYNC_LOCK_KEY);
+    const value = await scheduleCache().get(syncLockKey());
     if (!isActiveSyncLock(value, now)) {
       return { refreshInProgress: false, startedAt: null, expiresAt: null };
     }
@@ -99,54 +121,21 @@ export async function readPandaScoreSyncLockStatus(now = new Date()): Promise<Pa
 export async function releasePandaScoreSyncLock(owner: string): Promise<void> {
   if (owner === "instance-lock-fallback") return;
   const cache = scheduleCache();
+  const lockKey = syncLockKey();
   try {
-    const current = await cache.get(SYNC_LOCK_KEY);
+    const current = await cache.get(lockKey);
     if (current && typeof current === "object" && (current as Partial<SyncLock>).owner === owner) {
-      await cache.delete(SYNC_LOCK_KEY);
+      await cache.delete(lockKey);
     }
   } catch {
     console.warn("[schedule-cache] regional sync lock release failed; TTL will expire it");
   }
 }
 
-function isPandaGameSnapshot(value: unknown, game: PandaGameKey): value is PandaGameSnapshot {
-  if (!value || typeof value !== "object") return false;
-  const cached = value as Partial<PandaGameSnapshot>;
-  return cached.game === game
-    && Array.isArray(cached.matches)
-    && typeof cached.fetchedAt === "string"
-    && !!cached.coverage;
-}
-
-function migrateSnapshot(snapshot: PandaGameSnapshot): PandaGameSnapshot {
-  const matches = snapshot.matches.map((match) => ({
-    ...match,
-    status: normalizeStoredMatchStatus(match.status) ?? "unknown",
-  }));
-  const statusCounts: Record<MatchStatus, number> = {
-    scheduled: 0,
-    running: 0,
-    finished: 0,
-    postponed: 0,
-    cancelled: 0,
-    forfeit: 0,
-    unknown: 0,
-  };
-  for (const match of matches) statusCounts[match.status] += 1;
-  return {
-    ...snapshot,
-    matches,
-    coverage: {
-      ...snapshot.coverage,
-      statusCounts,
-    },
-  };
-}
-
 export async function readPandaScoreGameSnapshot(game: PandaGameKey): Promise<PandaGameSnapshot | null> {
   try {
     const cached = await scheduleCache().get(snapshotKey(game));
-    return isPandaGameSnapshot(cached, game) ? migrateSnapshot(cached) : null;
+    return normalizePandaGameSnapshot(cached, game);
   } catch {
     console.warn(`[schedule-cache] ${game} last-success cache could not be read`);
     return null;

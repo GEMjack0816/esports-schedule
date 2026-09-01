@@ -99,7 +99,7 @@ export type GameCoverage = {
   refreshInProgress: boolean;
   syncStatus: GameSyncStatus;
   staleMinutes: number | null;
-  dataSource: "fresh" | "cache" | "unavailable";
+  dataSource: "fresh" | "cache" | "persistent" | "unavailable";
   lastErrorCode: string | null;
   lastError: SyncErrorInfo | null;
   verificationSample?: ProviderVerificationSample | null;

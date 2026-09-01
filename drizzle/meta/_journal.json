@@ -22,6 +22,20 @@
       "when": 1787905689953,
       "tag": "0002_lame_mole_man",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788096200409,
+      "tag": "0003_soft_beyonder",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788233322600,
+      "tag": "0004_fluffy_avengers",
+      "breakpoints": true
     }
   ]
 }

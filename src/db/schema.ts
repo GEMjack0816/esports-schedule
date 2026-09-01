@@ -1,10 +1,12 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   check,
   index,
   integer,
   jsonb,
+  pgSequence,
   pgTable,
   smallint,
   text,
@@ -14,6 +16,10 @@ import {
 } from "drizzle-orm/pg-core";
 
 const gameConstraint = sql`game in ('lol', 'valorant', 'honor-of-kings', 'cs2', 'dota2')`;
+
+export const pandaScoreSyncGeneration = pgSequence("pandascore_sync_generation_seq", {
+  startWith: 1,
+});
 
 export const matchSubmissions = pgTable("match_submissions", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -124,6 +130,24 @@ export const submissionRateLimitWindows = pgTable("submission_rate_limit_windows
   check("submission_rate_limit_windows_request_count_check", sql`${table.requestCount} >= 0`),
 ]);
 
+export const pandaScoreGameSnapshots = pgTable("pandascore_game_snapshots", {
+  game: text("game").primaryKey(),
+  snapshotPayload: jsonb("snapshot_payload").notNull(),
+  sourceFetchedAt: timestamp("source_fetched_at", { withTimezone: true, mode: "date" }).notNull(),
+  lastSuccessfulSyncAt: timestamp("last_successful_sync_at", { withTimezone: true, mode: "date" }).notNull(),
+  lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true, mode: "date" }).notNull(),
+  lastErrorAt: timestamp("last_error_at", { withTimezone: true, mode: "date" }),
+  lastErrorCode: text("last_error_code"),
+  lastHttpStatus: integer("last_http_status"),
+  generation: uuid("generation").notNull(),
+  fencingGeneration: bigint("fencing_generation", { mode: "number" })
+    .notNull()
+    .default(sql`nextval('pandascore_sync_generation_seq')`),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+}, () => [
+  check("pandascore_game_snapshots_game_check", gameConstraint),
+]);
+
 export const adminAuditEvents = pgTable("admin_audit_events", {
   id: uuid("id").primaryKey().defaultRandom(),
   actorId: text("actor_id").notNull(),
@@ -145,3 +169,4 @@ export type NewPublishedManualMatchRow = typeof publishedManualMatches.$inferIns
 export type AdminAuditEventRow = typeof adminAuditEvents.$inferSelect;
 export type SubmissionRateLimitRow = typeof submissionRateLimits.$inferSelect;
 export type SubmissionRateLimitWindowRow = typeof submissionRateLimitWindows.$inferSelect;
+export type PandaScoreGameSnapshotRow = typeof pandaScoreGameSnapshots.$inferSelect;
