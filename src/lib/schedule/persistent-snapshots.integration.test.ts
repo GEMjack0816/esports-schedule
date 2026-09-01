@@ -287,6 +287,7 @@ describe.skipIf(!enabled)("persistent PandaScore snapshots (isolated PostgreSQL)
       },
     );
     expect(persisted.snapshotsPersisted).toBe(5);
+    expect(persisted.generation).toBe(newGeneration);
     expect(persisted.errors.every((error) => error.code === "CACHE_WRITE")).toBe(true);
 
     const cacheBackfills: PandaGameKey[] = [];
@@ -304,6 +305,7 @@ describe.skipIf(!enabled)("persistent PandaScore snapshots (isolated PostgreSQL)
     for (const game of pandaGameKeys) {
       expect(recovered.snapshots[game]?.matches[0].providerMatchId).toBe(`${game}-new`);
       expect(recovered.snapshots[game]?.syncGeneration).toBe(newGeneration);
+      expect(recovered.snapshots[game]?.syncGeneration).toBe(persisted.generation);
     }
 
     const payload = await buildScheduleFromParts(

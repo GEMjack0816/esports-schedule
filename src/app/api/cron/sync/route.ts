@@ -1,4 +1,29 @@
 import { refreshScheduleDetailed } from "@/lib/schedule";
+import type { ScheduleSyncSummary } from "@/lib/schedule";
+import type { SchedulePayload } from "@/lib/schedule/types";
+
+export type CronSyncResponse = {
+  ok: boolean;
+  status: ScheduleSyncSummary["status"];
+  lockAcquired: boolean;
+  generation: number | null;
+  gamesAttempted: number;
+  gamesSucceeded: number;
+  gamesFailed: number;
+  snapshotsPersisted: number;
+  errors: ScheduleSyncSummary["errors"];
+  refreshedAt: string;
+  matches: number;
+  mode: SchedulePayload["mode"];
+  stale: boolean;
+  lastSuccessfulSyncAt: string | null;
+  sourceFetchedAt: string | null;
+  snapshotAgeSeconds: number | null;
+  lastAttemptAt: string | null;
+  refreshInProgress: boolean;
+  lastError: SchedulePayload["coverage"]["lastError"];
+  providers: SchedulePayload["providers"];
+};
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -18,10 +43,11 @@ export async function GET(request: Request) {
       ? 503
       : 200;
 
-  return Response.json({
+  const body = {
     ok: sync.status === "success" || sync.status === "partial" || sync.status === "fresh",
     status: sync.status,
     lockAcquired: sync.lockAcquired,
+    generation: sync.generation,
     gamesAttempted: sync.gamesAttempted,
     gamesSucceeded: sync.gamesSucceeded,
     gamesFailed: sync.gamesFailed,
@@ -38,5 +64,7 @@ export async function GET(request: Request) {
     refreshInProgress: schedule.coverage.refreshInProgress,
     lastError: schedule.coverage.lastError,
     providers: schedule.providers,
-  }, { status: responseStatus });
+  } satisfies CronSyncResponse;
+
+  return Response.json(body, { status: responseStatus });
 }

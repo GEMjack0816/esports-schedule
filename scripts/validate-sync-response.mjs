@@ -6,6 +6,9 @@ export function validateSyncResponse(payload, httpStatus) {
     return { ok: false, message: "sync endpoint returned invalid JSON" };
   }
   if (payload.status === "busy" && payload.lockAcquired === false) {
+    if (payload.generation !== null && payload.generation !== undefined) {
+      return { ok: false, message: "sync busy response unexpectedly reported a generation" };
+    }
     return httpStatus === 409
       ? { ok: true, message: "sync busy: another refresh owns the lock" }
       : { ok: false, message: `sync busy response used unexpected HTTP ${httpStatus}` };
@@ -15,6 +18,9 @@ export function validateSyncResponse(payload, httpStatus) {
   }
   if (payload.lockAcquired !== true) {
     return { ok: false, message: "sync did not acquire the refresh lock" };
+  }
+  if (!Number.isSafeInteger(payload.generation) || payload.generation < 1) {
+    return { ok: false, message: "sync did not report a valid fencing generation" };
   }
   if (!Number.isInteger(payload.gamesAttempted) || payload.gamesAttempted < 1) {
     return { ok: false, message: "sync did not report attempted games" };

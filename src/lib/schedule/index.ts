@@ -61,6 +61,7 @@ export type ScheduleSyncError = {
 export type ScheduleSyncSummary = {
   status: "success" | "partial" | "failed" | "busy" | "not-configured" | "fresh";
   lockAcquired: boolean;
+  generation: number | null;
   gamesAttempted: number;
   gamesSucceeded: number;
   gamesFailed: number;
@@ -410,6 +411,7 @@ async function markSyncAttemptStarted(
 
 type PersistBatchResult = {
   states: SyncStateMap;
+  generation: number;
   gamesSucceeded: number;
   gamesFailed: number;
   snapshotsPersisted: number;
@@ -510,6 +512,7 @@ export async function persistPandaScoreSyncBatch(
   }));
   return {
     states: nextStates,
+    generation: fencingGeneration,
     gamesSucceeded: outcomes.reduce((sum, value) => sum + value.succeeded, 0),
     gamesFailed: outcomes.reduce((sum, value) => sum + value.failed, 0),
     snapshotsPersisted: outcomes.reduce((sum, value) => sum + value.persisted, 0),
@@ -558,6 +561,7 @@ async function synchronize(
         summary: {
           status: "busy",
           lockAcquired: false,
+          generation: null,
           gamesAttempted: 0,
           gamesSucceeded: 0,
           gamesFailed: 0,
@@ -579,6 +583,7 @@ async function synchronize(
         summary: {
           status: "failed",
           lockAcquired: true,
+          generation: null,
           gamesAttempted: 0,
           gamesSucceeded: 0,
           gamesFailed: 0,
@@ -605,6 +610,7 @@ async function synchronize(
         summary: {
           status,
           lockAcquired: true,
+          generation: persisted.generation,
           gamesAttempted: pandaGameKeys.length,
           gamesSucceeded: persisted.gamesSucceeded,
           gamesFailed: persisted.gamesFailed,
@@ -622,6 +628,7 @@ async function synchronize(
         summary: {
           status: "failed",
           lockAcquired: true,
+          generation: fencingGeneration,
           gamesAttempted: pandaGameKeys.length,
           gamesSucceeded: 0,
           gamesFailed: pandaGameKeys.length,
@@ -805,6 +812,7 @@ export async function refreshScheduleDetailed(
       sync: {
         status: "not-configured",
         lockAcquired: false,
+        generation: null,
         gamesAttempted: 0,
         gamesSucceeded: 0,
         gamesFailed: 0,
@@ -824,6 +832,7 @@ export async function refreshScheduleDetailed(
       sync: {
         status: "fresh",
         lockAcquired: false,
+        generation: null,
         gamesAttempted: 0,
         gamesSucceeded: 0,
         gamesFailed: 0,

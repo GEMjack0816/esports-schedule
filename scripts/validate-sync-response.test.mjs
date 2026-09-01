@@ -4,6 +4,7 @@ import { validateSyncResponse } from "./validate-sync-response.mjs";
 const success = {
   status: "success",
   lockAcquired: true,
+  generation: 41,
   gamesAttempted: 5,
   gamesSucceeded: 5,
   gamesFailed: 0,
@@ -17,10 +18,26 @@ describe("sync workflow response validation", () => {
   });
 
   it("accepts a clearly reported busy lock without treating it as a refresh", () => {
-    expect(validateSyncResponse({ status: "busy", lockAcquired: false }, 409)).toEqual({
+    expect(validateSyncResponse({ status: "busy", lockAcquired: false, generation: null }, 409)).toEqual({
       ok: true,
       message: "sync busy: another refresh owns the lock",
     });
+  });
+
+  it("accepts partial success with a valid fencing generation", () => {
+    expect(validateSyncResponse({
+      ...success,
+      status: "partial",
+      generation: 42,
+      gamesSucceeded: 4,
+      gamesFailed: 1,
+      snapshotsPersisted: 4,
+    }, 200).ok).toBe(true);
+  });
+
+  it("rejects success or partial responses without a valid fencing generation", () => {
+    expect(validateSyncResponse({ ...success, generation: null }, 200).ok).toBe(false);
+    expect(validateSyncResponse({ ...success, status: "partial", generation: 0 }, 200).ok).toBe(false);
   });
 
   it("rejects HTTP success when every game failed", () => {
@@ -38,6 +55,10 @@ describe("sync workflow response validation", () => {
   });
 
   it("rejects a busy payload returned with an unexpected HTTP status", () => {
-    expect(validateSyncResponse({ status: "busy", lockAcquired: false }, 500).ok).toBe(false);
+    expect(validateSyncResponse({ status: "busy", lockAcquired: false, generation: null }, 500).ok).toBe(false);
+  });
+
+  it("rejects a busy response that claims a generation", () => {
+    expect(validateSyncResponse({ status: "busy", lockAcquired: false, generation: 41 }, 409).ok).toBe(false);
   });
 });

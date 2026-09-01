@@ -210,6 +210,7 @@ describe("durable sync persistence", () => {
     });
     expect(result.snapshotsPersisted).toBe(5);
     expect(result.gamesSucceeded).toBe(5);
+    expect(result.generation).toBe(2);
     expect(result.errors).toHaveLength(5);
     expect(result.errors.every((error) => error.code === "CACHE_WRITE")).toBe(true);
   });
@@ -243,6 +244,7 @@ describe("durable sync persistence", () => {
     });
     expect(result.gamesSucceeded).toBe(4);
     expect(result.gamesFailed).toBe(1);
+    expect(result.generation).toBe(2);
     expect(written).not.toContain("cs2");
   });
 
@@ -266,6 +268,7 @@ describe("durable sync persistence", () => {
     });
     expect(result.gamesSucceeded).toBe(0);
     expect(result.gamesFailed).toBe(5);
+    expect(result.generation).toBe(2);
     expect(writePersistent).not.toHaveBeenCalled();
   });
 

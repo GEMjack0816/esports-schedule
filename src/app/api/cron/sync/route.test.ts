@@ -44,6 +44,7 @@ describe("protected schedule sync route", () => {
       sync: {
         status: "success",
         lockAcquired: true,
+        generation: 41,
         gamesAttempted: 5,
         gamesSucceeded: 5,
         gamesFailed: 0,
@@ -61,10 +62,39 @@ describe("protected schedule sync route", () => {
     expect(JSON.parse(text)).toMatchObject({
       status: "success",
       lockAcquired: true,
+      generation: 41,
       gamesSucceeded: 5,
       snapshotsPersisted: 5,
     });
     expect(text).not.toContain("test-cron-secret");
+  });
+
+  it("returns the actual fencing generation for a partial sync", async () => {
+    refreshScheduleDetailed.mockResolvedValue({
+      schedule: schedule(),
+      sync: {
+        status: "partial",
+        lockAcquired: true,
+        generation: 42,
+        gamesAttempted: 5,
+        gamesSucceeded: 4,
+        gamesFailed: 1,
+        snapshotsPersisted: 4,
+        sourceFetchedAt: "2026-08-30T00:00:00.000Z",
+        lastSuccessfulSyncAt: "2026-08-30T00:00:00.000Z",
+        errors: [{ game: "cs2", code: "UPSTREAM", httpStatus: 500 }],
+      },
+    });
+    const response = await GET(new Request("https://example.com/api/cron/sync", {
+      headers: { authorization: "Bearer test-cron-secret" },
+    }));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "partial",
+      generation: 42,
+      gamesSucceeded: 4,
+      gamesFailed: 1,
+    });
   });
 
   it("returns a non-success HTTP status for a logical total failure", async () => {
@@ -73,6 +103,7 @@ describe("protected schedule sync route", () => {
       sync: {
         status: "failed",
         lockAcquired: true,
+        generation: 43,
         gamesAttempted: 5,
         gamesSucceeded: 0,
         gamesFailed: 5,
@@ -86,7 +117,7 @@ describe("protected schedule sync route", () => {
       headers: { authorization: "Bearer test-cron-secret" },
     }));
     expect(response.status).toBe(503);
-    await expect(response.json()).resolves.toMatchObject({ ok: false, status: "failed" });
+    await expect(response.json()).resolves.toMatchObject({ ok: false, status: "failed", generation: 43 });
   });
 
   it("reports lock contention as busy rather than a successful refresh", async () => {
@@ -95,6 +126,7 @@ describe("protected schedule sync route", () => {
       sync: {
         status: "busy",
         lockAcquired: false,
+        generation: null,
         gamesAttempted: 0,
         gamesSucceeded: 0,
         gamesFailed: 0,
@@ -108,6 +140,11 @@ describe("protected schedule sync route", () => {
       headers: { authorization: "Bearer test-cron-secret" },
     }));
     expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toMatchObject({ ok: false, status: "busy", lockAcquired: false });
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      status: "busy",
+      lockAcquired: false,
+      generation: null,
+    });
   });
 });
