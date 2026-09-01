@@ -2,13 +2,15 @@ import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { PandaScoreGameSyncState } from "./cache";
-import { buildScheduleFromParts, recoverScheduleParts } from "./index";
+import { buildScheduleFromParts, persistPandaScoreSyncBatch, recoverScheduleParts } from "./index";
 import {
+  allocatePandaScoreSyncGeneration,
   readPersistentPandaScoreSnapshots,
+  readPersistentPandaScoreSnapshotGenerations,
   recordPersistentPandaScoreFailure,
   writePersistentPandaScoreSnapshot,
 } from "./persistent-snapshots";
-import type { PandaGameSnapshot } from "./pandascore";
+import type { PandaGameSnapshot, PandaScoreSyncBatch } from "./pandascore";
 import type { EsportsMatch, GameCoverage, PandaGameKey } from "./types";
 import { pandaGameKeys } from "./types";
 
@@ -88,6 +90,12 @@ function state(game: PandaGameKey, fetchedAt: string): PandaScoreGameSyncState {
   };
 }
 
+async function nextGeneration(): Promise<number> {
+  const generation = await allocatePandaScoreSyncGeneration();
+  if (generation === null) throw new Error("failed to allocate isolated test sync generation");
+  return generation;
+}
+
 describe.skipIf(!enabled)("persistent PandaScore snapshots (isolated PostgreSQL)", () => {
   let cleanup: ReturnType<typeof postgres>;
 
@@ -108,24 +116,48 @@ describe.skipIf(!enabled)("persistent PandaScore snapshots (isolated PostgreSQL)
 
   it("round-trips a normalized JSONB snapshot and sync metadata", async () => {
     const value = snapshot("lol", "2026-08-30T00:00:00.000Z", randomUUID());
-    await expect(writePersistentPandaScoreSnapshot(value, state("lol", value.fetchedAt))).resolves.toBe("written");
+    const generation = await nextGeneration();
+    await expect(writePersistentPandaScoreSnapshot(value, state("lol", value.fetchedAt), generation)).resolves.toBe("written");
     const stored = await readPersistentPandaScoreSnapshots(["lol"]);
     expect(stored.snapshots.lol?.matches).toHaveLength(1);
     expect(stored.states.lol?.lastSuccessfulSyncAt).toBe(value.fetchedAt);
+    expect(stored.snapshots.lol?.syncGeneration).toBe(generation);
   });
 
-  it("prevents an older synchronization from overwriting a newer snapshot", async () => {
-    const newer = snapshot("cs2", "2026-08-30T02:00:00.000Z", "newer");
-    const older = snapshot("cs2", "2026-08-30T01:00:00.000Z", "older");
-    await expect(writePersistentPandaScoreSnapshot(newer, state("cs2", newer.fetchedAt))).resolves.toBe("written");
-    await expect(writePersistentPandaScoreSnapshot(older, state("cs2", older.fetchedAt))).resolves.toBe("superseded");
+  it("prevents a sync that started first but completed last from overwriting a newer generation", async () => {
+    const olderGeneration = await nextGeneration();
+    const newerGeneration = await nextGeneration();
+    expect(newerGeneration).toBeGreaterThan(olderGeneration);
+
+    const newer = snapshot("cs2", new Date().toISOString(), "newer");
+    await expect(writePersistentPandaScoreSnapshot(
+      newer,
+      state("cs2", newer.fetchedAt),
+      newerGeneration,
+    )).resolves.toBe("written");
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const olderButLate = snapshot("cs2", new Date().toISOString(), "older-but-late");
+    expect(Date.parse(olderButLate.fetchedAt)).toBeGreaterThan(Date.parse(newer.fetchedAt));
+    await expect(writePersistentPandaScoreSnapshot(
+      olderButLate,
+      state("cs2", olderButLate.fetchedAt),
+      olderGeneration,
+    )).resolves.toBe("superseded");
     const stored = await readPersistentPandaScoreSnapshots(["cs2"]);
     expect(stored.snapshots.cs2?.matches[0].providerMatchId).toBe("newer");
+    expect(stored.snapshots.cs2?.syncGeneration).toBe(newerGeneration);
   });
 
   it("does not let an older failure overwrite a newer successful state", async () => {
+    const olderFailureGeneration = await nextGeneration();
+    const newerSuccessGeneration = await nextGeneration();
     const newer = snapshot("valorant", "2026-08-30T02:00:00.000Z", "newer");
-    await writePersistentPandaScoreSnapshot(newer, state("valorant", newer.fetchedAt));
+    await writePersistentPandaScoreSnapshot(
+      newer,
+      state("valorant", newer.fetchedAt),
+      newerSuccessGeneration,
+    );
     const olderFailure: PandaScoreGameSyncState = {
       game: "valorant",
       lastAttemptAt: "2026-08-30T01:00:00.000Z",
@@ -134,14 +166,21 @@ describe.skipIf(!enabled)("persistent PandaScore snapshots (isolated PostgreSQL)
       lastErrorCode: "TIMEOUT",
       lastHttpStatus: null,
     };
-    await expect(recordPersistentPandaScoreFailure(olderFailure)).resolves.toBe(false);
+    await expect(recordPersistentPandaScoreFailure(olderFailure, olderFailureGeneration)).resolves.toBe(false);
     const stored = await readPersistentPandaScoreSnapshots(["valorant"]);
     expect(stored.states.valorant?.lastErrorCode).toBeNull();
   });
 
   it("does not let an older failure overwrite newer failure metadata", async () => {
+    const initialGeneration = await nextGeneration();
+    const olderFailureGeneration = await nextGeneration();
+    const newerFailureGeneration = await nextGeneration();
     const value = snapshot("honor-of-kings", "2026-08-30T00:00:00.000Z", "old");
-    await writePersistentPandaScoreSnapshot(value, state("honor-of-kings", value.fetchedAt));
+    await writePersistentPandaScoreSnapshot(
+      value,
+      state("honor-of-kings", value.fetchedAt),
+      initialGeneration,
+    );
     const newerFailure: PandaScoreGameSyncState = {
       game: "honor-of-kings",
       lastAttemptAt: "2026-08-30T02:00:00.000Z",
@@ -157,15 +196,17 @@ describe.skipIf(!enabled)("persistent PandaScore snapshots (isolated PostgreSQL)
       lastErrorCode: "TIMEOUT",
       lastHttpStatus: null,
     };
-    await expect(recordPersistentPandaScoreFailure(newerFailure)).resolves.toBe(true);
-    await expect(recordPersistentPandaScoreFailure(olderFailure)).resolves.toBe(false);
+    await expect(recordPersistentPandaScoreFailure(newerFailure, newerFailureGeneration)).resolves.toBe(true);
+    await expect(recordPersistentPandaScoreFailure(olderFailure, olderFailureGeneration)).resolves.toBe(false);
     const stored = await readPersistentPandaScoreSnapshots(["honor-of-kings"]);
     expect(stored.states["honor-of-kings"]?.lastErrorCode).toBe("RATE_LIMIT");
   });
 
   it("preserves the last-known-good payload while recording a newer provider failure", async () => {
+    const initialGeneration = await nextGeneration();
+    const failureGeneration = await nextGeneration();
     const old = snapshot("dota2", "2026-08-30T00:00:00.000Z", "old");
-    await writePersistentPandaScoreSnapshot(old, state("dota2", old.fetchedAt));
+    await writePersistentPandaScoreSnapshot(old, state("dota2", old.fetchedAt), initialGeneration);
     const failure: PandaScoreGameSyncState = {
       game: "dota2",
       lastAttemptAt: "2026-08-30T01:00:00.000Z",
@@ -174,19 +215,21 @@ describe.skipIf(!enabled)("persistent PandaScore snapshots (isolated PostgreSQL)
       lastErrorCode: "UPSTREAM",
       lastHttpStatus: 500,
     };
-    await expect(recordPersistentPandaScoreFailure(failure)).resolves.toBe(true);
+    await expect(recordPersistentPandaScoreFailure(failure, failureGeneration)).resolves.toBe(true);
     const stored = await readPersistentPandaScoreSnapshots(["dota2"]);
     expect(stored.snapshots.dota2?.matches[0].providerMatchId).toBe("old");
     expect(stored.states.dota2?.lastErrorCode).toBe("UPSTREAM");
   });
 
   it("recovers the Production incident shape after complete Runtime Cache eviction", async () => {
+    const generation = await nextGeneration();
     for (const [index, game] of pandaGameKeys.entries()) {
       const value = snapshot(game, "2026-08-30T00:00:00.000Z", `${game}-${index}`);
-      await expect(writePersistentPandaScoreSnapshot(value, state(game, value.fetchedAt))).resolves.toBe("written");
+      await expect(writePersistentPandaScoreSnapshot(value, state(game, value.fetchedAt), generation)).resolves.toBe("written");
     }
     const cacheBackfills: PandaGameKey[] = [];
     const recovered = await recoverScheduleParts({}, {}, {
+      readGenerations: readPersistentPandaScoreSnapshotGenerations,
       readPersistent: readPersistentPandaScoreSnapshots,
       writeRuntimeSnapshot: async (value) => { cacheBackfills.push(value.game); return true; },
       writeRuntimeState: async () => true,
@@ -202,19 +245,98 @@ describe.skipIf(!enabled)("persistent PandaScore snapshots (isolated PostgreSQL)
     expect(payload.coverage.totals.finalPandaScore).toBe(5);
   });
 
+  it("replaces old Runtime Cache data when a newer persistent generation survived a cache write failure", async () => {
+    const oldGeneration = await nextGeneration();
+    const newGeneration = await nextGeneration();
+    const oldFetchedAt = "2026-08-30T00:00:00.000Z";
+    const newFetchedAt = "2026-08-30T01:00:00.000Z";
+    const runtimeSnapshots = {} as Partial<Record<PandaGameKey, PandaGameSnapshot>>;
+    const runtimeStates = {} as Partial<Record<PandaGameKey, PandaScoreGameSyncState>>;
+    const newSnapshots = {} as Partial<Record<PandaGameKey, PandaGameSnapshot>>;
+
+    for (const game of pandaGameKeys) {
+      const oldValue = snapshot(game, oldFetchedAt, `${game}-old`);
+      await expect(writePersistentPandaScoreSnapshot(
+        oldValue,
+        state(game, oldFetchedAt),
+        oldGeneration,
+      )).resolves.toBe("written");
+      runtimeSnapshots[game] = { ...oldValue, syncGeneration: oldGeneration };
+      runtimeStates[game] = state(game, oldFetchedAt);
+      newSnapshots[game] = snapshot(game, newFetchedAt, `${game}-new`);
+    }
+
+    const batch: PandaScoreSyncBatch = {
+      snapshots: newSnapshots,
+      updatedGames: [...pandaGameKeys],
+      failures: {},
+    };
+    const persisted = await persistPandaScoreSyncBatch(
+      batch,
+      runtimeStates,
+      new Date("2026-08-30T01:00:01.000Z"),
+      newGeneration,
+      {
+        writePersistent: writePersistentPandaScoreSnapshot,
+        recordFailure: recordPersistentPandaScoreFailure,
+        writeRuntimeSnapshot: async () => false,
+        writeRuntimeState: async (value) => {
+          runtimeStates[value.game] = value;
+          return true;
+        },
+      },
+    );
+    expect(persisted.snapshotsPersisted).toBe(5);
+    expect(persisted.errors.every((error) => error.code === "CACHE_WRITE")).toBe(true);
+
+    const cacheBackfills: PandaGameKey[] = [];
+    const recovered = await recoverScheduleParts(runtimeSnapshots, runtimeStates, {
+      readGenerations: readPersistentPandaScoreSnapshotGenerations,
+      readPersistent: readPersistentPandaScoreSnapshots,
+      writeRuntimeSnapshot: async (value) => {
+        cacheBackfills.push(value.game);
+        return true;
+      },
+      writeRuntimeState: async () => true,
+    });
+    expect(recovered.recoveredGames).toHaveLength(5);
+    expect(cacheBackfills).toHaveLength(5);
+    for (const game of pandaGameKeys) {
+      expect(recovered.snapshots[game]?.matches[0].providerMatchId).toBe(`${game}-new`);
+      expect(recovered.snapshots[game]?.syncGeneration).toBe(newGeneration);
+    }
+
+    const payload = await buildScheduleFromParts(
+      { ...recovered, refreshInProgress: false },
+      "configured-token",
+      new Date("2026-08-30T01:00:02.000Z"),
+    );
+    expect(payload.coverage.totals.finalPandaScore).toBe(5);
+    expect(payload.matches
+      .filter((value) => value.provider === "pandascore")
+      .every((value) => value.providerMatchId.endsWith("-new"))).toBe(true);
+  });
+
   it("rejects a malformed replacement without damaging the good snapshot", async () => {
+    const goodGeneration = await nextGeneration();
+    const malformedGeneration = await nextGeneration();
     const good = snapshot("lol", "2026-08-30T00:00:00.000Z", "good");
-    await writePersistentPandaScoreSnapshot(good, state("lol", good.fetchedAt));
+    await writePersistentPandaScoreSnapshot(good, state("lol", good.fetchedAt), goodGeneration);
     const malformed = { ...good, fetchedAt: "not-a-date" } as PandaGameSnapshot;
-    await expect(writePersistentPandaScoreSnapshot(malformed, state("lol", good.fetchedAt)))
+    await expect(writePersistentPandaScoreSnapshot(
+      malformed,
+      state("lol", good.fetchedAt),
+      malformedGeneration,
+    ))
       .resolves.toBe("unavailable");
     const stored = await readPersistentPandaScoreSnapshots(["lol"]);
     expect(stored.snapshots.lol?.matches[0].providerMatchId).toBe("good");
   });
 
   it("fails closed when a stored JSONB payload is malformed", async () => {
+    const generation = await nextGeneration();
     const good = snapshot("lol", "2026-08-30T00:00:00.000Z", "good");
-    await writePersistentPandaScoreSnapshot(good, state("lol", good.fetchedAt));
+    await writePersistentPandaScoreSnapshot(good, state("lol", good.fetchedAt), generation);
     await cleanup`
       update pandascore_game_snapshots
       set snapshot_payload = ${cleanup.json({ game: "lol", fetchedAt: good.fetchedAt })}

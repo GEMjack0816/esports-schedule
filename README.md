@@ -24,9 +24,9 @@ Vercel Cron（每日保底） ──────┼─> /api/cron/sync
 
 页面和 `/api/matches` 不等待 PandaScore。发现快照过期时，Next.js `after()` 会把刷新登记到当前 Vercel Function 的 `waitUntil` 生命周期，然后立即返回上一次成功快照。外部定时任务仍是保持低流量时段新鲜度的主要机制，访问触发只是补救；它不能替代持久化快照或提供严格调度保证。
 
-所有函数固定在 `iad1`。实例内 single-flight 复用同一个 Promise，Runtime Cache 租约负责同一区域实例间互斥；租约为 6 分钟，长于函数 5 分钟上限。Runtime Cache 没有原子 CAS，因此它不是跨区域数据库锁，本项目通过单区域部署、GitHub Actions `concurrency` 和租约确认共同避免重复同步。持久快照写入使用 `sourceFetchedAt` 条件更新，即使旧同步晚于新同步结束也不能覆盖新数据；如果未来改成多区域，仍应把刷新租约迁移到支持原子互斥的数据库或 Redis。
+所有函数固定在 `iad1`。实例内 single-flight 复用同一个 Promise，Runtime Cache 租约负责同一区域实例间互斥；租约为 6 分钟，长于函数 5 分钟上限。Runtime Cache 没有原子 CAS，因此它不是跨区域数据库锁，本项目通过单区域部署、GitHub Actions `concurrency` 和租约确认共同避免重复同步。每次同步在请求上游前从 PostgreSQL sequence 取得单调递增的 fencing generation，持久快照只接受更大的 generation；`sourceFetchedAt` 仅表示实际抓取时间，不参与同步先后排序。如果未来改成多区域，仍应把刷新租约迁移到支持原子互斥的数据库或 Redis。
 
-`pandascore_game_snapshots` 每个游戏保存一行规范化 JSONB 快照、源时间、成功/尝试/错误元数据和 generation。PostgreSQL JSONB 会通过 TOAST 管理较大的单游戏值；五行主键读取避免逐比赛查询和写放大。同步失败、持久写失败或 API 返回异常空列表时不会清空该游戏最后成功快照。五个游戏使用 `Promise.allSettled()` 隔离失败。人工王者荣耀数据和 `manual-matches.json` 在 API 数据之后合并，不会被同步删除。
+`pandascore_game_snapshots` 每个游戏保存一行规范化 JSONB 快照、源时间、成功/尝试/错误元数据和 fencing generation。读取 Runtime Cache 时会先用五行轻量 generation 查询核对版本；只有缓存缺失或版本不一致才读取完整 JSONB 并回填缓存。PostgreSQL JSONB 会通过 TOAST 管理较大的单游戏值；五行主键读取避免逐比赛查询和写放大。同步失败、持久写失败或 API 返回异常空列表时不会清空该游戏最后成功快照。五个游戏使用 `Promise.allSettled()` 隔离失败。人工王者荣耀数据和 `manual-matches.json` 在 API 数据之后合并，不会被同步删除。
 
 `/api/cron/sync` 返回 `lockAcquired`、`gamesAttempted`、`gamesSucceeded`、`gamesFailed`、`snapshotsPersisted`、时间和安全错误代码。GitHub Actions 使用 `scripts/validate-sync-response.mjs` 解析 JSON；HTTP 2xx 但未取得有效更新不再被判定为同步成功。锁竞争明确报告为 `busy`，不冒充一次刷新。
 

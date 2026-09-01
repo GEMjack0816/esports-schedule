@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray, lt, lte } from "drizzle-orm";
+import { and, eq, inArray, lt, lte, sql } from "drizzle-orm";
 import { getDatabase, isDatabaseConfigured, safeDatabaseErrorCode } from "@/db";
 import { pandaScoreGameSnapshots } from "@/db/schema";
 import type { PandaScoreGameSyncState } from "./cache";
@@ -16,6 +16,12 @@ export type PersistentSnapshotRead = {
   errorCode: string | null;
 };
 
+export type PersistentSnapshotGenerationRead = {
+  generations: Partial<Record<PandaGameKey, number>>;
+  databaseAvailable: boolean;
+  errorCode: string | null;
+};
+
 export type PersistentSnapshotWriteResult = "written" | "superseded" | "unavailable";
 
 function stateFromRow(row: typeof pandaScoreGameSnapshots.$inferSelect): PandaScoreGameSyncState {
@@ -27,6 +33,52 @@ function stateFromRow(row: typeof pandaScoreGameSnapshots.$inferSelect): PandaSc
     lastErrorCode: row.lastErrorCode,
     lastHttpStatus: row.lastHttpStatus,
   };
+}
+
+function isValidGeneration(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+export async function allocatePandaScoreSyncGeneration(): Promise<number | null> {
+  if (!isDatabaseConfigured()) return null;
+  try {
+    const rows = await getDatabase().execute<{ generation: string | number }>(
+      sql`select nextval('pandascore_sync_generation_seq') as generation`,
+    );
+    const generation = Number(rows[0]?.generation);
+    return isValidGeneration(generation) ? generation : null;
+  } catch (error) {
+    console.warn(`[schedule-db] sync generation allocation failed (${safeDatabaseErrorCode(error)})`);
+    return null;
+  }
+}
+
+export async function readPersistentPandaScoreSnapshotGenerations(
+  games: readonly PandaGameKey[] = pandaGameKeys,
+): Promise<PersistentSnapshotGenerationRead> {
+  if (!isDatabaseConfigured() || games.length === 0) {
+    return { generations: {}, databaseAvailable: false, errorCode: "NOT_CONFIGURED" };
+  }
+  try {
+    const rows = await getDatabase()
+      .select({
+        game: pandaScoreGameSnapshots.game,
+        fencingGeneration: pandaScoreGameSnapshots.fencingGeneration,
+      })
+      .from(pandaScoreGameSnapshots)
+      .where(inArray(pandaScoreGameSnapshots.game, [...games]));
+    const generations: Partial<Record<PandaGameKey, number>> = {};
+    for (const row of rows) {
+      if (!pandaGameKeys.includes(row.game as PandaGameKey)) continue;
+      if (!isValidGeneration(row.fencingGeneration)) continue;
+      generations[row.game as PandaGameKey] = row.fencingGeneration;
+    }
+    return { generations, databaseAvailable: true, errorCode: null };
+  } catch (error) {
+    const errorCode = safeDatabaseErrorCode(error);
+    console.warn(`[schedule-db] persistent snapshot generations unavailable (${errorCode})`);
+    return { generations: {}, databaseAvailable: false, errorCode };
+  }
 }
 
 export async function readPersistentPandaScoreSnapshots(
@@ -47,11 +99,15 @@ export async function readPersistentPandaScoreSnapshots(
       if (!pandaGameKeys.includes(row.game as PandaGameKey)) continue;
       const game = row.game as PandaGameKey;
       const snapshot = normalizePandaGameSnapshot(row.snapshotPayload, game);
-      if (!snapshot || snapshot.fetchedAt !== row.sourceFetchedAt.toISOString()) {
+      if (
+        !snapshot
+        || snapshot.fetchedAt !== row.sourceFetchedAt.toISOString()
+        || !isValidGeneration(row.fencingGeneration)
+      ) {
         console.warn(`[schedule-db] ${game} persistent snapshot is invalid`);
         continue;
       }
-      snapshots[game] = snapshot;
+      snapshots[game] = { ...snapshot, syncGeneration: row.fencingGeneration };
       states[game] = stateFromRow(row);
     }
     return { snapshots, states, databaseAvailable: true, errorCode: null };
@@ -65,44 +121,49 @@ export async function readPersistentPandaScoreSnapshots(
 export async function writePersistentPandaScoreSnapshot(
   snapshot: PandaGameSnapshot,
   state: PandaScoreGameSyncState,
-  generation = crypto.randomUUID(),
+  fencingGeneration: number,
+  writeGenerationId = crypto.randomUUID(),
 ): Promise<PersistentSnapshotWriteResult> {
   if (!isDatabaseConfigured()) return "unavailable";
+  if (!isValidGeneration(fencingGeneration)) return "unavailable";
   const normalized = normalizePandaGameSnapshot(snapshot, snapshot.game);
   if (!normalized) return "unavailable";
+  const versionedSnapshot = { ...normalized, syncGeneration: fencingGeneration };
 
-  const sourceFetchedAt = new Date(normalized.fetchedAt);
-  const lastSuccessfulSyncAt = new Date(state.lastSuccessfulSyncAt ?? normalized.fetchedAt);
+  const sourceFetchedAt = new Date(versionedSnapshot.fetchedAt);
+  const lastSuccessfulSyncAt = new Date(state.lastSuccessfulSyncAt ?? versionedSnapshot.fetchedAt);
   const lastAttemptAt = new Date(state.lastAttemptAt);
   try {
     const written = await getDatabase()
       .insert(pandaScoreGameSnapshots)
       .values({
-        game: normalized.game,
-        snapshotPayload: normalized,
+        game: versionedSnapshot.game,
+        snapshotPayload: versionedSnapshot,
         sourceFetchedAt,
         lastSuccessfulSyncAt,
         lastAttemptAt,
         lastErrorAt: state.lastErrorAt ? new Date(state.lastErrorAt) : null,
         lastErrorCode: state.lastErrorCode,
         lastHttpStatus: state.lastHttpStatus,
-        generation,
+        generation: writeGenerationId,
+        fencingGeneration,
         updatedAt: new Date(),
       })
       .onConflictDoUpdate({
         target: pandaScoreGameSnapshots.game,
         set: {
-          snapshotPayload: normalized,
+          snapshotPayload: versionedSnapshot,
           sourceFetchedAt,
           lastSuccessfulSyncAt,
           lastAttemptAt,
           lastErrorAt: state.lastErrorAt ? new Date(state.lastErrorAt) : null,
           lastErrorCode: state.lastErrorCode,
           lastHttpStatus: state.lastHttpStatus,
-          generation,
+          generation: writeGenerationId,
+          fencingGeneration,
           updatedAt: new Date(),
         },
-        setWhere: lt(pandaScoreGameSnapshots.sourceFetchedAt, sourceFetchedAt),
+        setWhere: lt(pandaScoreGameSnapshots.fencingGeneration, fencingGeneration),
       })
       .returning({ game: pandaScoreGameSnapshots.game });
     return written.length === 1 ? "written" : "superseded";
@@ -114,8 +175,10 @@ export async function writePersistentPandaScoreSnapshot(
 
 export async function recordPersistentPandaScoreFailure(
   state: PandaScoreGameSyncState,
+  fencingGeneration: number,
 ): Promise<boolean> {
   if (!isDatabaseConfigured()) return false;
+  if (!isValidGeneration(fencingGeneration)) return false;
   const attemptAt = new Date(state.lastAttemptAt);
   try {
     const updated = await getDatabase()
@@ -125,10 +188,12 @@ export async function recordPersistentPandaScoreFailure(
         lastErrorAt: state.lastErrorAt ? new Date(state.lastErrorAt) : attemptAt,
         lastErrorCode: state.lastErrorCode,
         lastHttpStatus: state.lastHttpStatus,
+        fencingGeneration,
         updatedAt: new Date(),
       })
       .where(and(
         eq(pandaScoreGameSnapshots.game, state.game),
+        lt(pandaScoreGameSnapshots.fencingGeneration, fencingGeneration),
         lte(pandaScoreGameSnapshots.lastSuccessfulSyncAt, attemptAt),
         lte(pandaScoreGameSnapshots.lastAttemptAt, attemptAt),
       ))

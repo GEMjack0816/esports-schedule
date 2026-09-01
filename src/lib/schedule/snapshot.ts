@@ -39,6 +39,10 @@ export function normalizePandaGameSnapshot(
 ): PandaGameSnapshot | null {
   if (!value || typeof value !== "object") return null;
   const stored = value as Partial<PandaGameSnapshot>;
+  const generationValid = stored.syncGeneration === undefined
+    || (typeof stored.syncGeneration === "number"
+      && Number.isSafeInteger(stored.syncGeneration)
+      && stored.syncGeneration > 0);
   if (
     stored.game !== game
     || !Array.isArray(stored.matches)
@@ -47,6 +51,7 @@ export function normalizePandaGameSnapshot(
     || !stored.coverage
     || typeof stored.coverage !== "object"
     || !stored.coverage.endpoints
+    || !generationValid
   ) {
     return null;
   }

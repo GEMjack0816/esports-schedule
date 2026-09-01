@@ -32,11 +32,32 @@ try {
   `;
   const present = new Set(rows.map((row) => row.table_name));
   const missing = requiredTables.filter((table) => !present.has(table));
+  const [fencingColumn] = await client`
+    select data_type, is_nullable
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'pandascore_game_snapshots'
+      and column_name = 'fencing_generation'
+  `;
+  const [generationSequence] = await client`
+    select 1 as present
+    from pg_class
+    join pg_namespace on pg_namespace.oid = pg_class.relnamespace
+    where pg_namespace.nspname = 'public'
+      and pg_class.relkind = 'S'
+      and pg_class.relname = 'pandascore_sync_generation_seq'
+  `;
   if (missing.length > 0) {
     console.error(`FAIL missing required tables: ${missing.join(", ")}`);
     process.exitCode = 1;
+  } else if (fencingColumn?.data_type !== "bigint" || fencingColumn?.is_nullable !== "NO") {
+    console.error("FAIL pandascore_game_snapshots.fencing_generation is missing or invalid.");
+    process.exitCode = 1;
+  } else if (!generationSequence) {
+    console.error("FAIL pandascore_sync_generation_seq is missing.");
+    process.exitCode = 1;
   } else {
-    console.log(`PASS database reachable; ${requiredTables.length} required tables found.`);
+    console.log(`PASS database reachable; ${requiredTables.length} required tables and sync fencing schema found.`);
   }
 } catch {
   console.error("FAIL database connection or schema check failed.");

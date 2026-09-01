@@ -1,0 +1,2 @@
+CREATE SEQUENCE "public"."pandascore_sync_generation_seq" INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START WITH 1 CACHE 1;--> statement-breakpoint
+ALTER TABLE "pandascore_game_snapshots" ADD COLUMN "fencing_generation" bigint DEFAULT nextval('pandascore_sync_generation_seq') NOT NULL;

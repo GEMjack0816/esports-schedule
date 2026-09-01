@@ -9,11 +9,17 @@ import {
 } from "./cache";
 import type { PandaScoreGameSyncState } from "./cache";
 import {
+  allocatePandaScoreSyncGeneration,
   readPersistentPandaScoreSnapshots,
+  readPersistentPandaScoreSnapshotGenerations,
   recordPersistentPandaScoreFailure,
   writePersistentPandaScoreSnapshot,
 } from "./persistent-snapshots";
-import type { PersistentSnapshotRead, PersistentSnapshotWriteResult } from "./persistent-snapshots";
+import type {
+  PersistentSnapshotGenerationRead,
+  PersistentSnapshotRead,
+  PersistentSnapshotWriteResult,
+} from "./persistent-snapshots";
 import { applyManualData } from "./manual";
 import {
   aggregatePandaScoreSnapshots,
@@ -71,6 +77,7 @@ type RefreshResult = {
 
 const refreshSingleFlight = createSingleFlight<RefreshResult>();
 const persistentRecoverySingleFlight = createSingleFlight<PersistentSnapshotRead>();
+const persistentGenerationSingleFlight = createSingleFlight<PersistentSnapshotGenerationRead>();
 
 function emptyEndpointCoverage(): EndpointCoverage {
   return {
@@ -413,8 +420,9 @@ type SnapshotPersistenceEffects = {
   writePersistent: (
     snapshot: PandaGameSnapshot,
     state: PandaScoreGameSyncState,
+    fencingGeneration: number,
   ) => Promise<PersistentSnapshotWriteResult>;
-  recordFailure: (state: PandaScoreGameSyncState) => Promise<boolean>;
+  recordFailure: (state: PandaScoreGameSyncState, fencingGeneration: number) => Promise<boolean>;
   writeRuntimeSnapshot: (snapshot: PandaGameSnapshot) => Promise<boolean>;
   writeRuntimeState: (state: PandaScoreGameSyncState) => Promise<boolean>;
 };
@@ -430,6 +438,7 @@ export async function persistPandaScoreSyncBatch(
   batch: PandaScoreSyncBatch,
   attemptedStates: SyncStateMap,
   now: Date,
+  fencingGeneration: number,
   effects: SnapshotPersistenceEffects = defaultSnapshotPersistenceEffects,
 ): Promise<PersistBatchResult> {
   const nextStates: SyncStateMap = { ...attemptedStates };
@@ -437,11 +446,12 @@ export async function persistPandaScoreSyncBatch(
     const snapshot = batch.snapshots[game];
     const failure = batch.failures[game];
     if (batch.updatedGames.includes(game) && snapshot) {
-      const state = stateAfterSuccess(game, snapshot, now);
-      const persistentResult = await effects.writePersistent(snapshot, state);
+      const versionedSnapshot = { ...snapshot, syncGeneration: fencingGeneration };
+      const state = stateAfterSuccess(game, versionedSnapshot, now);
+      const persistentResult = await effects.writePersistent(versionedSnapshot, state, fencingGeneration);
       if (persistentResult === "written") {
         nextStates[game] = state;
-        const runtimeSnapshotWritten = await effects.writeRuntimeSnapshot(snapshot);
+        const runtimeSnapshotWritten = await effects.writeRuntimeSnapshot(versionedSnapshot);
         await effects.writeRuntimeState(state);
         return {
           succeeded: 1,
@@ -480,7 +490,7 @@ export async function persistPandaScoreSyncBatch(
       const state = stateAfterFailure(game, attemptedStates[game], snapshot, failure, now);
       nextStates[game] = state;
       await Promise.allSettled([
-        effects.recordFailure(state),
+        effects.recordFailure(state, fencingGeneration),
         effects.writeRuntimeState(state),
       ]);
       console.error(`[schedule] ${game} sync failed (${failure.code}${failure.status ? ` HTTP ${failure.status}` : ""})`);
@@ -511,6 +521,7 @@ async function persistUnexpectedFailure(
   snapshots: SnapshotMap,
   states: SyncStateMap,
   now: Date,
+  fencingGeneration: number,
 ): Promise<SyncStateMap> {
   const nextStates: SyncStateMap = { ...states };
   await Promise.allSettled(pandaGameKeys.map(async (game) => {
@@ -523,7 +534,7 @@ async function persistUnexpectedFailure(
     );
     nextStates[game] = state;
     await Promise.allSettled([
-      recordPersistentPandaScoreFailure(state),
+      recordPersistentPandaScoreFailure(state, fencingGeneration),
       writePandaScoreGameSyncState(state),
     ]);
   }));
@@ -559,10 +570,29 @@ async function synchronize(
     }
 
     console.info("[schedule] regional refresh lock acquired");
+    const fencingGeneration = await allocatePandaScoreSyncGeneration();
+    if (fencingGeneration === null) {
+      await releasePandaScoreSyncLock(lockOwner);
+      return {
+        batch: null,
+        states: previousStates,
+        summary: {
+          status: "failed",
+          lockAcquired: true,
+          gamesAttempted: 0,
+          gamesSucceeded: 0,
+          gamesFailed: 0,
+          snapshotsPersisted: 0,
+          sourceFetchedAt: minDate(pandaGameKeys.map((game) => snapshots[game]?.fetchedAt)),
+          lastSuccessfulSyncAt: maxDate(Object.values(previousStates).map((state) => state?.lastSuccessfulSyncAt)),
+          errors: [{ game: null, code: "PERSISTENT_GENERATION", httpStatus: null }],
+        },
+      };
+    }
     let states = await markSyncAttemptStarted(snapshots, previousStates, now);
     try {
       const batch = await syncPandaScoreGames(token, snapshots, { now });
-      const persisted = await persistPandaScoreSyncBatch(batch, states, now);
+      const persisted = await persistPandaScoreSyncBatch(batch, states, now, fencingGeneration);
       states = persisted.states;
       const status = persisted.gamesSucceeded === pandaGameKeys.length && persisted.errors.length === 0
         ? "success"
@@ -585,7 +615,7 @@ async function synchronize(
         },
       };
     } catch {
-      states = await persistUnexpectedFailure(snapshots, states, now);
+      states = await persistUnexpectedFailure(snapshots, states, now, fencingGeneration);
       return {
         batch: null,
         states,
@@ -614,12 +644,16 @@ function failureWarning(batch: PandaScoreSyncBatch): string | undefined {
 }
 
 type ScheduleRecoveryEffects = {
+  readGenerations: (games: readonly PandaGameKey[]) => Promise<PersistentSnapshotGenerationRead>;
   readPersistent: (games: readonly PandaGameKey[]) => Promise<PersistentSnapshotRead>;
   writeRuntimeSnapshot: (snapshot: PandaGameSnapshot) => Promise<boolean>;
   writeRuntimeState: (state: PandaScoreGameSyncState) => Promise<boolean>;
 };
 
 const defaultScheduleRecoveryEffects: ScheduleRecoveryEffects = {
+  readGenerations: (games) => persistentGenerationSingleFlight.run(
+    () => readPersistentPandaScoreSnapshotGenerations(games),
+  ),
   readPersistent: (games) => persistentRecoverySingleFlight.run(
     () => readPersistentPandaScoreSnapshots(games),
   ),
@@ -638,23 +672,33 @@ export async function recoverScheduleParts(
   for (const game of pandaGameKeys) {
     if (runtimeSnapshots[game]) snapshotSources[game] = "runtime-cache";
   }
-  const missingGames = pandaGameKeys.filter((game) => !snapshots[game] || !states[game]);
-  if (missingGames.length === 0) {
+  const persistentGenerations = await effects.readGenerations(pandaGameKeys);
+  const recoveryGames = pandaGameKeys.filter((game) => {
+    const persistentGeneration = persistentGenerations.generations[game];
+    const runtimeGeneration = snapshots[game]?.syncGeneration;
+    return !snapshots[game]
+      || !states[game]
+      || (persistentGeneration !== undefined && runtimeGeneration !== persistentGeneration);
+  });
+  if (recoveryGames.length === 0) {
     return { snapshots, states, snapshotSources, recoveredGames: [] as PandaGameKey[] };
   }
 
-  const persistent = await effects.readPersistent(missingGames);
+  const persistent = await effects.readPersistent(recoveryGames);
   const recoveredGames: PandaGameKey[] = [];
-  await Promise.allSettled(missingGames.map(async (game) => {
+  await Promise.allSettled(recoveryGames.map(async (game) => {
     const persistentSnapshot = persistent.snapshots[game];
     const persistentState = persistent.states[game];
-    if (!snapshots[game] && persistentSnapshot) {
+    const persistentGeneration = persistentGenerations.generations[game];
+    const generationMismatch = persistentGeneration !== undefined
+      && snapshots[game]?.syncGeneration !== persistentGeneration;
+    if ((!snapshots[game] || generationMismatch) && persistentSnapshot) {
       snapshots[game] = persistentSnapshot;
       snapshotSources[game] = "persistent-snapshot";
       recoveredGames.push(game);
       await effects.writeRuntimeSnapshot(persistentSnapshot);
     }
-    if (!states[game] && persistentState) {
+    if ((!states[game] || generationMismatch) && persistentState) {
       states[game] = persistentState;
       await effects.writeRuntimeState(persistentState);
     }

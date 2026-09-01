@@ -87,6 +87,8 @@ export type PandaGameSnapshot = {
   game: PandaGameKey;
   matches: EsportsMatch[];
   fetchedAt: string;
+  /** Monotonic PostgreSQL-issued sync generation used only for persistence fencing. */
+  syncGeneration?: number;
   rateLimitRemaining: number | null;
   coverage: GameCoverage;
 };

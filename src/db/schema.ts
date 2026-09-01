@@ -1,10 +1,12 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   check,
   index,
   integer,
   jsonb,
+  pgSequence,
   pgTable,
   smallint,
   text,
@@ -14,6 +16,10 @@ import {
 } from "drizzle-orm/pg-core";
 
 const gameConstraint = sql`game in ('lol', 'valorant', 'honor-of-kings', 'cs2', 'dota2')`;
+
+export const pandaScoreSyncGeneration = pgSequence("pandascore_sync_generation_seq", {
+  startWith: 1,
+});
 
 export const matchSubmissions = pgTable("match_submissions", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -134,6 +140,9 @@ export const pandaScoreGameSnapshots = pgTable("pandascore_game_snapshots", {
   lastErrorCode: text("last_error_code"),
   lastHttpStatus: integer("last_http_status"),
   generation: uuid("generation").notNull(),
+  fencingGeneration: bigint("fencing_generation", { mode: "number" })
+    .notNull()
+    .default(sql`nextval('pandascore_sync_generation_seq')`),
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 }, () => [
   check("pandascore_game_snapshots_game_check", gameConstraint),

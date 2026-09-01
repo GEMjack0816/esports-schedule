@@ -73,8 +73,19 @@ function coverage(game: PandaGameKey, fetchedAt: string): GameCoverage {
   };
 }
 
-function snapshot(game: PandaGameKey, fetchedAt = "2026-08-30T00:00:00.000Z"): PandaGameSnapshot {
-  return { game, matches: [match(game, `${game}-1`)], fetchedAt, rateLimitRemaining: 900, coverage: coverage(game, fetchedAt) };
+function snapshot(
+  game: PandaGameKey,
+  fetchedAt = "2026-08-30T00:00:00.000Z",
+  syncGeneration = 1,
+): PandaGameSnapshot {
+  return {
+    game,
+    matches: [match(game, `${game}-1`)],
+    fetchedAt,
+    syncGeneration,
+    rateLimitRemaining: 900,
+    coverage: coverage(game, fetchedAt),
+  };
 }
 
 function state(game: PandaGameKey, fetchedAt = "2026-08-30T00:00:00.000Z"): PandaScoreGameSyncState {
@@ -93,11 +104,18 @@ describe("persistent schedule recovery", () => {
     const snapshots = Object.fromEntries(pandaGameKeys.map((game) => [game, snapshot(game)]));
     const states = Object.fromEntries(pandaGameKeys.map((game) => [game, state(game)]));
     const readPersistent = vi.fn();
+    const readGenerations = vi.fn(async () => ({
+      generations: Object.fromEntries(pandaGameKeys.map((game) => [game, 1])),
+      databaseAvailable: true,
+      errorCode: null,
+    }));
     const recovered = await recoverScheduleParts(snapshots, states, {
+      readGenerations,
       readPersistent,
       writeRuntimeSnapshot: vi.fn(),
       writeRuntimeState: vi.fn(),
     });
+    expect(readGenerations).toHaveBeenCalledOnce();
     expect(readPersistent).not.toHaveBeenCalled();
     expect(recovered.recoveredGames).toEqual([]);
   });
@@ -108,6 +126,7 @@ describe("persistent schedule recovery", () => {
     const writeRuntimeSnapshot = vi.fn(async () => true);
     const writeRuntimeState = vi.fn(async () => true);
     const recovered = await recoverScheduleParts({}, {}, {
+      readGenerations: async () => ({ generations: { lol: 1 }, databaseAvailable: true, errorCode: null }),
       readPersistent: async () => ({
         snapshots: { lol: persistentSnapshot },
         states: { lol: persistentState },
@@ -125,6 +144,7 @@ describe("persistent schedule recovery", () => {
 
   it("remains unavailable only when both Runtime Cache and PostgreSQL have no snapshot", async () => {
     const recovered = await recoverScheduleParts({}, {}, {
+      readGenerations: async () => ({ generations: {}, databaseAvailable: true, errorCode: null }),
       readPersistent: async () => ({ snapshots: {}, states: {}, databaseAvailable: true, errorCode: null }),
       writeRuntimeSnapshot: vi.fn(),
       writeRuntimeState: vi.fn(),
@@ -182,7 +202,7 @@ describe("durable sync persistence", () => {
   };
 
   it("keeps a successful database write usable when Runtime Cache write fails", async () => {
-    const result = await persistPandaScoreSyncBatch(successfulBatch, attemptedStates, new Date("2026-08-30T00:01:01.000Z"), {
+    const result = await persistPandaScoreSyncBatch(successfulBatch, attemptedStates, new Date("2026-08-30T00:01:01.000Z"), 2, {
       writePersistent: async () => "written",
       recordFailure: async () => true,
       writeRuntimeSnapshot: async () => false,
@@ -196,7 +216,7 @@ describe("durable sync persistence", () => {
 
   it("does not publish new Runtime Cache data when persistent writes fail", async () => {
     const writeRuntimeSnapshot = vi.fn(async () => true);
-    const result = await persistPandaScoreSyncBatch(successfulBatch, attemptedStates, new Date("2026-08-30T00:01:01.000Z"), {
+    const result = await persistPandaScoreSyncBatch(successfulBatch, attemptedStates, new Date("2026-08-30T00:01:01.000Z"), 2, {
       writePersistent: async () => "unavailable",
       recordFailure: async () => false,
       writeRuntimeSnapshot,
@@ -215,7 +235,7 @@ describe("durable sync persistence", () => {
       failures: { cs2: { game: "cs2", code: "UPSTREAM", status: 500, message: "failed" } },
     };
     const written: PandaGameKey[] = [];
-    const result = await persistPandaScoreSyncBatch(batch, attemptedStates, new Date("2026-08-30T00:01:01.000Z"), {
+    const result = await persistPandaScoreSyncBatch(batch, attemptedStates, new Date("2026-08-30T00:01:01.000Z"), 2, {
       writePersistent: async (value) => { written.push(value.game); return "written"; },
       recordFailure: async () => true,
       writeRuntimeSnapshot: async () => true,
@@ -238,7 +258,7 @@ describe("durable sync persistence", () => {
       }])),
     };
     const writePersistent = vi.fn();
-    const result = await persistPandaScoreSyncBatch(batch, attemptedStates, new Date("2026-08-30T00:01:01.000Z"), {
+    const result = await persistPandaScoreSyncBatch(batch, attemptedStates, new Date("2026-08-30T00:01:01.000Z"), 2, {
       writePersistent,
       recordFailure: async () => true,
       writeRuntimeSnapshot: async () => true,
