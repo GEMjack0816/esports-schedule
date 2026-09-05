@@ -50,7 +50,8 @@ npm start
 npm run verify:browser -- http://localhost:3000
 $env:ALLOW_ISOLATED_ADMIN_VERIFY = "1"
 $env:ADMIN_STORAGE_STATE = "<authenticated-playwright-storage-state>"
-npm run verify:admin -- <isolated-preview-url>
+$env:ADMIN_VERIFY_ALLOWED_PREVIEW_HOSTS = "<exact-preview-host>"
+npm run verify:admin -- <isolated-preview-url> <expected-git-sha> <expected-git-ref>
 ```
 
-`verify:admin` 会拒绝生产 Alias，并且只有在显式标记隔离环境且提供已认证浏览器状态时才执行公开提交、批准、编辑、隐藏、恢复、驳回和审计验证。
+`verify:admin` 在任何写入前通过 `/api/version` 验证服务身份、`environment=preview`、精确 Git SHA/ref、Deployment 元数据及显式 hostname allowlist；任一元数据缺失或不一致都会 fail closed。它还要求显式标记隔离环境和已认证浏览器状态。验证产生的 submission、人工比赛和关联审计记录会在 `finally` 中通过仅 Preview 可用的管理员清理端点按本次 ID 删除；清理失败会使验证失败，禁止把 Production hostname 加入 allowlist。
