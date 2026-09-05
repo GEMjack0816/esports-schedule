@@ -10,6 +10,7 @@ import { getReviewRepository } from "./repository";
 import type { SubmissionCounts } from "./types";
 
 const CACHE_KEY = "published-manual-matches-v1";
+const FENCE_KEY = "published-manual-matches-fence-v1";
 const RUNTIME_FALLBACK_TAG = "published-manual-matches-fallback-v1";
 const CACHE_TTL_SECONDS = 30 * 24 * 60 * 60;
 const DB_TIMEOUT_MS = 2_500;
@@ -17,6 +18,7 @@ const DB_TIMEOUT_MS = 2_500;
 export type CachedPublicMatches = {
   matches: EsportsMatch[];
   fetchedAt: string;
+  revision: number;
 };
 
 export type DatabasePublicState = {
@@ -24,6 +26,8 @@ export type DatabasePublicState = {
   status: "connected" | "cached" | "unavailable" | "not-configured";
   lastSuccessfulReadAt: string | null;
   cachedManualMatches: number;
+  cacheRevision: number;
+  pendingCacheRevisions: number;
 };
 
 let publicState: DatabasePublicState = {
@@ -31,6 +35,8 @@ let publicState: DatabasePublicState = {
   status: isDatabaseConfigured() ? "unavailable" : "not-configured",
   lastSuccessfulReadAt: null,
   cachedManualMatches: 0,
+  cacheRevision: 0,
+  pendingCacheRevisions: 0,
 };
 
 function publicCache() {
@@ -81,23 +87,39 @@ export function publishedRowToMatch(row: PublishedManualMatchRow): EsportsMatch 
 function isCachedPublicMatches(value: unknown): value is CachedPublicMatches {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<CachedPublicMatches>;
-  return typeof candidate.fetchedAt === "string" && Array.isArray(candidate.matches);
+  return typeof candidate.fetchedAt === "string"
+    && Array.isArray(candidate.matches)
+    && Number.isSafeInteger(candidate.revision)
+    && (candidate.revision ?? -1) >= 0;
+}
+
+function isCacheFence(value: unknown): value is { revision: number } {
+  if (!value || typeof value !== "object") return false;
+  const revision = (value as { revision?: unknown }).revision;
+  return Number.isSafeInteger(revision) && Number(revision) >= 0;
+}
+
+export function selectRuntimeFallback(snapshot: unknown, fence: unknown): CachedPublicMatches | null {
+  if (!isCachedPublicMatches(snapshot)) return null;
+  if (fence !== null && !isCacheFence(fence)) return null;
+  return isCacheFence(fence) && snapshot.revision < fence.revision ? null : snapshot;
+}
+
+export async function writeManualMatchCacheFence(revision: number): Promise<void> {
+  await withTimeout(publicCache().set(FENCE_KEY, { revision }, {
+    name: "Published manual matches minimum cache revision",
+    tags: [RUNTIME_FALLBACK_TAG],
+    ttl: CACHE_TTL_SECONDS,
+  }));
 }
 
 async function readLastSuccess(): Promise<CachedPublicMatches | null> {
   try {
-    const value = await publicCache().get(CACHE_KEY);
-    return isCachedPublicMatches(value) ? value : null;
+    const cache = publicCache();
+    const [value, fence] = await Promise.all([cache.get(CACHE_KEY), cache.get(FENCE_KEY)]);
+    return selectRuntimeFallback(value, fence);
   } catch {
     return null;
-  }
-}
-
-async function writeLastSuccess(value: CachedPublicMatches): Promise<void> {
-  try {
-    await writeRuntimeFallback(value);
-  } catch {
-    console.warn("[review-db] public manual match fallback cache could not be written");
   }
 }
 
@@ -110,16 +132,49 @@ async function writeRuntimeFallback(value: CachedPublicMatches): Promise<void> {
 }
 
 export async function synchronizePublishedManualMatchesSnapshot(
-  repository: Pick<ReturnType<typeof getReviewRepository>, "listVisibleManualMatches"> = getReviewRepository(),
+  repository: Pick<ReturnType<typeof getReviewRepository>,
+    "readManualMatchCacheSnapshot" | "markManualMatchCacheDelivered" | "markManualMatchCacheDeliveryFailed"
+  > = getReviewRepository(),
   write: (value: CachedPublicMatches) => Promise<void> = writeRuntimeFallback,
 ): Promise<CachedPublicMatches> {
-  const rows = await repository.listVisibleManualMatches();
+  const snapshot = await repository.readManualMatchCacheSnapshot();
   const value = {
-    matches: uniqueAndSort(rows.map(publishedRowToMatch)),
+    matches: uniqueAndSort(snapshot.rows.map(publishedRowToMatch)),
     fetchedAt: new Date().toISOString(),
+    revision: snapshot.revision,
   };
-  await write(value);
+  try {
+    await write(value);
+  } catch {
+    await repository.markManualMatchCacheDeliveryFailed(snapshot.revision);
+    console.warn("[review-db] public manual match fallback cache could not be written");
+    return value;
+  }
+  try {
+    await repository.markManualMatchCacheDelivered(snapshot.revision);
+  } catch {
+    console.warn("[review-db] manual match cache delivery acknowledgement failed");
+  }
   return value;
+}
+
+async function readCurrentFence(): Promise<{ available: boolean; revision: number }> {
+  try {
+    const value = await publicCache().get(FENCE_KEY);
+    if (value === null) return { available: true, revision: 0 };
+    return isCacheFence(value)
+      ? { available: true, revision: value.revision }
+      : { available: false, revision: 0 };
+  } catch {
+    return { available: false, revision: 0 };
+  }
+}
+
+export function shouldRefreshCachedSnapshot(
+  cachedRevision: number,
+  fence: { available: boolean; revision: number },
+): boolean {
+  return !fence.available || cachedRevision < fence.revision;
 }
 
 export async function preserveLastSuccessfulPublicMatches(
@@ -135,13 +190,7 @@ export async function preserveLastSuccessfulPublicMatches(
 
 const readPublishedMatchesCached = unstable_cache(
   async (): Promise<CachedPublicMatches> => {
-    const rows = await getReviewRepository().listVisibleManualMatches();
-    const value = {
-      matches: uniqueAndSort(rows.map(publishedRowToMatch)),
-      fetchedAt: new Date().toISOString(),
-    };
-    await writeLastSuccess(value);
-    return value;
+    return synchronizePublishedManualMatchesSnapshot(getReviewRepository());
   },
   ["published-manual-matches-v1"],
   {
@@ -149,6 +198,15 @@ const readPublishedMatchesCached = unstable_cache(
     revalidate: 60,
   },
 );
+
+async function readCurrentPublishedMatches(): Promise<CachedPublicMatches> {
+  const cached = await readPublishedMatchesCached();
+  const fence = await readCurrentFence();
+  if (shouldRefreshCachedSnapshot(cached.revision, fence)) {
+    return synchronizePublishedManualMatchesSnapshot(getReviewRepository());
+  }
+  return cached;
+}
 
 export async function getPublishedDatabaseMatches(): Promise<{
   matches: EsportsMatch[];
@@ -161,12 +219,14 @@ export async function getPublishedDatabaseMatches(): Promise<{
       status: "not-configured",
       lastSuccessfulReadAt: null,
       cachedManualMatches: 0,
+      cacheRevision: 0,
+      pendingCacheRevisions: 0,
     };
     return { matches: [], state: publicState };
   }
 
   const result = await preserveLastSuccessfulPublicMatches(
-    () => withTimeout(readPublishedMatchesCached()),
+    () => withTimeout(readCurrentPublishedMatches()),
     readLastSuccess,
   );
   if (result.value && !result.fallback) {
@@ -176,6 +236,8 @@ export async function getPublishedDatabaseMatches(): Promise<{
       status: "connected",
       lastSuccessfulReadAt: value.fetchedAt,
       cachedManualMatches: value.matches.length,
+      cacheRevision: value.revision,
+      pendingCacheRevisions: 0,
     };
     return { matches: value.matches, state: publicState };
   }
@@ -186,6 +248,8 @@ export async function getPublishedDatabaseMatches(): Promise<{
     status: cached ? "cached" : "unavailable",
     lastSuccessfulReadAt: cached?.fetchedAt ?? publicState.lastSuccessfulReadAt,
     cachedManualMatches: cached?.matches.length ?? 0,
+    cacheRevision: cached?.revision ?? publicState.cacheRevision,
+    pendingCacheRevisions: publicState.pendingCacheRevisions,
   };
   console.warn("[review-db] database read unavailable; preserving last successful public manual matches");
   return { matches: cached?.matches ?? [], state: publicState };
@@ -202,14 +266,17 @@ export async function getDatabaseHealth(): Promise<DatabasePublicState & {
     return { ...getDatabasePublicState(), submissionCounts: null };
   }
   try {
-    const [counts] = await withTimeout(Promise.all([
+    const [counts, , cacheStatus] = await withTimeout(Promise.all([
       getReviewRepository().getSubmissionCounts(),
       getReviewRepository().ping(),
+      getReviewRepository().getManualMatchCacheStatus(),
     ]));
     return {
       ...getDatabasePublicState(),
       configured: true,
       status: "connected",
+      cacheRevision: cacheStatus.revision,
+      pendingCacheRevisions: cacheStatus.pendingRevisions,
       submissionCounts: counts,
     };
   } catch {
