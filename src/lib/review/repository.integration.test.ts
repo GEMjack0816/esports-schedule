@@ -519,4 +519,60 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       (value) => value.providerMatchId === `db-${match.id}`,
     )?.league).toBe(`${pending.input.league} edited`);
   });
+
+  it("commits legacy imports and their summary audit in one transaction", async () => {
+    const firstId = randomUUID();
+    const duplicateId = randomUUID();
+    const actorId = `legacy-atomic-${randomUUID()}`;
+    submissionIds.push(firstId, duplicateId);
+    const duplicateInput = submission(`legacy-existing-${randomUUID()}`);
+    await repository.createSubmission(duplicateInput, { id: duplicateId });
+
+    const counts = await repository.importLegacySubmissions([
+      {
+        id: firstId,
+        input: submission(`legacy-new-${randomUUID()}`),
+        submittedAt: new Date("2026-07-01T00:00:00.000Z"),
+      },
+      {
+        id: duplicateId,
+        input: duplicateInput,
+        submittedAt: new Date("2026-07-01T00:00:00.000Z"),
+      },
+    ], actorId, { scanned: 3, imported: 0, duplicate: 0, invalid: 1 });
+
+    expect(counts).toEqual({ scanned: 3, imported: 1, duplicate: 1, invalid: 1 });
+    const [audit] = await cleanup`
+      select after_json from admin_audit_events
+      where actor_id = ${actorId} and action = 'legacy_submissions.imported'
+    `;
+    expect(audit.after_json).toEqual(counts);
+    await cleanup`delete from admin_audit_events where actor_id = ${actorId}`;
+  });
+
+  it("rolls back earlier legacy inserts when a later insert fails", async () => {
+    const firstId = randomUUID();
+    const invalidId = randomUUID();
+    const actorId = `legacy-rollback-${randomUUID()}`;
+    submissionIds.push(firstId, invalidId);
+    const validInput = submission(`legacy-rollback-${randomUUID()}`);
+    const invalidInput = { ...submission(`legacy-invalid-${randomUUID()}`), teamB: "Same" };
+    invalidInput.teamA = "Same";
+
+    await expect(repository.importLegacySubmissions([
+      { id: firstId, input: validInput, submittedAt: new Date() },
+      { id: invalidId, input: invalidInput, submittedAt: new Date() },
+    ], actorId, { scanned: 2, imported: 0, duplicate: 0, invalid: 0 })).rejects.toMatchObject({
+      code: "DATABASE_UNAVAILABLE",
+    });
+
+    const [inserted] = await cleanup`
+      select count(*)::int as count from match_submissions where id = ${firstId}
+    `;
+    const [audit] = await cleanup`
+      select count(*)::int as count from admin_audit_events where actor_id = ${actorId}
+    `;
+    expect(inserted.count).toBe(0);
+    expect(audit.count).toBe(0);
+  });
 });
