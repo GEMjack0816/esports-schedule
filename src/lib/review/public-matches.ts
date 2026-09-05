@@ -161,7 +161,11 @@ export async function synchronizePublishedManualMatchesSnapshot(
 async function readCurrentFence(): Promise<{ available: boolean; revision: number }> {
   try {
     const value = await publicCache().get(FENCE_KEY);
-    if (value === null) return { available: true, revision: 0 };
+    // A missing Runtime Cache fence may mean that this regional/ephemeral cache
+    // was evicted. It is not proof that revision zero is current, so force a
+    // PostgreSQL snapshot comparison instead of trusting a possibly older
+    // Next Data Cache entry.
+    if (value === null) return { available: false, revision: 0 };
     return isCacheFence(value)
       ? { available: true, revision: value.revision }
       : { available: false, revision: 0 };

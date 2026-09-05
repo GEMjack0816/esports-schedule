@@ -108,9 +108,11 @@ describe("published database manual matches", () => {
     expect(selectRuntimeFallback(cached, { revision: "unknown" })).toBeNull();
   });
 
-  it("bypasses an old Next Data Cache value or an unreadable fence", () => {
+  it("bypasses an old Next Data Cache value when the fence is newer, missing, or unreadable", () => {
     expect(shouldRefreshCachedSnapshot(4, { available: true, revision: 5 })).toBe(true);
     expect(shouldRefreshCachedSnapshot(5, { available: true, revision: 5 })).toBe(false);
+    // Missing and malformed/failed Runtime Cache reads all produce an
+    // unavailable fence at the caller; none may be treated as revision-zero proof.
     expect(shouldRefreshCachedSnapshot(5, { available: false, revision: 0 })).toBe(true);
   });
 
