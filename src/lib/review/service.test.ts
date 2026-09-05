@@ -23,7 +23,9 @@ describe("manual match visibility service", () => {
     const repository = {
       toggleManualMatchHidden: vi.fn().mockResolvedValue(row),
     } as unknown as DrizzleReviewRepository;
+    const fence = vi.fn().mockResolvedValue(undefined);
     const effects = {
+      fence,
       synchronize: vi.fn().mockResolvedValue(undefined),
       invalidate: vi.fn(),
     };
@@ -41,7 +43,7 @@ describe("manual match visibility service", () => {
       "match-1",
       "admin-1",
       new Date(expectedUpdatedAt),
-      undefined,
+      fence,
     );
     expect(effects.synchronize).toHaveBeenCalledWith(repository);
     expect(effects.invalidate).toHaveBeenCalledOnce();
