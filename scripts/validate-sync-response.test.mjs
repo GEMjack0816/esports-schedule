@@ -18,6 +18,27 @@ const success = {
 };
 
 describe("sync workflow response validation", () => {
+  it.each([NaN, Infinity, 0, 200.5, "200"])("rejects invalid HTTP status %s", status => {
+    expect(validateSyncResponse(success, status).ok).toBe(false);
+  });
+
+  it("rejects negative failures even when the arithmetic total matches", () => {
+    expect(validateSyncResponse({ ...success, gamesSucceeded: 6, snapshotsPersisted: 6, gamesFailed: -1 }, 200).ok).toBe(false);
+  });
+
+  it.each([
+    { ...success, status: "partial" },
+    { ...success, gamesSucceeded: 4, snapshotsPersisted: 4, gamesFailed: 1 },
+  ])("rejects status and game outcome contradictions", payload => {
+    expect(validateSyncResponse(payload, 200).ok).toBe(false);
+  });
+
+  it("does not echo arbitrary upstream status text into logs", () => {
+    const marker = "private-response-marker";
+    const result = validateSyncResponse({ ...success, status: marker }, 200);
+    expect(result.ok).toBe(false);
+    expect(result.message).not.toContain(marker);
+  });
   it("accepts a complete successful refresh", () => {
     expect(validateSyncResponse(success, 200).ok).toBe(true);
   });
