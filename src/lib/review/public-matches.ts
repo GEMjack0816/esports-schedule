@@ -101,8 +101,10 @@ function isCacheFence(value: unknown): value is { revision: number } {
 
 export function selectRuntimeFallback(snapshot: unknown, fence: unknown): CachedPublicMatches | null {
   if (!isCachedPublicMatches(snapshot)) return null;
-  if (fence !== null && !isCacheFence(fence)) return null;
-  return isCacheFence(fence) && snapshot.revision < fence.revision ? null : snapshot;
+  // The snapshot and fence can be evicted independently. Without the fence,
+  // a surviving snapshot may predate a hide/edit whose cache delivery failed.
+  if (!isCacheFence(fence)) return null;
+  return snapshot.revision < fence.revision ? null : snapshot;
 }
 
 export async function writeManualMatchCacheFence(revision: number): Promise<void> {

@@ -99,13 +99,13 @@ describe("published database manual matches", () => {
     expect(selectRuntimeFallback(cached, { revision: 4 })).toBe(cached);
   });
 
-  it("fails closed when the Runtime Cache fence is malformed", () => {
+  it.each([null, undefined, { revision: "unknown" }])("fails closed when the Runtime Cache fence is missing or malformed: %j", (fence) => {
     const cached = {
       matches: [publishedRowToMatch(row())],
       fetchedAt: "2026-07-26T01:00:00.000Z",
       revision: 4,
     };
-    expect(selectRuntimeFallback(cached, { revision: "unknown" })).toBeNull();
+    expect(selectRuntimeFallback(cached, fence)).toBeNull();
   });
 
   it("bypasses an old Next Data Cache value when the fence is newer, missing, or unreadable", () => {
