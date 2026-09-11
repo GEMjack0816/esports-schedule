@@ -780,6 +780,18 @@ export class DrizzleReviewRepository {
     }
   }
 
+  async getCurrentManualMatchRevision(): Promise<number> {
+    try {
+      // revision is the outbox primary key. This is a one-row indexed lookup,
+      // not a scan of all matches or pending deliveries on every public read.
+      const [row] = await getDatabase().select({ revision: manualMatchCacheOutbox.revision })
+        .from(manualMatchCacheOutbox).orderBy(desc(manualMatchCacheOutbox.revision)).limit(1);
+      return Number(row?.revision ?? 0);
+    } catch (error) {
+      translateDatabaseError(error);
+    }
+  }
+
   async getManualMatchCacheStatus(): Promise<{ revision: number; pendingRevisions: number }> {
     try {
       const db = getDatabase();
