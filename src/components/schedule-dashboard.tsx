@@ -94,22 +94,33 @@ function TeamRow({ team, score, winning }: {
   score: number | null;
   winning: boolean;
 }) {
+  const logo = team.logo || "/team-placeholder.svg";
   return (
     <div className={`team-row ${winning ? "team-winning" : ""}`}>
       <span className="team-mark" aria-hidden="true">
-        <Image
-          src={team.logo || "/team-placeholder.svg"}
-          alt=""
-          width={28}
-          height={28}
-          unoptimized
-          onError={(event) => { event.currentTarget.src = "/team-placeholder.svg"; }}
-        />
-        <span>{team.acronym?.slice(0, 3) || initials(team.name)}</span>
+        <TeamLogo key={logo} src={logo} label={team.acronym?.slice(0, 3) || initials(team.name)} />
       </span>
       <span className="team-name">{team.name}</span>
       <span className="team-score">{score ?? "–"}</span>
     </div>
+  );
+}
+
+function TeamLogo({ src, label }: { src: string; label: string }) {
+  const [failure, setFailure] = useState<"none" | "remote" | "all">("none");
+  if (failure === "all") return <span className="team-logo-text">{label}</span>;
+  const current = failure === "remote" ? "/team-placeholder.svg" : src;
+  return (
+    <Image
+      key={current}
+      src={current}
+      alt=""
+      width={28}
+      height={28}
+      unoptimized
+      referrerPolicy="no-referrer"
+      onError={() => setFailure(current === "/team-placeholder.svg" ? "all" : "remote")}
+    />
   );
 }
 
