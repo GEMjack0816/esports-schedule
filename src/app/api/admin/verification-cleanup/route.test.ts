@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   requireAdminApi: vi.fn(),
   trustedMutationOrigin: vi.fn(),
   cleanup: vi.fn(),
+  fence: vi.fn(),
   synchronize: vi.fn(),
   invalidate: vi.fn(),
 }));
@@ -12,11 +13,12 @@ vi.mock("@/lib/auth/admin-page", () => ({ requireAdminApi: mocks.requireAdminApi
 vi.mock("@/lib/auth/vercel", () => ({ trustedMutationOrigin: mocks.trustedMutationOrigin }));
 vi.mock("@/lib/review/public-matches", () => ({
   synchronizePublishedManualMatchesSnapshot: mocks.synchronize,
+  writeManualMatchCacheFence: mocks.fence,
 }));
 vi.mock("@/lib/review/repository", () => ({
   getReviewRepository: () => ({ cleanupIsolatedVerificationRun: mocks.cleanup }),
 }));
-vi.mock("@/lib/review/service", () => ({ invalidatePublishedManualMatches: mocks.invalidate }));
+vi.mock("next/cache", () => ({ revalidateTag: mocks.invalidate }));
 
 import { POST } from "./route";
 
@@ -49,9 +51,10 @@ describe("POST /api/admin/verification-cleanup", () => {
       gitCommitRef: "fix/ref",
     }));
     expect(response.status).toBe(200);
-    expect(mocks.cleanup).toHaveBeenCalledWith([id], "Codex isolated review run");
+    expect(mocks.cleanup).toHaveBeenCalledWith([id], "Codex isolated review run", mocks.fence);
     expect(mocks.synchronize).toHaveBeenCalledOnce();
     expect(mocks.invalidate).toHaveBeenCalledOnce();
+    expect(mocks.invalidate).toHaveBeenCalledWith("published-manual-matches", { expire: 0 });
   });
 
   it("is unavailable outside Preview", async () => {

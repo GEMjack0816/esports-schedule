@@ -640,9 +640,11 @@ export class DrizzleReviewRepository {
   async cleanupIsolatedVerificationRun(
     submissionIds: string[],
     expectedLeague: string,
+    fence: ManualMatchCacheFence = noCacheFence,
   ): Promise<{ submissions: number; manualMatches: number; auditEvents: number }> {
     try {
       return await getDatabase().transaction(async (tx) => {
+        await lockManualMatchMutations(tx);
         const submissions = await tx.select({ id: matchSubmissions.id, league: matchSubmissions.league })
           .from(matchSubmissions)
           .where(inArray(matchSubmissions.id, submissionIds))
@@ -660,6 +662,7 @@ export class DrizzleReviewRepository {
           .where(inArray(publishedManualMatches.sourceSubmissionId, submissionIds))
           .for("update");
         const entityIds = [...submissionIds, ...manualMatches.map((row) => row.id)];
+        if (manualMatches.length > 0) await createManualMatchCacheRevision(tx, fence);
         const deletedAudit = entityIds.length > 0
           ? await tx.delete(adminAuditEvents).where(inArray(adminAuditEvents.entityId, entityIds)).returning({ id: adminAuditEvents.id })
           : [];

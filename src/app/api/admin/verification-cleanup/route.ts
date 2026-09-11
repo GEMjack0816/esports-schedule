@@ -1,8 +1,8 @@
 import { requireAdminApi } from "@/lib/auth/admin-page";
 import { trustedMutationOrigin } from "@/lib/auth/vercel";
-import { synchronizePublishedManualMatchesSnapshot } from "@/lib/review/public-matches";
+import { synchronizePublishedManualMatchesSnapshot, writeManualMatchCacheFence } from "@/lib/review/public-matches";
 import { getReviewRepository } from "@/lib/review/repository";
-import { invalidatePublishedManualMatches } from "@/lib/review/service";
+import { revalidateTag } from "next/cache";
 import { ReviewConflictError } from "@/lib/review/types";
 
 export const dynamic = "force-dynamic";
@@ -50,9 +50,9 @@ export async function POST(request: Request) {
 
   const repository = getReviewRepository();
   try {
-    const deleted = await repository.cleanupIsolatedVerificationRun(body.submissionIds, body.league);
+    const deleted = await repository.cleanupIsolatedVerificationRun(body.submissionIds, body.league, writeManualMatchCacheFence);
     await synchronizePublishedManualMatchesSnapshot(repository);
-    invalidatePublishedManualMatches();
+    revalidateTag("published-manual-matches", { expire: 0 });
     return Response.json({ ok: true, deleted }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const status = error instanceof ReviewConflictError ? 409 : 503;

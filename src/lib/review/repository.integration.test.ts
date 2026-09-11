@@ -539,10 +539,21 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     manualMatchIds.push(publishedRow.id);
     await repository.rejectSubmission(rejectedId, "verification", "admin-a", rejectedRow.updatedAt);
 
+    await expect(repository.cleanupIsolatedVerificationRun(
+      [approvedId, rejectedId], league,
+      async () => { throw new Error("cache fence unavailable"); },
+    )).rejects.toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+    expect(await repository.getManualMatch(publishedRow.id)).not.toBeNull();
+    const fence = vi.fn<(revision: number) => Promise<void>>().mockResolvedValue(undefined);
     const deleted = await repository.cleanupIsolatedVerificationRun(
       [approvedId, rejectedId],
       league,
+      fence,
     );
+    expect(fence).toHaveBeenCalledOnce();
+    const snapshot = await repository.readManualMatchCacheSnapshot();
+    expect(snapshot.revision).toBe(fence.mock.calls[0][0]);
+    expect(snapshot.rows.some(row => row.id === publishedRow.id)).toBe(false);
     expect(deleted.submissions).toBe(2);
     expect(deleted.manualMatches).toBe(1);
     expect(deleted.auditEvents).toBeGreaterThanOrEqual(2);
