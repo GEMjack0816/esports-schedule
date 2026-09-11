@@ -7,6 +7,7 @@ const requiredTables = [
   "submission_rate_limit_windows",
   "admin_audit_events",
   "pandascore_game_snapshots",
+  "manual_match_cache_outbox",
 ];
 const url = process.env.DATABASE_URL?.trim();
 
@@ -47,6 +48,21 @@ try {
       and pg_class.relkind = 'S'
       and pg_class.relname = 'pandascore_sync_generation_seq'
   `;
+  const [manualCacheSequence] = await client`
+    select 1 as present
+    from pg_class
+    join pg_namespace on pg_namespace.oid = pg_class.relnamespace
+    where pg_namespace.nspname = 'public'
+      and pg_class.relkind = 'S'
+      and pg_class.relname = 'manual_match_cache_revision_seq'
+  `;
+  const [operationKey] = await client`
+    select data_type
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'published_manual_matches'
+      and column_name = 'operation_key'
+  `;
   if (missing.length > 0) {
     console.error(`FAIL missing required tables: ${missing.join(", ")}`);
     process.exitCode = 1;
@@ -55,6 +71,9 @@ try {
     process.exitCode = 1;
   } else if (!generationSequence) {
     console.error("FAIL pandascore_sync_generation_seq is missing.");
+    process.exitCode = 1;
+  } else if (!manualCacheSequence || operationKey?.data_type !== "uuid") {
+    console.error("FAIL manual match cache revision or idempotency schema is missing.");
     process.exitCode = 1;
   } else {
     console.log(`PASS database reachable; ${requiredTables.length} required tables and sync fencing schema found.`);

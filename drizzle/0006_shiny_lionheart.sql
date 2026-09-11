@@ -1,0 +1,2 @@
+ALTER TABLE "published_manual_matches" ADD COLUMN "operation_key" uuid;--> statement-breakpoint
+ALTER TABLE "published_manual_matches" ADD CONSTRAINT "published_manual_matches_operation_key_unique" UNIQUE("operation_key");

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { MANUAL_MATCH_MUTATION_LOCK } from "./repository";
 import type { DrizzleReviewRepository } from "./repository";
 import type { MatchSubmissionInput } from "@/lib/submissions";
 import {
@@ -611,5 +612,86 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     `;
     expect(inserted.count).toBe(0);
     expect(audit.count).toBe(0);
+  });
+
+  it("rolls back a public mutation when its Runtime Cache fence cannot be written", async () => {
+    const input = submission(`fence-rollback-${randomUUID()}`);
+    const [before] = await cleanup`select count(*)::int as count from manual_match_cache_outbox`;
+    await expect(repository.createManualMatch(
+      published(input),
+      "admin-a",
+      async () => { throw new Error("cache unavailable"); },
+    )).rejects.toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+    const [matches] = await cleanup`
+      select count(*)::int as count from published_manual_matches where league = ${input.league}
+    `;
+    const [after] = await cleanup`select count(*)::int as count from manual_match_cache_outbox`;
+    expect(matches.count).toBe(0);
+    expect(after.count).toBe(before.count);
+  });
+
+  it("uses the same monotonic revision for the mutation fence, outbox, and Runtime snapshot", async () => {
+    const input = submission(`fence-revision-${randomUUID()}`);
+    const fence = vi.fn<(revision: number) => Promise<void>>().mockResolvedValue(undefined);
+    const match = await repository.createManualMatch(published(input), "admin-a", fence);
+    manualMatchIds.push(match.id);
+    expect(fence).toHaveBeenCalledOnce();
+    const revision = fence.mock.calls[0][0];
+    const [pending] = await cleanup`
+      select revision, delivered_at from manual_match_cache_outbox where revision = ${revision}
+    `;
+    expect(Number(pending.revision)).toBe(revision);
+    expect(pending.delivered_at).toBeNull();
+
+    const cached: { value: CachedPublicMatches | null } = { value: null };
+    const snapshot = await synchronizePublishedManualMatchesSnapshot(repository, async (value) => {
+      cached.value = value;
+    });
+    expect(snapshot.revision).toBe(revision);
+    expect(cached.value?.revision).toBe(revision);
+    const [delivered] = await cleanup`
+      select delivered_at from manual_match_cache_outbox where revision = ${revision}
+    `;
+    expect(delivered.delivered_at).toBeInstanceOf(Date);
+  });
+
+  it("makes manual match creation retries idempotent without allocating another revision", async () => {
+    const input = submission(`idempotent-create-${randomUUID()}`);
+    const operationKey = randomUUID();
+    const fence = vi.fn<(revision: number) => Promise<void>>().mockResolvedValue(undefined);
+    const first = await repository.createManualMatch(
+      published(input),
+      "admin-a",
+      fence,
+      operationKey,
+    );
+    manualMatchIds.push(first.id);
+    const second = await repository.createManualMatch(
+      { ...published(input), league: `${input.league} retry` },
+      "admin-a",
+      fence,
+      operationKey,
+    );
+    expect(second.id).toBe(first.id);
+    expect(second.league).toBe(first.league);
+    expect(fence).toHaveBeenCalledOnce();
+    const [matches] = await cleanup`
+      select count(*)::int as count from published_manual_matches where operation_key = ${operationKey}
+    `;
+    expect(matches.count).toBe(1);
+  });
+
+  it("bounds waiting when another transaction holds the manual cache revision lock", async () => {
+    await cleanup`select pg_advisory_lock(${MANUAL_MATCH_MUTATION_LOCK})`;
+    const startedAt = Date.now();
+    try {
+      await expect(repository.createManualMatch(
+        published(submission(`manual-lock-${randomUUID()}`)),
+        "admin-a",
+      )).rejects.toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+    } finally {
+      await cleanup`select pg_advisory_unlock(${MANUAL_MATCH_MUTATION_LOCK})`;
+    }
   });
 });
