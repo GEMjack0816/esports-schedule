@@ -3,17 +3,11 @@ import "server-only";
 import { getCache } from "@vercel/functions";
 import { getReviewRepository } from "./repository";
 import type { DrizzleReviewRepository } from "./repository";
+import type { LegacyImportCounts, LegacySubmissionCandidate } from "./types";
 import { validateSubmission } from "@/lib/submissions";
 
 const INDEX_KEY = "pending-index-v1";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-type ImportCounts = {
-  scanned: number;
-  imported: number;
-  duplicate: number;
-  invalid: number;
-};
 
 function legacyCache() {
   return getCache({ namespace: "esports-schedule-submissions" });
@@ -22,13 +16,14 @@ function legacyCache() {
 export async function importLegacyRuntimeSubmissions(
   actorId: string,
   repository: DrizzleReviewRepository = getReviewRepository(),
-): Promise<ImportCounts> {
+): Promise<LegacyImportCounts> {
   const cache = legacyCache();
   const index = await cache.get(INDEX_KEY);
   const ids = Array.isArray(index)
     ? [...new Set(index.filter((value): value is string => typeof value === "string"))]
     : [];
-  const counts: ImportCounts = { scanned: ids.length, imported: 0, duplicate: 0, invalid: 0 };
+  const counts: LegacyImportCounts = { scanned: ids.length, imported: 0, duplicate: 0, invalid: 0 };
+  const candidates: LegacySubmissionCandidate[] = [];
 
   for (const id of ids) {
     try {
@@ -41,8 +36,7 @@ export async function importLegacyRuntimeSubmissions(
         : new Date(Number.NaN);
       if (Number.isNaN(submittedAt.getTime())) throw new Error("invalid time");
       const input = validateSubmission({ ...record, notes: record.notes ?? null });
-      const result = await repository.insertLegacySubmission(input, id, submittedAt);
-      counts[result] += 1;
+      candidates.push({ id, input, submittedAt });
     } catch (error) {
       if (error && typeof error === "object" && "code" in error
         && (error as { code?: string }).code === "DATABASE_UNAVAILABLE") {
@@ -52,6 +46,5 @@ export async function importLegacyRuntimeSubmissions(
     }
   }
 
-  await repository.auditLegacyImport(actorId, counts);
-  return counts;
+  return repository.importLegacySubmissions(candidates, actorId, counts);
 }
