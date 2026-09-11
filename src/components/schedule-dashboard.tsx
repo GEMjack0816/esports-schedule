@@ -2,9 +2,10 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { requestScheduleRefresh, SCHEDULE_REFRESH_ERROR } from "@/lib/schedule/client-refresh";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -158,6 +159,8 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [query, setQuery] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState(false);
+  const refreshInFlight = useRef(false);
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
@@ -229,11 +232,16 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const upcomingCount = payload.matches.filter((match) => match.status === "scheduled").length;
 
   async function refreshSchedule() {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     setRefreshing(true);
+    setRefreshError(false);
     try {
-      const response = await fetch("/api/matches", { cache: "no-store" });
-      if (response.ok) setPayload((await response.json()) as SchedulePayload);
+      const result = await requestScheduleRefresh();
+      if (result.ok) setPayload(result.payload);
+      else setRefreshError(true);
     } finally {
+      refreshInFlight.current = false;
       setRefreshing(false);
     }
   }
@@ -295,6 +303,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             </div>
           </div>
 
+          {refreshError && <div className="data-notice" role="alert">{SCHEDULE_REFRESH_ERROR}</div>}
           {payload.warning && <div className="data-notice" role="status"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" /><path d="M10 6.5v4.2M10 13.7h.01" /></svg><span>{payload.warning}</span></div>}
 
           <div className="data-summary" aria-label="数据覆盖信息">
