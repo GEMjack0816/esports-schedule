@@ -1,11 +1,14 @@
 import { existsSync } from "node:fs";
 import { chromium } from "playwright-core";
+import { assertIsolatedPreviewTarget, parseAllowedPreviewHosts } from "./lib/verify-admin-target.mjs";
 
 const baseUrl = process.argv[2];
+const expectedSha = process.argv[3] ?? process.env.EXPECTED_GIT_SHA;
+const expectedRef = process.argv[4] ?? process.env.EXPECTED_GIT_REF;
 const storageState = process.env.ADMIN_STORAGE_STATE;
-if (!baseUrl) throw new Error("Usage: npm run verify:admin -- <isolated-preview-url>");
-if (new URL(baseUrl).hostname === "esports-schedule-two.vercel.app") {
-  throw new Error("verify:admin refuses to mutate Production.");
+const allowedHosts = parseAllowedPreviewHosts(process.env.ADMIN_VERIFY_ALLOWED_PREVIEW_HOSTS);
+if (!baseUrl || !expectedSha || !expectedRef) {
+  throw new Error("Usage: npm run verify:admin -- <isolated-preview-url> <expected-sha> <expected-ref>");
 }
 if (process.env.ALLOW_ISOLATED_ADMIN_VERIFY !== "1") {
   throw new Error("Set ALLOW_ISOLATED_ADMIN_VERIFY=1 only for an isolated Preview database.");
@@ -36,6 +39,7 @@ const league = `Codex isolated review ${suffix}`;
 const approvedTeams = [`Approval A ${suffix}`, `Approval B ${suffix}`];
 const rejectedTeams = [`Reject A ${suffix}`, `Reject B ${suffix}`];
 const startTime = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+let version;
 
 async function submit(teams) {
   const response = await context.request.post(`${baseUrl}/api/submissions`, {
@@ -55,7 +59,21 @@ async function submit(teams) {
   return response.json();
 }
 
+const createdSubmissionIds = [];
+let publicMatch;
+let passed = false;
+try {
+const versionResponse = await context.request.get(`${baseUrl}/api/version`, {
+  headers: { "Cache-Control": "no-cache" },
+});
+if (!versionResponse.ok()) {
+  throw new Error(`Preview identity endpoint returned HTTP ${versionResponse.status()}.`);
+}
+version = await versionResponse.json();
+assertIsolatedPreviewTarget({ baseUrl, expectedSha, expectedRef, allowedHosts, version });
+
 const approvedSubmission = await submit(approvedTeams);
+createdSubmissionIds.push(approvedSubmission.id);
 await page.goto(`${baseUrl}/admin/submissions?q=${encodeURIComponent(approvedTeams[0])}`, {
   waitUntil: "networkidle",
 });
@@ -63,7 +81,6 @@ await page.getByRole("link", { name: "查看" }).click();
 await page.getByRole("button", { name: "批准并发布" }).click();
 await page.waitForURL(/status=approved/);
 
-let publicMatch;
 for (let attempt = 0; attempt < 10; attempt += 1) {
   const response = await context.request.get(`${baseUrl}/api/matches`, {
     headers: { "Cache-Control": "no-cache" },
@@ -86,6 +103,7 @@ await page.getByRole("button", { name: "隐藏比赛" }).click();
 await page.getByRole("button", { name: "恢复公开" }).click();
 
 const rejectedSubmission = await submit(rejectedTeams);
+createdSubmissionIds.push(rejectedSubmission.id);
 await page.goto(`${baseUrl}/admin/submissions/${rejectedSubmission.id}`, { waitUntil: "networkidle" });
 await page.getByLabel("驳回原因").fill("Automated isolated Preview rejection test");
 await page.getByRole("button", { name: "驳回" }).click();
@@ -101,14 +119,36 @@ if (rejectedPayload.matches?.some(
 await page.goto(`${baseUrl}/admin`, { waitUntil: "networkidle" });
 const dashboardText = await page.locator("body").innerText();
 if (!dashboardText.includes("最近操作")) throw new Error("admin audit summary is missing");
+passed = true;
+} finally {
+  let cleanupError;
+  if (createdSubmissionIds.length > 0) {
+    const cleanupResponse = await context.request.post(`${baseUrl}/api/admin/verification-cleanup`, {
+      headers: { Origin: new URL(baseUrl).origin },
+      data: {
+        submissionIds: createdSubmissionIds,
+        league,
+        gitCommitSha: expectedSha,
+        gitCommitRef: expectedRef,
+      },
+    });
+    if (!cleanupResponse.ok()) {
+      cleanupError = new Error(`Preview verification cleanup returned HTTP ${cleanupResponse.status()}.`);
+    }
+  }
+  await context.close();
+  await browser.close();
+  if (cleanupError) throw cleanupError;
+}
 
-await context.close();
-await browser.close();
 console.log(JSON.stringify({
-  passed: true,
-  approvedSubmissionId: approvedSubmission.id,
-  publicMatchId: publicMatch.id,
-  rejectedSubmissionId: rejectedSubmission.id,
+  passed,
+  target: {
+    deploymentId: version.deploymentId,
+    gitCommitSha: version.gitCommitSha,
+    gitCommitRef: version.gitCommitRef,
+  },
+  cleanup: "completed",
   checks: [
     "public submission",
     "approve transaction",
@@ -118,5 +158,6 @@ console.log(JSON.stringify({
     "restore",
     "reject without publish",
     "audit summary",
+    "finally cleanup",
   ],
 }, null, 2));

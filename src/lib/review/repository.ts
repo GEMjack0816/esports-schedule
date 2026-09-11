@@ -8,6 +8,7 @@ import {
   eq,
   gte,
   ilike,
+  inArray,
   or,
   sql,
 } from "drizzle-orm";
@@ -593,6 +594,53 @@ export class DrizzleReviewRepository {
       rejected: summary.rejected,
       publishedManualMatches: summary.publishedManualMatches,
     };
+  }
+
+  async cleanupIsolatedVerificationRun(
+    submissionIds: string[],
+    expectedLeague: string,
+  ): Promise<{ submissions: number; manualMatches: number; auditEvents: number }> {
+    try {
+      return await getDatabase().transaction(async (tx) => {
+        const submissions = await tx.select({ id: matchSubmissions.id, league: matchSubmissions.league })
+          .from(matchSubmissions)
+          .where(inArray(matchSubmissions.id, submissionIds))
+          .for("update");
+        if (
+          submissions.length !== submissionIds.length
+          || submissions.some((row) => row.league !== expectedLeague)
+          || !expectedLeague.startsWith("Codex isolated review ")
+        ) {
+          throw new ReviewConflictError("验证数据与清理请求不匹配。");
+        }
+
+        const manualMatches = await tx.select({ id: publishedManualMatches.id })
+          .from(publishedManualMatches)
+          .where(inArray(publishedManualMatches.sourceSubmissionId, submissionIds))
+          .for("update");
+        const entityIds = [...submissionIds, ...manualMatches.map((row) => row.id)];
+        const deletedAudit = entityIds.length > 0
+          ? await tx.delete(adminAuditEvents).where(inArray(adminAuditEvents.entityId, entityIds)).returning({ id: adminAuditEvents.id })
+          : [];
+        const deletedMatches = manualMatches.length > 0
+          ? await tx.delete(publishedManualMatches)
+            .where(inArray(publishedManualMatches.id, manualMatches.map((row) => row.id)))
+            .returning({ id: publishedManualMatches.id })
+          : [];
+        const deletedSubmissions = await tx.delete(matchSubmissions)
+          .where(inArray(matchSubmissions.id, submissionIds))
+          .returning({ id: matchSubmissions.id });
+
+        return {
+          submissions: deletedSubmissions.length,
+          manualMatches: deletedMatches.length,
+          auditEvents: deletedAudit.length,
+        };
+      });
+    } catch (error) {
+      if (error instanceof ReviewConflictError) throw error;
+      translateDatabaseError(error);
+    }
   }
 
   async listManualMatches(page = 1, pageSize = 50): Promise<ManualMatchPage> {
