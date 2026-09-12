@@ -1,5 +1,3 @@
-const DAY_MS = 86_400_000;
-
 export function dateKeyInTimeZone(value: string | Date, timeZone: string): string {
   const date = typeof value === "string" ? new Date(value) : value;
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -13,5 +11,14 @@ export function dateKeyInTimeZone(value: string | Date, timeZone: string): strin
 }
 
 export function addDaysKey(days: number, timeZone: string, now = Date.now()): string {
-  return dateKeyInTimeZone(new Date(now + days * DAY_MS), timeZone);
+  // Advance the visitor's calendar date, not elapsed hours: DST days can have
+  // 23 or 25 hours. UTC here is only a calendar arithmetic representation.
+  const calendar = new Date(`${dateKeyInTimeZone(new Date(now), timeZone)}T00:00:00.000Z`);
+  calendar.setUTCDate(calendar.getUTCDate() + days);
+  return dateKeyInTimeZone(calendar, "UTC");
+}
+
+export function dateInputBound(value: string | null | undefined, timeZone: string): string | undefined {
+  if (!value || !Number.isFinite(Date.parse(value))) return undefined;
+  return dateKeyInTimeZone(value, timeZone);
 }

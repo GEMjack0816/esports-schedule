@@ -2,9 +2,10 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
-import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { addDaysKey, dateInputBound, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { requestScheduleRefresh, SCHEDULE_REFRESH_ERROR } from "@/lib/schedule/client-refresh";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -169,6 +170,8 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [query, setQuery] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState(false);
+  const refreshInFlight = useRef(false);
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
@@ -240,11 +243,16 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const upcomingCount = payload.matches.filter((match) => match.status === "scheduled").length;
 
   async function refreshSchedule() {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     setRefreshing(true);
+    setRefreshError(false);
     try {
-      const response = await fetch("/api/matches", { cache: "no-store" });
-      if (response.ok) setPayload((await response.json()) as SchedulePayload);
+      const result = await requestScheduleRefresh();
+      if (result.ok) setPayload(result.payload);
+      else setRefreshError(true);
     } finally {
+      refreshInFlight.current = false;
       setRefreshing(false);
     }
   }
@@ -306,6 +314,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             </div>
           </div>
 
+          {refreshError && <div className="data-notice" role="alert">{SCHEDULE_REFRESH_ERROR}</div>}
           {payload.warning && <div className="data-notice" role="status"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" /><path d="M10 6.5v4.2M10 13.7h.01" /></svg><span>{payload.warning}</span></div>}
 
           <div className="data-summary" aria-label="数据覆盖信息">
@@ -342,7 +351,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <label><span className="sr-only">游戏</span><select value={game} onChange={(event) => setGame(event.target.value as GameKey | "all")}><option value="all">全部游戏</option>{Object.entries(games).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
             <label><span className="sr-only">赛事</span><select value={league} onChange={(event) => setLeague(event.target.value)}><option value="all">全部赛事</option>{leagues.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
             <label><span className="sr-only">状态</span><select value={status} onChange={(event) => setStatus(event.target.value as MatchStatus | "all")}><option value="all">全部状态</option>{Object.entries(statusMeta).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
-            <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt?.slice(0, 10)} max={payload.coverage.range.latestMatchAt?.slice(0, 10)} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
+            <label className="date-field"><span className="sr-only">日期</span><input type="date" min={dateInputBound(payload.coverage.range.earliestMatchAt, timeZone)} max={dateInputBound(payload.coverage.range.latestMatchAt, timeZone)} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
           </div>
 
           <div className="match-list" aria-live="polite">

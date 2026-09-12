@@ -28,6 +28,8 @@ Vercel Cron（每日保底） ──────┼─> /api/cron/sync
 
 `pandascore_game_snapshots` 每个游戏保存一行规范化 JSONB 快照、源时间、成功/尝试/错误元数据和 fencing generation。读取 Runtime Cache 时会先用五行轻量 generation 查询核对版本；只有缓存缺失或版本不一致才读取完整 JSONB 并回填缓存。PostgreSQL JSONB 会通过 TOAST 管理较大的单游戏值；五行主键读取避免逐比赛查询和写放大。同步失败、持久写失败或 API 返回异常空列表时不会清空该游戏最后成功快照。五个游戏使用 `Promise.allSettled()` 隔离失败。人工王者荣耀数据和 `manual-matches.json` 在 API 数据之后合并，不会被同步删除。
 
+Runtime Cache 大快照使用有界 gzip 编码，压缩后仍超限时继续读取 PostgreSQL 完整快照，不截断比赛；格式兼容、解码上限和测试说明见 [缓存快照编码](docs/runtime-snapshot-cache.md)。
+
 `/api/cron/sync` 返回 `lockAcquired`、`gamesAttempted`、`gamesSucceeded`、`gamesFailed`、`snapshotsPersisted`、时间和安全错误代码。GitHub Actions 使用 `scripts/validate-sync-response.mjs` 解析 JSON；HTTP 2xx 但未取得有效更新不再被判定为同步成功。锁竞争明确报告为 `busy`，不冒充一次刷新。
 
 ## 状态标准化
