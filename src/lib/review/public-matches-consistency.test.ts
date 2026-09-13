@@ -105,4 +105,3 @@ describe("manual match cache authoritative version checks", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
-

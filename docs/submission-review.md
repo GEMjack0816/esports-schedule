@@ -63,4 +63,3 @@ npm run verify:admin -- <isolated-preview-url>
 ```
 
 `verify:admin` 会拒绝生产 Alias，并且只有在显式标记隔离环境且提供已认证浏览器状态时才执行公开提交、批准、编辑、隐藏、恢复、驳回和审计验证。
-
