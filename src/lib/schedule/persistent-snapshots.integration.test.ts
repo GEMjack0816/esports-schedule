@@ -385,4 +385,3 @@ describe.skipIf(!enabled)("persistent PandaScore snapshots (isolated PostgreSQL)
     expect(stored.snapshots.lol).toBeUndefined();
   });
 });
-

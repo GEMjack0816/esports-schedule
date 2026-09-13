@@ -352,4 +352,3 @@ describe("persistent coverage source", () => {
     expect(games.dota2.dataSource).toBe("persistent");
   });
 });
-
