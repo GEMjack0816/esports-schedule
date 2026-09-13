@@ -44,13 +44,14 @@ function publicCache() {
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs = DB_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
   return Promise.race([
     promise,
     new Promise<T>((_, reject) => {
-      const timeout = setTimeout(() => reject(new Error("database timeout")), timeoutMs);
-      timeout.unref?.();
+      timer = setTimeout(() => reject(new Error("database timeout")), timeoutMs);
+      timer.unref?.();
     }),
-  ]);
+  ]).finally(() => clearTimeout(timer));
 }
 
 export function publishedRowToMatch(row: PublishedManualMatchRow): EsportsMatch {
@@ -99,27 +100,31 @@ function isCacheFence(value: unknown): value is { revision: number } {
   return Number.isSafeInteger(revision) && Number(revision) >= 0;
 }
 
-export function selectRuntimeFallback(snapshot: unknown, fence: unknown): CachedPublicMatches | null {
+export function selectRuntimeFallback(snapshot: unknown, fence: unknown, minimumRevision = 0): CachedPublicMatches | null {
   if (!isCachedPublicMatches(snapshot)) return null;
   // The snapshot and fence can be evicted independently. Without the fence,
   // a surviving snapshot may predate a hide/edit whose cache delivery failed.
   if (!isCacheFence(fence)) return null;
-  return snapshot.revision < fence.revision ? null : snapshot;
+  return snapshot.revision < Math.max(fence.revision, minimumRevision) ? null : snapshot;
 }
 
 export async function writeManualMatchCacheFence(revision: number): Promise<void> {
-  await withTimeout(publicCache().set(FENCE_KEY, { revision }, {
+  // This write runs while the repository holds the serialized mutation lock.
+  // Do not wrap it in Promise.race: Runtime Cache writes cannot be cancelled,
+  // so abandoning an older write would let it complete after a newer revision
+  // and regress the fence. A rejected write rolls the database transaction back.
+  await publicCache().set(FENCE_KEY, { revision }, {
     name: "Published manual matches minimum cache revision",
     tags: [RUNTIME_FALLBACK_TAG],
     ttl: CACHE_TTL_SECONDS,
-  }));
+  });
 }
 
-async function readLastSuccess(): Promise<CachedPublicMatches | null> {
+async function readLastSuccess(minimumRevision: number): Promise<CachedPublicMatches | null> {
   try {
     const cache = publicCache();
     const [value, fence] = await Promise.all([cache.get(CACHE_KEY), cache.get(FENCE_KEY)]);
-    return selectRuntimeFallback(value, fence);
+    return selectRuntimeFallback(value, fence, minimumRevision);
   } catch {
     return null;
   }
@@ -205,11 +210,17 @@ const readPublishedMatchesCached = unstable_cache(
   },
 );
 
-async function readCurrentPublishedMatches(): Promise<CachedPublicMatches> {
+async function readCurrentPublishedMatches(observeRevision: (revision: number) => void): Promise<CachedPublicMatches> {
+  // Runtime Cache is regional and set() has no CAS or cancellation support.
+  // Fence writes are awaited under the serialized mutation transaction; this
+  // read still uses PostgreSQL's committed revision as the authoritative check.
+  const repository = getReviewRepository();
+  const revision = await repository.getCurrentManualMatchRevision();
+  observeRevision(revision);
   const cached = await readPublishedMatchesCached();
   const fence = await readCurrentFence();
-  if (shouldRefreshCachedSnapshot(cached.revision, fence)) {
-    return synchronizePublishedManualMatchesSnapshot(getReviewRepository());
+  if (cached.revision !== revision || shouldRefreshCachedSnapshot(cached.revision, fence)) {
+    return synchronizePublishedManualMatchesSnapshot(repository);
   }
   return cached;
 }
@@ -231,9 +242,14 @@ export async function getPublishedDatabaseMatches(): Promise<{
     return { matches: [], state: publicState };
   }
 
+  let observedRevision = 0;
   const result = await preserveLastSuccessfulPublicMatches(
-    () => withTimeout(readCurrentPublishedMatches()),
-    readLastSuccess,
+    () => withTimeout(readCurrentPublishedMatches((revision) => {
+      observedRevision = Math.max(observedRevision, revision);
+    })),
+    // If the full read fails after the committed watermark was observed,
+    // never let a regressed regional fence authorize an older snapshot.
+    () => readLastSuccess(observedRevision),
   );
   if (result.value && !result.fallback) {
     const value = result.value;
@@ -294,3 +310,4 @@ export async function getDatabaseHealth(): Promise<DatabasePublicState & {
     };
   }
 }
+

@@ -110,6 +110,27 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     return { id, input, row };
   }
 
+  it("reads only committed manual-match revisions and retains the latest after outbox cleanup", async () => {
+    const before = await repository.getCurrentManualMatchRevision();
+    await expect(repository.createManualMatch(published(submission("rolled-back revision")), "admin-a", async () => {
+      throw new Error("cache fence unavailable");
+    })).rejects.toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+    expect(await repository.getCurrentManualMatchRevision()).toBe(before);
+
+    const row = await repository.createManualMatch(published(submission("committed revision")), "admin-a");
+    manualMatchIds.push(row.id);
+    const created = await repository.getCurrentManualMatchRevision();
+    expect(created).toBeGreaterThan(before);
+    await repository.setManualMatchHidden(row.id, true, "admin-a", row.updatedAt);
+    const hidden = await repository.getCurrentManualMatchRevision();
+    expect(hidden).toBeGreaterThan(created);
+    await repository.markManualMatchCacheDelivered(hidden);
+    expect(await repository.getCurrentManualMatchRevision()).toBe(hidden);
+    const snapshot = await repository.readManualMatchCacheSnapshot();
+    expect(snapshot.revision).toBe(hidden);
+    expect(snapshot.rows.some(match => match.id === row.id)).toBe(false);
+  });
+
   function policy(overrides: Partial<PublicSubmissionPolicy> = {}): PublicSubmissionPolicy {
     const value: PublicSubmissionPolicy = {
       maxPerSource: 5,
@@ -602,3 +623,4 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     }
   });
 });
+
