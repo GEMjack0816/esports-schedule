@@ -49,6 +49,7 @@ import { uniqueAndSort } from "./utils";
 
 export const FRESH_FOR_MS = 15 * 60 * 1_000;
 const FAILED_AFTER_MS = 60 * 60 * 1_000;
+const PERSISTENT_RECOVERY_READ_TIMEOUT_MS = 2_500;
 
 type SnapshotMap = Partial<Record<PandaGameKey, PandaGameSnapshot>>;
 type SyncStateMap = Partial<Record<PandaGameKey, PandaScoreGameSyncState>>;
@@ -669,6 +670,20 @@ const defaultScheduleRecoveryEffects: ScheduleRecoveryEffects = {
   writeRuntimeState: writePandaScoreGameSyncState,
 };
 
+async function readPersistentWithDeadline<T>(
+  operation: Promise<T>,
+  unavailable: T,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    operation,
+    new Promise<T>((resolve) => {
+      timer = setTimeout(() => resolve(unavailable), PERSISTENT_RECOVERY_READ_TIMEOUT_MS);
+      timer.unref?.();
+    }),
+  ]).catch(() => unavailable).finally(() => clearTimeout(timer));
+}
+
 export async function recoverScheduleParts(
   runtimeSnapshots: SnapshotMap,
   runtimeStates: SyncStateMap,
@@ -680,7 +695,10 @@ export async function recoverScheduleParts(
   for (const game of pandaGameKeys) {
     if (runtimeSnapshots[game]) snapshotSources[game] = "runtime-cache";
   }
-  const persistentGenerations = await effects.readGenerations(pandaGameKeys);
+  const persistentGenerations = await readPersistentWithDeadline(
+    effects.readGenerations(pandaGameKeys),
+    { generations: {}, databaseAvailable: false, errorCode: "TIMEOUT" },
+  );
   const recoveryGames = pandaGameKeys.filter((game) => {
     const persistentGeneration = persistentGenerations.generations[game];
     const runtimeGeneration = snapshots[game]?.syncGeneration;
@@ -699,7 +717,10 @@ export async function recoverScheduleParts(
     };
   }
 
-  const persistent = await effects.readPersistent(recoveryGames);
+  const persistent = await readPersistentWithDeadline(
+    effects.readPersistent(recoveryGames),
+    { snapshots: {}, states: {}, databaseAvailable: false, errorCode: "TIMEOUT" },
+  );
   const recoveredGames: PandaGameKey[] = [];
   await Promise.allSettled(recoveryGames.map(async (game) => {
     const persistentSnapshot = persistent.snapshots[game];
@@ -910,4 +931,3 @@ export type {
   PandaGameKey,
   SchedulePayload,
 } from "./types";
-
