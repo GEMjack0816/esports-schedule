@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PandaScoreGameSyncState } from "./cache";
 import {
   buildScheduleFromParts,
@@ -100,6 +100,8 @@ function state(game: PandaGameKey, fetchedAt = "2026-08-30T00:00:00.000Z"): Pand
 }
 
 describe("persistent schedule recovery", () => {
+  afterEach(() => vi.useRealTimers());
+
   it("uses a complete Runtime Cache hit without querying PostgreSQL", async () => {
     const snapshots = Object.fromEntries(pandaGameKeys.map((game) => [game, snapshot(game)]));
     const states = Object.fromEntries(pandaGameKeys.map((game) => [game, state(game)]));
@@ -183,6 +185,57 @@ describe("persistent schedule recovery", () => {
     expect(payload.providers.pandascore).toBe("stale-cache");
     expect(payload.coverage.totals.finalPandaScore).toBe(5);
     expect(payload.warning).toContain("Runtime Cache");
+  });
+
+  it("bounds a hung PostgreSQL generation check before returning Runtime Cache data", async () => {
+    vi.useFakeTimers();
+    const snapshots = Object.fromEntries(
+      pandaGameKeys.map((game) => [game, snapshot(game, "2026-08-30T00:00:00.000Z", 5)]),
+    );
+    const states = Object.fromEntries(
+      pandaGameKeys.map((game) => [game, state(game, "2026-08-30T00:00:00.000Z")]),
+    );
+    const readPersistent = vi.fn();
+    const pending = recoverScheduleParts(snapshots, states, {
+      readGenerations: () => new Promise(() => undefined),
+      readPersistent,
+      writeRuntimeSnapshot: vi.fn(),
+      writeRuntimeState: vi.fn(),
+    });
+
+    await vi.advanceTimersByTimeAsync(2_499);
+    let settled = false;
+    void pending.finally(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const recovered = await pending;
+    expect(recovered.persistentStoreAvailable).toBe(false);
+    expect(recovered.snapshots.lol?.syncGeneration).toBe(5);
+    expect(readPersistent).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds a hung full persistent snapshot read after a Runtime Cache miss", async () => {
+    vi.useFakeTimers();
+    const pending = recoverScheduleParts({}, {}, {
+      readGenerations: async () => ({
+        generations: { lol: 5 },
+        databaseAvailable: true,
+        errorCode: null,
+      }),
+      readPersistent: () => new Promise(() => undefined),
+      writeRuntimeSnapshot: vi.fn(),
+      writeRuntimeState: vi.fn(),
+    });
+
+    await vi.advanceTimersByTimeAsync(2_500);
+    const recovered = await pending;
+    expect(recovered.persistentStoreAvailable).toBe(false);
+    expect(recovered.snapshots).toEqual({});
+    expect(recovered.recoveredGames).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("recovers a Runtime Cache miss from a persistent snapshot and backfills cache", async () => {
