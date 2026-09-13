@@ -109,11 +109,15 @@ export function selectRuntimeFallback(snapshot: unknown, fence: unknown, minimum
 }
 
 export async function writeManualMatchCacheFence(revision: number): Promise<void> {
-  await withTimeout(publicCache().set(FENCE_KEY, { revision }, {
+  // This write runs while the repository holds the serialized mutation lock.
+  // Do not wrap it in Promise.race: Runtime Cache writes cannot be cancelled,
+  // so abandoning an older write would let it complete after a newer revision
+  // and regress the fence. A rejected write rolls the database transaction back.
+  await publicCache().set(FENCE_KEY, { revision }, {
     name: "Published manual matches minimum cache revision",
     tags: [RUNTIME_FALLBACK_TAG],
     ttl: CACHE_TTL_SECONDS,
-  }));
+  });
 }
 
 async function readLastSuccess(minimumRevision: number): Promise<CachedPublicMatches | null> {
@@ -208,8 +212,8 @@ const readPublishedMatchesCached = unstable_cache(
 
 async function readCurrentPublishedMatches(observeRevision: (revision: number) => void): Promise<CachedPublicMatches> {
   // Runtime Cache is regional and set() has no CAS or cancellation support.
-  // A timed-out set may finish late and regress its fence. Only PostgreSQL's
-  // committed revision can prove that an otherwise matching cache is current.
+  // Fence writes are awaited under the serialized mutation transaction; this
+  // read still uses PostgreSQL's committed revision as the authoritative check.
   const repository = getReviewRepository();
   const revision = await repository.getCurrentManualMatchRevision();
   observeRevision(revision);
@@ -306,3 +310,4 @@ export async function getDatabaseHealth(): Promise<DatabasePublicState & {
     };
   }
 }
+

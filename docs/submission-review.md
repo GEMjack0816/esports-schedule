@@ -29,7 +29,7 @@
 
 每次读取公开人工比赛时，先使用 outbox 主键索引查询一个最新已提交 revision，再比较 Next Data Cache；区域缓存与 fence 即使一起停留在旧版本，也不能遮挡在线数据库的新版本。版本不同时重建快照；Runtime Cache 写失败仍返回当前数据库结果。此检查增加一次单行数据库查询，不会重新调用 PandaScore，也不扫描全部人工比赛。
 
-限制：Runtime Cache `set` 没有 CAS 或取消能力，超时不代表远端写入取消；晚到写入可以让区域 fence 倒退。数据库完全不可用、连 revision 都无法读取时，现有降级策略只能验证区域 fence，不能证明快照是全局最新。该极端情况的可用性/一致性取舍尚待确认，不能宣称隐藏内容在任意数据库故障组合下绝不会重新出现。当前代码固定单区域部署，但这也不能消除晚到写入竞态。
+Runtime Cache `set` 没有 CAS 或取消能力，因此 mutation fence 在持有数据库串行事务锁期间必须完整等待，不能通过应用层超时遗留仍会继续执行的旧写入。fence 写入失败会回滚事务；竞争 mutation 仍受数据库 lock timeout 约束并返回 busy。数据库故障时，仅当 fallback snapshot revision 不低于保留的 fence 才继续提供数据库人工比赛；fence 缺失、损坏或更新时对数据库人工部分 fail closed，PandaScore 与静态补录数据仍保持可用。
 
 公开赛程按 PandaScore 快照 → 静态 JSON 补录/覆盖 → PostgreSQL 已发布比赛合并，并继续以 `provider + providerMatchId` 去重。Next Data Cache 使用 `published-manual-matches` 标签；Runtime Cache 的故障降级快照使用独立的 `published-manual-matches-fallback-v1` 标签。批准、创建、编辑、隐藏或恢复事务成功后会尝试从数据库重建 Runtime Cache 快照，再通过 `updateTag` 立即失效 Next Data Cache。数据库读超时或暂时失败时，公开赛程仅接受符合上述版本检查的已发布人工比赛缓存；不符合时人工数据库部分返回 unavailable，不会删除 PandaScore 或静态人工数据，也不会进入演示模式。健康接口的 `database` 字段只返回连接状态、最近成功读取时间、缓存人工比赛数和聚合提交计数；不返回连接信息、SQL、原始错误或任何 Secret。
 
@@ -64,3 +64,4 @@ npm run verify:admin -- <isolated-preview-url> <expected-git-sha> <expected-git-
 ```
 
 `verify:admin` 在任何写入前通过 `/api/version` 验证服务身份、`environment=preview`、精确 Git SHA/ref、Deployment 元数据及显式 hostname allowlist；任一元数据缺失或不一致都会 fail closed。它还要求显式标记隔离环境和已认证浏览器状态。验证产生的 submission、人工比赛和关联审计记录会在 `finally` 中通过仅 Preview 可用的管理员清理端点按本次 ID 删除；清理失败会使验证失败，禁止把 Production hostname 加入 allowlist。
+

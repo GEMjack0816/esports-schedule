@@ -79,7 +79,7 @@ describe("manual match cache authoritative version checks", () => {
     expect(result.state.cacheRevision).toBe(5);
   });
 
-  it("does not trust a fence that completes after its timeout and overwrites a newer fence", async () => {
+  it("does not abandon a pending fence write that could complete out of order", async () => {
     vi.useFakeTimers();
     let fence = { revision: 3 };
     let finishOldWrite!: () => void;
@@ -90,16 +90,19 @@ describe("manual match cache authoritative version checks", () => {
       return Promise.resolve();
     });
     mocks.get.mockImplementation(async () => fence);
-    const timedOut = writeManualMatchCacheFence(4).catch(() => "timed-out");
+    let settled = false;
+    const pending = writeManualMatchCacheFence(4).finally(() => { settled = true; });
     await vi.advanceTimersByTimeAsync(2_500);
-    expect(await timedOut).toBe("timed-out");
+    expect(settled).toBe(false);
+    expect(fence.revision).toBe(3);
+    finishOldWrite();
+    await pending;
+    expect(fence.revision).toBe(4);
     await writeManualMatchCacheFence(5);
     expect(fence.revision).toBe(5);
-    finishOldWrite();
-    await Promise.resolve();
-    expect(fence.revision).toBe(4);
     const result = await getPublishedDatabaseMatches();
     expect(result.state.cacheRevision).toBe(5);
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
