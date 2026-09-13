@@ -120,6 +120,71 @@ describe("persistent schedule recovery", () => {
     expect(recovered.recoveredGames).toEqual([]);
   });
 
+  it("never replaces a newer Runtime Cache snapshot with an older persistent generation", async () => {
+    const runtimeSnapshot = snapshot("lol", "2026-08-30T01:00:00.000Z", 5);
+    runtimeSnapshot.matches = [match("lol", "runtime-new")];
+    const persistentSnapshot = snapshot("lol", "2026-08-30T00:00:00.000Z", 4);
+    persistentSnapshot.matches = [match("lol", "persistent-old")];
+    const writeRuntimeSnapshot = vi.fn(async () => true);
+    const writeRuntimeState = vi.fn(async () => true);
+
+    const recovered = await recoverScheduleParts({ lol: runtimeSnapshot }, {}, {
+      readGenerations: async () => ({
+        generations: { lol: 4 },
+        databaseAvailable: true,
+        errorCode: null,
+      }),
+      readPersistent: async () => ({
+        snapshots: { lol: persistentSnapshot },
+        states: { lol: state("lol", persistentSnapshot.fetchedAt) },
+        databaseAvailable: true,
+        errorCode: null,
+      }),
+      writeRuntimeSnapshot,
+      writeRuntimeState,
+    });
+
+    expect(recovered.snapshots.lol?.matches[0].providerMatchId).toBe("runtime-new");
+    expect(recovered.snapshots.lol?.syncGeneration).toBe(5);
+    expect(recovered.snapshotSources.lol).toBe("runtime-cache");
+    expect(recovered.recoveredGames).toEqual([]);
+    expect(writeRuntimeSnapshot).not.toHaveBeenCalled();
+    expect(writeRuntimeState).not.toHaveBeenCalled();
+  });
+
+  it("serves valid Runtime Cache data as degraded when PostgreSQL cannot be checked", async () => {
+    const snapshots = Object.fromEntries(
+      pandaGameKeys.map((game) => [game, snapshot(game, "2026-08-30T00:00:00.000Z", 5)]),
+    );
+    const states = Object.fromEntries(
+      pandaGameKeys.map((game) => [game, state(game, "2026-08-30T00:00:00.000Z")]),
+    );
+    const readPersistent = vi.fn();
+    const recovered = await recoverScheduleParts(snapshots, states, {
+      readGenerations: async () => ({
+        generations: {},
+        databaseAvailable: false,
+        errorCode: "DATABASE_UNAVAILABLE",
+      }),
+      readPersistent,
+      writeRuntimeSnapshot: vi.fn(),
+      writeRuntimeState: vi.fn(),
+    });
+    const payload = await buildScheduleFromParts(
+      { ...recovered, refreshInProgress: false },
+      "configured-token",
+      new Date("2026-08-30T00:10:00.000Z"),
+    );
+
+    expect(readPersistent).not.toHaveBeenCalled();
+    expect(recovered.persistentStoreAvailable).toBe(false);
+    expect(payload.mode).toBe("live");
+    expect(payload.stale).toBe(true);
+    expect(payload.providers.pandascore).toBe("stale-cache");
+    expect(payload.coverage.totals.finalPandaScore).toBe(5);
+    expect(payload.warning).toContain("Runtime Cache");
+  });
+
   it("recovers a Runtime Cache miss from a persistent snapshot and backfills cache", async () => {
     const persistentSnapshot = snapshot("lol");
     const persistentState = state("lol");
@@ -287,3 +352,4 @@ describe("persistent coverage source", () => {
     expect(games.dota2.dataSource).toBe("persistent");
   });
 });
+
