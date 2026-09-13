@@ -289,13 +289,14 @@ async function buildPayload(
   refreshInProgress: boolean,
   snapshotSources: SnapshotSourceMap,
   warning?: string,
+  forceStale = false,
 ): Promise<SchedulePayload> {
   const manual = applyManualData(panda?.matches ?? [], now);
   const databaseManual = await getPublishedDatabaseMatches();
   const matches = uniqueAndSort([...manual.matches, ...databaseManual.matches]);
   const games = deriveGameCoverage(panda?.snapshots ?? {}, states, now, refreshInProgress, snapshotSources);
   const stale = panda
-    ? pandaGameKeys.some((game) => games[game].syncStatus !== "normal")
+    ? forceStale || pandaGameKeys.some((game) => games[game].syncStatus !== "normal")
     : true;
   const coverage = makeCoverage(
     mode,
@@ -685,10 +686,17 @@ export async function recoverScheduleParts(
     const runtimeGeneration = snapshots[game]?.syncGeneration;
     return !snapshots[game]
       || !states[game]
-      || (persistentGeneration !== undefined && runtimeGeneration !== persistentGeneration);
+      || (persistentGeneration !== undefined
+        && (runtimeGeneration === undefined || persistentGeneration > runtimeGeneration));
   });
   if (recoveryGames.length === 0) {
-    return { snapshots, states, snapshotSources, recoveredGames: [] as PandaGameKey[] };
+    return {
+      snapshots,
+      states,
+      snapshotSources,
+      recoveredGames: [] as PandaGameKey[],
+      persistentStoreAvailable: persistentGenerations.databaseAvailable,
+    };
   }
 
   const persistent = await effects.readPersistent(recoveryGames);
@@ -696,21 +704,36 @@ export async function recoverScheduleParts(
   await Promise.allSettled(recoveryGames.map(async (game) => {
     const persistentSnapshot = persistent.snapshots[game];
     const persistentState = persistent.states[game];
-    const persistentGeneration = persistentGenerations.generations[game];
-    const generationMismatch = persistentGeneration !== undefined
-      && snapshots[game]?.syncGeneration !== persistentGeneration;
-    if ((!snapshots[game] || generationMismatch) && persistentSnapshot) {
+    const persistentGeneration = persistentSnapshot?.syncGeneration
+      ?? persistentGenerations.generations[game];
+    const runtimeGeneration = snapshots[game]?.syncGeneration;
+    const persistentIsNewer = !!persistentSnapshot && (
+      !snapshots[game]
+      || (persistentGeneration !== undefined
+        && (runtimeGeneration === undefined || persistentGeneration > runtimeGeneration))
+    );
+    const generationsMatch = persistentGeneration !== undefined
+      && runtimeGeneration !== undefined
+      && persistentGeneration === runtimeGeneration;
+    if (persistentIsNewer && persistentSnapshot) {
       snapshots[game] = persistentSnapshot;
       snapshotSources[game] = "persistent-snapshot";
       recoveredGames.push(game);
       await effects.writeRuntimeSnapshot(persistentSnapshot);
     }
-    if ((!states[game] || generationMismatch) && persistentState) {
+    if ((persistentIsNewer || (!states[game] && generationsMatch)) && persistentState) {
       states[game] = persistentState;
       await effects.writeRuntimeState(persistentState);
     }
   }));
-  return { snapshots, states, snapshotSources, recoveredGames };
+  return {
+    snapshots,
+    states,
+    snapshotSources,
+    recoveredGames,
+    persistentStoreAvailable:
+      persistentGenerations.databaseAvailable && persistent.databaseAvailable,
+  };
 }
 
 async function readScheduleParts(now: Date) {
@@ -753,16 +776,25 @@ export async function buildScheduleFromParts(
     states: SyncStateMap;
     snapshotSources: SnapshotSourceMap;
     refreshInProgress: boolean;
+    persistentStoreAvailable?: boolean;
   },
   token: string | undefined,
   now: Date,
 ): Promise<SchedulePayload> {
-  const { snapshots, states, snapshotSources, refreshInProgress } = parts;
+  const {
+    snapshots,
+    states,
+    snapshotSources,
+    refreshInProgress,
+    persistentStoreAvailable = true,
+  } = parts;
   const cachedPanda = aggregatePandaScoreSnapshots(snapshots);
 
   if (cachedPanda) {
     const games = deriveGameCoverage(snapshots, states, now, refreshInProgress, snapshotSources);
-    const stale = pandaGameKeys.some((game) => games[game].syncStatus !== "normal");
+    const persistentStoreDegraded = !persistentStoreAvailable;
+    const stale = persistentStoreDegraded
+      || pandaGameKeys.some((game) => games[game].syncStatus !== "normal");
     const persistentFallback = pandaGameKeys.some(
       (game) => snapshotSources[game] === "persistent-snapshot",
     );
@@ -776,6 +808,8 @@ export async function buildScheduleFromParts(
       snapshotSources,
       !token
         ? "生产数据源配置错误；当前响应仅保留上一次成功同步的真实数据。"
+        : persistentStoreDegraded
+          ? "持久快照暂时无法校验；当前继续提供已验证的 Runtime Cache 数据，恢复前不会发布为新鲜状态。"
         : stale
           ? refreshInProgress
             ? "数据快照已过期，后台同步正在进行；当前快速返回上一次成功的真实数据。"
@@ -783,6 +817,7 @@ export async function buildScheduleFromParts(
           : persistentFallback
             ? "Runtime Cache 未命中，当前数据已从持久化的最后成功快照恢复。"
           : undefined,
+      persistentStoreDegraded,
     );
   }
 
@@ -875,3 +910,4 @@ export type {
   PandaGameKey,
   SchedulePayload,
 } from "./types";
+
