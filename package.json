@@ -14,6 +14,7 @@
     "verify:browser": "node scripts/verify-browser.mjs",
     "verify:admin": "node scripts/verify-admin.mjs",
     "verify:production": "node scripts/verify-production.mjs",
+    "verify:list-window": "node scripts/verify-list-window.mjs",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:client-bundle"

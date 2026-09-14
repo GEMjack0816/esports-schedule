@@ -4,6 +4,12 @@ import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
+import {
+  MATCH_RENDER_BATCH_SIZE,
+  nextMatchLimit,
+  visibleMatchLimit,
+  windowMatches,
+} from "@/lib/schedule/client-list-window";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -158,6 +164,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [query, setQuery] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [listWindow, setListWindow] = useState({ filterKey: "", limit: MATCH_RENDER_BATCH_SIZE });
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
@@ -212,9 +219,16 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     });
   }, [game, league, payload.matches, query, range, selectedDate, sevenDaysOut, status, timeZone, today, tomorrow]);
 
+  const filterKey = [range, game, league, status, query.trim(), selectedDate, timeZone, today].join("\u001f");
+  const matchLimit = visibleMatchLimit(listWindow, filterKey);
+  const visibleMatches = useMemo(
+    () => windowMatches(filtered, matchLimit, range === "history" && !selectedDate),
+    [filtered, matchLimit, range, selectedDate],
+  );
+
   const grouped = useMemo(() => {
     const groups = new Map<string, EsportsMatch[]>();
-    for (const match of filtered) {
+    for (const match of visibleMatches) {
       const key = matchDateKey(match, timeZone);
       groups.set(key, [...(groups.get(key) ?? []), match]);
     }
@@ -223,7 +237,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
       if (b === "unscheduled") return -1;
       return range === "history" ? b.localeCompare(a) : a.localeCompare(b);
     });
-  }, [filtered, range, timeZone]);
+  }, [range, timeZone, visibleMatches]);
 
   const liveCount = payload.matches.filter((match) => match.status === "running").length;
   const upcomingCount = payload.matches.filter((match) => match.status === "scheduled").length;
@@ -342,6 +356,18 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
               </section>
             )) : (
               <div className="empty-state"><span className="empty-glyph">⌁</span><h3>没有找到符合条件的比赛</h3><p>试试切换时间范围，或清除部分筛选条件。</p><button type="button" onClick={resetFilters}>清除筛选</button></div>
+            )}
+            {visibleMatches.length < filtered.length && (
+              <div className="match-list-more">
+                <p>已显示 {visibleMatches.length} / {filtered.length} 场</p>
+                <button
+                  type="button"
+                  onClick={() => setListWindow({
+                    filterKey,
+                    limit: nextMatchLimit(matchLimit, filtered.length),
+                  })}
+                >加载更多比赛</button>
+              </div>
             )}
           </div>
         </section>
