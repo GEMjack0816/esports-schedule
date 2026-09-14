@@ -15,6 +15,7 @@ const success = {
   gamesFailed: 0,
   snapshotsPersisted: 5,
   lastSuccessfulSyncAt: "2026-08-30T00:00:00.000Z",
+  errors: [],
 };
 
 describe("sync workflow response validation", () => {
@@ -28,7 +29,13 @@ describe("sync workflow response validation", () => {
 
   it.each([
     { ...success, status: "partial" },
-    { ...success, gamesSucceeded: 4, snapshotsPersisted: 4, gamesFailed: 1 },
+    {
+      ...success,
+      gamesSucceeded: 4,
+      snapshotsPersisted: 4,
+      gamesFailed: 1,
+      errors: [{ game: "cs2", code: "UPSTREAM", httpStatus: 500 }],
+    },
   ])("rejects status and game outcome contradictions", payload => {
     expect(validateSyncResponse(payload, 200).ok).toBe(false);
   });
@@ -79,6 +86,15 @@ describe("sync workflow response validation", () => {
       gamesSucceeded: 4,
       gamesFailed: 1,
       snapshotsPersisted: 4,
+      errors: [{ game: "cs2", code: "UPSTREAM", httpStatus: 500 }],
+    }, 200).ok).toBe(true);
+  });
+
+  it("accepts partial sync when durable snapshots succeeded but Runtime Cache delivery reported errors", () => {
+    expect(validateSyncResponse({
+      ...success,
+      status: "partial",
+      errors: [{ game: "lol", code: "CACHE_WRITE", httpStatus: null }],
     }, 200).ok).toBe(true);
   });
 
@@ -94,11 +110,18 @@ describe("sync workflow response validation", () => {
       gamesSucceeded: 0,
       gamesFailed: 5,
       snapshotsPersisted: 0,
+      errors: [{ game: "lol", code: "UPSTREAM", httpStatus: 500 }],
     }, 200).ok).toBe(false);
   });
 
   it("rejects a logical success that did not persist a snapshot", () => {
     expect(validateSyncResponse({ ...success, snapshotsPersisted: 0 }, 200).ok).toBe(false);
+  });
+
+  it("rejects a response without an error summary", () => {
+    const withoutErrors = { ...success };
+    Reflect.deleteProperty(withoutErrors, "errors");
+    expect(validateSyncResponse(withoutErrors, 200).ok).toBe(false);
   });
 
   it("rejects a busy payload returned with an unexpected HTTP status", () => {
