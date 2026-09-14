@@ -4,8 +4,52 @@ import { requestScheduleRefresh, SCHEDULE_REFRESH_TIMEOUT_MS } from "./client-re
 afterEach(() => vi.useRealTimers());
 
 describe("schedule refresh transport", () => {
+  const gameCoverage = {
+    syncStatus: "normal",
+    refreshInProgress: false,
+    sourceFetchedAt: "2026-08-30T00:00:00.000Z",
+  };
+  const payload = {
+    matches: [{
+      id: "pandascore:lol:1",
+      provider: "pandascore",
+      providerMatchId: "1",
+      game: "lol",
+      tournament: null,
+      league: "Refresh test",
+      stage: null,
+      homeTeam: { name: "Alpha", logo: "/team-placeholder.svg" },
+      awayTeam: { name: "Beta", logo: "/team-placeholder.svg" },
+      homeScore: null,
+      awayScore: null,
+      bestOf: 3,
+      status: "scheduled",
+      startTimeUtc: "2026-08-31T00:00:00.000Z",
+      streams: [{ label: "Official", url: "https://example.com/live" }],
+      lastUpdatedAt: "2026-08-30T00:00:00.000Z",
+    }],
+    generatedAt: "2026-08-30T00:00:00.000Z",
+    mode: "live",
+    demoMode: false,
+    stale: false,
+    lastSuccessfulSyncAt: "2026-08-30T00:00:00.000Z",
+    providers: { pandascore: "connected", manual: "json+database" },
+    coverage: {
+      sourceFetchedAt: "2026-08-30T00:00:00.000Z",
+      lastAttemptAt: "2026-08-30T00:00:00.000Z",
+      refreshInProgress: false,
+      range: {
+        earliestMatchAt: "2026-08-31T00:00:00.000Z",
+        latestMatchAt: "2026-08-31T00:00:00.000Z",
+      },
+      games: Object.fromEntries([
+        "lol", "valorant", "honor-of-kings", "cs2", "dota2",
+      ].map((game) => [game, gameCoverage])),
+    },
+    deployment: { id: null, commitSha: null, productionUrl: null, environment: "preview" },
+  };
+
   it("reads the same-origin endpoint without cache and returns its JSON", async () => {
-    const payload = { matches: [], mode: "unavailable" };
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(payload));
     expect(await requestScheduleRefresh(fetcher)).toEqual({ ok: true, payload });
     expect(fetcher).toHaveBeenCalledWith("/api/matches", {
@@ -23,6 +67,18 @@ describe("schedule refresh transport", () => {
   });
   it("handles invalid JSON without replacing the prior data", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("<html>failure</html>"));
+    expect(await requestScheduleRefresh(fetcher)).toEqual({ ok: false });
+  });
+  it.each([
+    {},
+    { ...payload, matches: null },
+    { ...payload, matches: [{ ...payload.matches[0], game: "unknown-game" }] },
+    { ...payload, matches: [{ ...payload.matches[0], status: "live-ish" }] },
+    { ...payload, matches: [{ ...payload.matches[0], homeTeam: null }] },
+    { ...payload, matches: [{ ...payload.matches[0], streams: [{ label: "bad", url: "javascript:alert(1)" }] }] },
+    { ...payload, coverage: { ...payload.coverage, games: {} } },
+  ])("rejects render-unsafe successful JSON without replacing prior data", async unsafePayload => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(unsafePayload));
     expect(await requestScheduleRefresh(fetcher)).toEqual({ ok: false });
   });
   it("aborts a stalled request and releases its deadline timer", async () => {
