@@ -4,14 +4,19 @@ import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
+import {
+  calendarClockSnapshot,
+  parseCalendarClockSnapshot,
+  subscribeCalendarClock,
+} from "@/lib/schedule/client-calendar-clock";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
 
-const subscribeToTimeZone = () => () => undefined;
 const getBrowserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-const getServerTimeZone = () => "UTC";
+const getBrowserCalendarClock = () => calendarClockSnapshot(getBrowserTimeZone());
+const getServerCalendarClock = () => calendarClockSnapshot("UTC");
 const subscribeToTheme = (callback: () => void) => {
   window.addEventListener("schedule-theme-change", callback);
   return () => window.removeEventListener("schedule-theme-change", callback);
@@ -158,16 +163,17 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [query, setQuery] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [refreshing, setRefreshing] = useState(false);
-  const timeZone = useSyncExternalStore(
-    subscribeToTimeZone,
-    getBrowserTimeZone,
-    getServerTimeZone,
+  const calendarClock = useSyncExternalStore(
+    subscribeCalendarClock,
+    getBrowserCalendarClock,
+    getServerCalendarClock,
   );
+  const { timeZone, now } = parseCalendarClockSnapshot(calendarClock);
   const theme = useSyncExternalStore(subscribeToTheme, getBrowserTheme, getServerTheme);
 
-  const today = addDaysKey(0, timeZone);
-  const tomorrow = addDaysKey(1, timeZone);
-  const sevenDaysOut = addDaysKey(6, timeZone);
+  const today = addDaysKey(0, timeZone, now);
+  const tomorrow = addDaysKey(1, timeZone, now);
+  const sevenDaysOut = addDaysKey(6, timeZone, now);
 
   const rangeCounts = useMemo(() => {
     const counts: Record<RangeKey, number> = { today: 0, tomorrow: 0, seven: 0, history: 0, all: 0 };
