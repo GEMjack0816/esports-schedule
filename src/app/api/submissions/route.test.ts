@@ -21,6 +21,40 @@ function request(body: unknown) {
   });
 }
 
+function streamRequest(
+  chunks: string[],
+  options: { contentLength?: string; onCancel?: () => void; onPull?: () => void } = {},
+) {
+  const encoder = new TextEncoder();
+  let index = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      options.onPull?.();
+      const chunk = chunks[index];
+      index += 1;
+      if (chunk === undefined) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(encoder.encode(chunk));
+    },
+    cancel() {
+      options.onCancel?.();
+    },
+  }, { highWaterMark: 0 });
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    "x-real-ip": "203.0.113.10",
+  });
+  if (options.contentLength) headers.set("content-length", options.contentLength);
+  return new Request("https://example.com/api/submissions", {
+    method: "POST",
+    headers,
+    body,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+}
+
 describe("POST /api/submissions", () => {
   it("returns only the public receipt fields and no-store headers", async () => {
     const createSubmission = vi.fn(async (...args: unknown[]) => {
@@ -117,6 +151,49 @@ describe("POST /api/submissions", () => {
       createSubmission,
     );
     expect(response.status).toBe(413);
+    expect(createSubmission).not.toHaveBeenCalled();
+  });
+
+  it("rejects a multibyte body above 10 KB even when its character count is smaller", async () => {
+    const createSubmission = vi.fn();
+    const body = JSON.stringify({ ...valid, padding: "界".repeat(4_000) });
+    expect(body.length).toBeLessThan(10_000);
+    expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(10_000);
+
+    const response = await handleSubmissionPost(streamRequest([body]), createSubmission);
+
+    expect(response.status).toBe(413);
+    expect(createSubmission).not.toHaveBeenCalled();
+  });
+
+  it("stops reading and cancels an oversized chunked request", async () => {
+    const createSubmission = vi.fn();
+    const onCancel = vi.fn();
+    const onPull = vi.fn();
+    const response = await handleSubmissionPost(
+      streamRequest(["x".repeat(6_000), "y".repeat(5_000), "z".repeat(1_000)], {
+        onCancel,
+        onPull,
+      }),
+      createSubmission,
+    );
+
+    expect(response.status).toBe(413);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onPull).toHaveBeenCalledTimes(2);
+    expect(createSubmission).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized declared content length without reading the body", async () => {
+    const createSubmission = vi.fn();
+    const onCancel = vi.fn();
+    const response = await handleSubmissionPost(
+      streamRequest([JSON.stringify(valid)], { contentLength: "10001", onCancel }),
+      createSubmission,
+    );
+
+    expect(response.status).toBe(413);
+    expect(onCancel).toHaveBeenCalledTimes(1);
     expect(createSubmission).not.toHaveBeenCalled();
   });
 });

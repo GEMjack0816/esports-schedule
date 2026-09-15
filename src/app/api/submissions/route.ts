@@ -17,6 +17,55 @@ const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, no-cache, must-revalidate",
   "Vercel-CDN-Cache-Control": "no-store",
 };
+const MAX_SUBMISSION_BODY_BYTES = 10_000;
+
+class SubmissionBodyTooLargeError extends Error {
+  constructor() {
+    super("Submission request body exceeds the allowed byte limit.");
+    this.name = "SubmissionBodyTooLargeError";
+  }
+}
+
+function cancelRequestBody(body: ReadableStream<Uint8Array> | null): void {
+  if (!body) return;
+  void body.cancel().catch(() => undefined);
+}
+
+async function readSubmissionRequestBody(request: Request): Promise<string> {
+  const contentLength = request.headers.get("content-length")?.trim();
+  if (contentLength && /^\d+$/.test(contentLength) && Number(contentLength) > MAX_SUBMISSION_BODY_BYTES) {
+    cancelRequestBody(request.body);
+    throw new SubmissionBodyTooLargeError();
+  }
+
+  const reader = request.body?.getReader();
+  if (!reader) return "";
+
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_SUBMISSION_BODY_BYTES) {
+        void reader.cancel().catch(() => undefined);
+        throw new SubmissionBodyTooLargeError();
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
 
 type PublicSubmissionOutcome =
   | {
@@ -37,22 +86,8 @@ export async function handleSubmissionPost(
     sourceHash: string,
   ) => Promise<PublicSubmissionOutcome>,
 ) {
-  const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (contentLength > 10_000) {
-    return Response.json({ ok: false, error: "提交内容过大。" }, {
-      status: 413,
-      headers: NO_STORE_HEADERS,
-    });
-  }
-
   try {
-    const body = await request.text();
-    if (body.length > 10_000) {
-      return Response.json({ ok: false, error: "提交内容过大。" }, {
-        status: 413,
-        headers: NO_STORE_HEADERS,
-      });
-    }
+    const body = await readSubmissionRequestBody(request);
     const parsed: unknown = JSON.parse(body);
     if (isHoneypotHit(parsed)) {
       return Response.json({
@@ -102,6 +137,12 @@ export async function handleSubmissionPost(
       message: "已保存为待审核，审核通过前不会公开。",
     }, { status: 201, headers: NO_STORE_HEADERS });
   } catch (error) {
+    if (error instanceof SubmissionBodyTooLargeError) {
+      return Response.json({ ok: false, error: "提交内容过大。" }, {
+        status: 413,
+        headers: NO_STORE_HEADERS,
+      });
+    }
     const errorCode = error && typeof error === "object" && "code" in error
       ? (error as { code?: unknown }).code
       : null;
