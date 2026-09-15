@@ -32,6 +32,8 @@ const COOKIE_SUFFIXES = {
 } as const;
 const TEMP_MAX_AGE_SECONDS = 10 * 60;
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
+const TOKEN_REVOCATION_MAX_ATTEMPTS = 2;
+const TOKEN_REVOCATION_RETRY_DELAY_MS = 100;
 
 type AuthConfig = {
   clientId: string;
@@ -217,8 +219,40 @@ type TokenResponse = {
   id_token?: string;
 };
 
+type RevocationResponse = Pick<Response, "ok" | "status">;
+
+function retryableRevocationStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+function pause(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+export async function revokeAccessTokenWithRetry(
+  request: () => Promise<RevocationResponse>,
+  wait: (milliseconds: number) => Promise<void> = pause,
+): Promise<void> {
+  for (let attempt = 1; attempt <= TOKEN_REVOCATION_MAX_ATTEMPTS; attempt += 1) {
+    let response: RevocationResponse;
+    try {
+      response = await request();
+    } catch (error) {
+      if (attempt === TOKEN_REVOCATION_MAX_ATTEMPTS) throw error;
+      await wait(TOKEN_REVOCATION_RETRY_DELAY_MS * attempt);
+      continue;
+    }
+
+    if (response.ok) return;
+    if (!retryableRevocationStatus(response.status) || attempt === TOKEN_REVOCATION_MAX_ATTEMPTS) {
+      throw new Error(`Vercel token revocation failed with HTTP ${response.status}.`);
+    }
+    await wait(TOKEN_REVOCATION_RETRY_DELAY_MS * attempt);
+  }
+}
+
 async function revokeVercelAccessToken(config: AuthConfig, accessToken: string): Promise<void> {
-  await fetch(REVOKE_ENDPOINT, {
+  await revokeAccessTokenWithRetry(() => fetch(REVOKE_ENDPOINT, {
     method: "POST",
     headers: {
       Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
@@ -227,7 +261,7 @@ async function revokeVercelAccessToken(config: AuthConfig, accessToken: string):
     body: new URLSearchParams({ token: accessToken }),
     cache: "no-store",
     signal: AbortSignal.timeout(10_000),
-  });
+  }));
 }
 
 export async function revokeRejectedAccessToken<T>(

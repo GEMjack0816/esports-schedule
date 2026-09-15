@@ -9,6 +9,7 @@ import {
   AuthForbiddenError,
   authCookieNames,
   isAuthorizedAdminSubject,
+  revokeAccessTokenWithRetry,
   revokeRejectedAccessToken,
   trustedMutationOrigin,
   trustedRequestOrigin,
@@ -139,5 +140,46 @@ describe("Vercel administrator identity validation", () => {
       async () => "/admin",
     )).resolves.toBe("/admin");
     expect(revoke).not.toHaveBeenCalled();
+  });
+
+  it("accepts a successful token revocation without retrying", async () => {
+    const request = vi.fn(async () => ({ ok: true, status: 204 }));
+    const wait = vi.fn(async () => undefined);
+
+    await expect(revokeAccessTokenWithRetry(request, wait)).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it.each([429, 503])("retries a transient token revocation failure: HTTP %s", async (status) => {
+    const request = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status })
+      .mockResolvedValueOnce({ ok: true, status: 204 });
+    const wait = vi.fn(async () => undefined);
+
+    await expect(revokeAccessTokenWithRetry(request, wait)).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenCalledExactlyOnceWith(100);
+  });
+
+  it("retries a network failure once", async () => {
+    const request = vi.fn()
+      .mockRejectedValueOnce(new Error("network unavailable"))
+      .mockResolvedValueOnce({ ok: true, status: 204 });
+    const wait = vi.fn(async () => undefined);
+
+    await expect(revokeAccessTokenWithRetry(request, wait)).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenCalledExactlyOnceWith(100);
+  });
+
+  it("fails closed without retrying a permanent revocation rejection", async () => {
+    const request = vi.fn(async () => ({ ok: false, status: 400 }));
+    const wait = vi.fn(async () => undefined);
+
+    await expect(revokeAccessTokenWithRetry(request, wait))
+      .rejects.toThrow("Vercel token revocation failed with HTTP 400.");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(wait).not.toHaveBeenCalled();
   });
 });
