@@ -4,10 +4,12 @@ import {
   generateKeyPair,
   SignJWT,
 } from "jose";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  AuthForbiddenError,
   authCookieNames,
   isAuthorizedAdminSubject,
+  revokeRejectedAccessToken,
   trustedMutationOrigin,
   trustedRequestOrigin,
   usesSecureAuthCookies,
@@ -104,5 +106,38 @@ describe("Vercel administrator identity validation", () => {
     ["https://evil.example/admin", "/admin"],
   ])("keeps administrator return paths internal: %s", (input, expected) => {
     expect(safeAdminReturnPath(input)).toBe(expected);
+  });
+
+  it("revokes an exchanged access token when authorization is rejected", async () => {
+    const revoke = vi.fn(async () => undefined);
+    const failure = new AuthForbiddenError("rejected");
+
+    await expect(revokeRejectedAccessToken(
+      "access-token",
+      revoke,
+      async () => { throw failure; },
+    )).rejects.toBe(failure);
+    expect(revoke).toHaveBeenCalledExactlyOnceWith("access-token");
+  });
+
+  it("does not let a revocation failure mask the authorization failure", async () => {
+    const failure = new AuthForbiddenError("rejected");
+
+    await expect(revokeRejectedAccessToken(
+      "access-token",
+      async () => { throw new Error("revocation unavailable"); },
+      async () => { throw failure; },
+    )).rejects.toBe(failure);
+  });
+
+  it("retains an access token only after authorization succeeds", async () => {
+    const revoke = vi.fn(async () => undefined);
+
+    await expect(revokeRejectedAccessToken(
+      "access-token",
+      revoke,
+      async () => "/admin",
+    )).resolves.toBe("/admin");
+    expect(revoke).not.toHaveBeenCalled();
   });
 });

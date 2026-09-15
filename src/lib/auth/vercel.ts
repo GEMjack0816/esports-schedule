@@ -230,6 +230,23 @@ async function revokeVercelAccessToken(config: AuthConfig, accessToken: string):
   });
 }
 
+export async function revokeRejectedAccessToken<T>(
+  accessToken: string,
+  revoke: (token: string) => Promise<void>,
+  authorize: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await authorize();
+  } catch (error) {
+    try {
+      await revoke(accessToken);
+    } catch {
+      // Preserve the authorization failure even when upstream revocation is unavailable.
+    }
+    throw error;
+  }
+}
+
 export async function completeVercelAuthorization(request: Request): Promise<string> {
   const config = requiredConfig();
   const origin = trustedRequestOrigin(request);
@@ -269,29 +286,41 @@ export async function completeVercelAuthorization(request: Request): Promise<str
   });
   if (!response.ok) throw new AuthForbiddenError("Vercel 登录令牌交换失败。");
   const token = await response.json() as TokenResponse;
-  if (!token.id_token || !token.access_token) throw new AuthForbiddenError("Vercel 登录响应不完整。");
+  if (!token.access_token) throw new AuthForbiddenError("Vercel 登录响应不完整。");
 
-  const subject = await verifyVercelIdentityToken(token.id_token, nonce, config.clientId);
-  if (!config.adminIds.has(subject)) throw new AuthForbiddenError("此 Vercel 账户不在管理员白名单中。");
+  return revokeRejectedAccessToken(
+    token.access_token,
+    (accessToken) => revokeVercelAccessToken(config, accessToken),
+    async () => {
+      if (!token.id_token) throw new AuthForbiddenError("Vercel 登录响应不完整。");
 
-  const issuedAt = Math.floor(Date.now() / 1_000);
-  const session = await new SignJWT({ sub: subject, purpose: "admin-session" })
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuer("esports-schedule")
-    .setAudience("esports-schedule-admin")
-    .setIssuedAt(issuedAt)
-    .setExpirationTime(issuedAt + SESSION_MAX_AGE_SECONDS)
-    .sign(digestSecret(config.clientSecret, "session"));
-  const encryptedAccess = await new EncryptJWT({ token: token.access_token })
-    .setProtectedHeader({ alg: "dir", enc: "A256GCM" })
-    .setIssuer("esports-schedule")
-    .setAudience("vercel-token-revoke")
-    .setIssuedAt(issuedAt)
-    .setExpirationTime(issuedAt + SESSION_MAX_AGE_SECONDS)
-    .encrypt(digestSecret(config.clientSecret, "access-token"));
-  store.set(names.session, session, cookieOptions(SESSION_MAX_AGE_SECONDS));
-  store.set(names.access, encryptedAccess, cookieOptions(SESSION_MAX_AGE_SECONDS));
-  return returnTo;
+      const subject = await verifyVercelIdentityToken(token.id_token, nonce, config.clientId);
+      if (!config.adminIds.has(subject)) {
+        throw new AuthForbiddenError("此 Vercel 账户不在管理员白名单中。");
+      }
+
+      const issuedAt = Math.floor(Date.now() / 1_000);
+      const session = await new SignJWT({ sub: subject, purpose: "admin-session" })
+        .setProtectedHeader({ alg: "HS256" })
+        .setIssuer("esports-schedule")
+        .setAudience("esports-schedule-admin")
+        .setIssuedAt(issuedAt)
+        .setExpirationTime(issuedAt + SESSION_MAX_AGE_SECONDS)
+        .sign(digestSecret(config.clientSecret, "session"));
+      const encryptedAccess = await new EncryptJWT({ token: token.access_token })
+        .setProtectedHeader({ alg: "dir", enc: "A256GCM" })
+        .setIssuer("esports-schedule")
+        .setAudience("vercel-token-revoke")
+        .setIssuedAt(issuedAt)
+        .setExpirationTime(issuedAt + SESSION_MAX_AGE_SECONDS)
+        .encrypt(digestSecret(config.clientSecret, "access-token"));
+
+      // The session cookie is the authorization commit point and must be written last.
+      store.set(names.access, encryptedAccess, cookieOptions(SESSION_MAX_AGE_SECONDS));
+      store.set(names.session, session, cookieOptions(SESSION_MAX_AGE_SECONDS));
+      return returnTo;
+    },
+  );
 }
 
 export async function getAdminSession(): Promise<AdminSession | null> {
