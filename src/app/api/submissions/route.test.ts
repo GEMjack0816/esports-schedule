@@ -13,10 +13,14 @@ const valid = {
   website: "",
 };
 
-function request(body: unknown) {
+function request(body: unknown, extraHeaders: Record<string, string> = {}) {
   return new Request("https://example.com/api/submissions", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-real-ip": "203.0.113.10" },
+    headers: {
+      "Content-Type": "application/json",
+      "x-real-ip": "203.0.113.10",
+      ...extraHeaders,
+    },
     body: JSON.stringify(body),
   });
 }
@@ -89,6 +93,43 @@ describe("POST /api/submissions", () => {
     const response = await handleSubmissionPost(request(valid), createSubmission);
     expect(response.status).toBe(409);
   });
+
+  it("accepts a same-origin browser request with a JSON media type parameter", async () => {
+    const createSubmission = vi.fn(async () => ({ kind: "duplicate" as const }));
+    const response = await handleSubmissionPost(request(valid, {
+      Origin: "https://example.com",
+      "Content-Type": "application/json; charset=utf-8",
+    }), createSubmission);
+
+    expect(response.status).toBe(409);
+    expect(createSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["https://attacker.example", "null", "not an origin"])(
+    "rejects a browser submission from an untrusted origin: %s",
+    async (origin) => {
+      const createSubmission = vi.fn();
+      const response = await handleSubmissionPost(request(valid, { Origin: origin }), createSubmission);
+
+      expect(response.status).toBe(403);
+      expect(response.headers.get("cache-control")).toContain("no-store");
+      expect(createSubmission).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["text/plain", "application/x-www-form-urlencoded", "multipart/form-data", ""])(
+    "rejects a non-JSON submission media type before database work: %s",
+    async (contentType) => {
+      const createSubmission = vi.fn();
+      const submitted = request(valid, { "Content-Type": contentType });
+      if (!contentType) submitted.headers.delete("content-type");
+      const response = await handleSubmissionPost(submitted, createSubmission);
+
+      expect(response.status).toBe(415);
+      expect(response.headers.get("cache-control")).toContain("no-store");
+      expect(createSubmission).not.toHaveBeenCalled();
+    },
+  );
 
   it("returns 429 with Retry-After when the source window is exhausted", async () => {
     const response = await handleSubmissionPost(

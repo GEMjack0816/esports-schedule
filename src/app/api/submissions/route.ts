@@ -26,9 +26,38 @@ class SubmissionBodyTooLargeError extends Error {
   }
 }
 
+class SubmissionOriginError extends Error {}
+class SubmissionMediaTypeError extends Error {}
+
 function cancelRequestBody(body: ReadableStream<Uint8Array> | null): void {
   if (!body) return;
   void body.cancel().catch(() => undefined);
+}
+
+function validateSubmissionRequestBoundary(request: Request): void {
+  const origin = request.headers.get("origin");
+  if (origin) {
+    let sourceOrigin: string;
+    try {
+      sourceOrigin = new URL(origin).origin;
+    } catch {
+      cancelRequestBody(request.body);
+      throw new SubmissionOriginError();
+    }
+    if (sourceOrigin !== new URL(request.url).origin) {
+      cancelRequestBody(request.body);
+      throw new SubmissionOriginError();
+    }
+  }
+
+  const mediaType = request.headers.get("content-type")
+    ?.split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  if (mediaType !== "application/json") {
+    cancelRequestBody(request.body);
+    throw new SubmissionMediaTypeError();
+  }
 }
 
 async function readSubmissionRequestBody(request: Request): Promise<string> {
@@ -87,6 +116,7 @@ export async function handleSubmissionPost(
   ) => Promise<PublicSubmissionOutcome>,
 ) {
   try {
+    validateSubmissionRequestBoundary(request);
     const body = await readSubmissionRequestBody(request);
     const parsed: unknown = JSON.parse(body);
     if (isHoneypotHit(parsed)) {
@@ -137,6 +167,18 @@ export async function handleSubmissionPost(
       message: "已保存为待审核，审核通过前不会公开。",
     }, { status: 201, headers: NO_STORE_HEADERS });
   } catch (error) {
+    if (error instanceof SubmissionOriginError) {
+      return Response.json({ ok: false, error: "跨站提交请求被拒绝。" }, {
+        status: 403,
+        headers: NO_STORE_HEADERS,
+      });
+    }
+    if (error instanceof SubmissionMediaTypeError) {
+      return Response.json({ ok: false, error: "提交内容必须使用 JSON 格式。" }, {
+        status: 415,
+        headers: NO_STORE_HEADERS,
+      });
+    }
     if (error instanceof SubmissionBodyTooLargeError) {
       return Response.json({ ok: false, error: "提交内容过大。" }, {
         status: 413,
