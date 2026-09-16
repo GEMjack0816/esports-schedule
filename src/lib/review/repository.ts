@@ -8,6 +8,7 @@ import {
   eq,
   gte,
   ilike,
+  inArray,
   or,
   sql,
 } from "drizzle-orm";
@@ -48,7 +49,12 @@ import type {
   SubmissionCounts,
   SubmissionListFilters,
   SubmissionPage,
+  VerificationCleanupResult,
 } from "./types";
+
+const ADMIN_VERIFICATION_SOURCE_URL = "https://example.com/isolated-admin-verification";
+const ADMIN_VERIFICATION_LEAGUE_PREFIX = "Codex isolated review ";
+const ADMIN_VERIFICATION_NOTES_PREFIX = "Isolated Preview verification record ";
 
 type CreateOptions = {
   id?: string;
@@ -755,6 +761,75 @@ export class DrizzleReviewRepository {
       });
     } catch (error) {
       if (error instanceof ReviewNotFoundError || error instanceof ReviewConflictError) throw error;
+      translateDatabaseError(error);
+    }
+  }
+
+  async cleanupVerificationRun(
+    runMarker: string,
+  ): Promise<VerificationCleanupResult> {
+    const league = `${ADMIN_VERIFICATION_LEAGUE_PREFIX}${runMarker}`;
+    const notes = `${ADMIN_VERIFICATION_NOTES_PREFIX}${runMarker}`;
+    try {
+      return await getDatabase().transaction(async (tx) => {
+        const submissions = await tx.select().from(matchSubmissions)
+          .where(and(
+            eq(matchSubmissions.league, league),
+            eq(matchSubmissions.notes, notes),
+            eq(matchSubmissions.sourceUrl, ADMIN_VERIFICATION_SOURCE_URL),
+          ))
+          .for("update");
+        if (submissions.length === 0) {
+          return {
+            submissionsDeleted: 0,
+            manualMatchesDeleted: 0,
+            auditEventsDeleted: 0,
+          };
+        }
+
+        const expectedSuffix = ` ${runMarker}`;
+        if (submissions.some((row) => (
+          !row.teamA.endsWith(expectedSuffix) || !row.teamB.endsWith(expectedSuffix)
+        ))) {
+          throw new ReviewConflictError("验证记录标记不匹配，拒绝清理。");
+        }
+
+        const submissionIds = submissions.map((row) => row.id);
+        const manualMatches = await tx.select().from(publishedManualMatches)
+          .where(inArray(publishedManualMatches.sourceSubmissionId, submissionIds))
+          .for("update");
+        if (manualMatches.some((row) => (
+          row.sourceUrl !== ADMIN_VERIFICATION_SOURCE_URL
+          || !row.homeTeamName.endsWith(expectedSuffix)
+          || !row.awayTeamName.endsWith(expectedSuffix)
+        ))) {
+          throw new ReviewConflictError("验证比赛标记不匹配，拒绝清理。");
+        }
+
+        const manualMatchIds = manualMatches.map((row) => row.id);
+        const auditEntityIds = [...submissionIds, ...manualMatchIds];
+        const deletedAudits = auditEntityIds.length > 0
+          ? await tx.delete(adminAuditEvents)
+            .where(inArray(adminAuditEvents.entityId, auditEntityIds))
+            .returning({ id: adminAuditEvents.id })
+          : [];
+        const deletedMatches = manualMatchIds.length > 0
+          ? await tx.delete(publishedManualMatches)
+            .where(inArray(publishedManualMatches.id, manualMatchIds))
+            .returning({ id: publishedManualMatches.id })
+          : [];
+        const deletedSubmissions = await tx.delete(matchSubmissions)
+          .where(inArray(matchSubmissions.id, submissionIds))
+          .returning({ id: matchSubmissions.id });
+
+        return {
+          submissionsDeleted: deletedSubmissions.length,
+          manualMatchesDeleted: deletedMatches.length,
+          auditEventsDeleted: deletedAudits.length,
+        };
+      });
+    } catch (error) {
+      if (error instanceof ReviewConflictError) throw error;
       translateDatabaseError(error);
     }
   }

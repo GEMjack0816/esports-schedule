@@ -519,4 +519,76 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       (value) => value.providerMatchId === `db-${match.id}`,
     )?.league).toBe(`${pending.input.league} edited`);
   });
+
+  it("transactionally cleans only one marked Preview verification run and is idempotent", async () => {
+    const runMarker = randomUUID();
+    const verificationInput = (label: string): MatchSubmissionInput => ({
+      game: "honor-of-kings",
+      league: `Codex isolated review ${runMarker}`,
+      teamA: `${label} A ${runMarker}`,
+      teamB: `${label} B ${runMarker}`,
+      scheduledAt: "2026-08-30T00:00:00.000Z",
+      bestOf: 5,
+      sourceUrl: "https://example.com/isolated-admin-verification",
+      notes: `Isolated Preview verification record ${runMarker}`,
+    });
+    const approvedId = randomUUID();
+    const rejectedId = randomUUID();
+    submissionIds.push(approvedId, rejectedId);
+    const approvedInput = verificationInput("Approval");
+    const rejectedInput = verificationInput("Reject");
+    const approvedRow = await repository.createSubmission(approvedInput, { id: approvedId });
+    const rejectedRow = await repository.createSubmission(rejectedInput, { id: rejectedId });
+    const approvedMatch = await repository.approveSubmission(
+      approvedId,
+      { submission: approvedInput, published: published(approvedInput) },
+      "admin-a",
+      approvedRow.updatedAt,
+    );
+    manualMatchIds.push(approvedMatch.id);
+    await repository.rejectSubmission(
+      rejectedId,
+      "verification rejection",
+      "admin-a",
+      rejectedRow.updatedAt,
+    );
+
+    const control = await create(`verification-control-${randomUUID()}`);
+    const first = await repository.cleanupVerificationRun(runMarker);
+    expect(first).toEqual({
+      submissionsDeleted: 2,
+      manualMatchesDeleted: 1,
+      auditEventsDeleted: 2,
+    });
+    expect(await repository.getSubmission(approvedId)).toBeNull();
+    expect(await repository.getSubmission(rejectedId)).toBeNull();
+    expect(await repository.getManualMatch(approvedMatch.id)).toBeNull();
+    expect(await repository.getSubmission(control.id)).not.toBeNull();
+    await expect(repository.cleanupVerificationRun(runMarker)).resolves.toEqual({
+      submissionsDeleted: 0,
+      manualMatchesDeleted: 0,
+      auditEventsDeleted: 0,
+    });
+  });
+
+  it("refuses cleanup when a matching record lacks the per-run team marker", async () => {
+    const runMarker = randomUUID();
+    const id = randomUUID();
+    submissionIds.push(id);
+    await repository.createSubmission({
+      game: "honor-of-kings",
+      league: `Codex isolated review ${runMarker}`,
+      teamA: "Unmarked Alpha",
+      teamB: "Unmarked Beta",
+      scheduledAt: "2026-08-30T01:00:00.000Z",
+      bestOf: 5,
+      sourceUrl: "https://example.com/isolated-admin-verification",
+      notes: `Isolated Preview verification record ${runMarker}`,
+    }, { id });
+
+    await expect(repository.cleanupVerificationRun(runMarker)).rejects.toThrow(
+      "验证记录标记不匹配",
+    );
+    expect(await repository.getSubmission(id)).not.toBeNull();
+  });
 });

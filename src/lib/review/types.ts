@@ -83,6 +83,12 @@ export type PublicSubmissionResult =
   | { kind: "queue-full"; retryAfterSeconds: number }
   | { kind: "service-busy"; retryAfterSeconds: number };
 
+export type VerificationCleanupResult = {
+  submissionsDeleted: number;
+  manualMatchesDeleted: number;
+  auditEventsDeleted: number;
+};
+
 export class ReviewConflictError extends Error {
   readonly code = "REVIEW_CONFLICT";
 }

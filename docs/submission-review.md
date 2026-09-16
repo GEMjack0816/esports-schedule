@@ -50,7 +50,10 @@ npm start
 npm run verify:browser -- http://localhost:3000
 $env:ALLOW_ISOLATED_ADMIN_VERIFY = "1"
 $env:ADMIN_STORAGE_STATE = "<authenticated-playwright-storage-state>"
-npm run verify:admin -- <isolated-preview-url>
+$env:ADMIN_VERIFY_ALLOWED_PREVIEW_HOSTS = "<exact-preview-hostname>"
+npm run verify:admin -- <isolated-preview-url> <expected-git-ref> <expected-full-git-sha> <expected-deployment-id>
 ```
 
-`verify:admin` 会拒绝生产 Alias，并且只有在显式标记隔离环境且提供已认证浏览器状态时才执行公开提交、批准、编辑、隐藏、恢复、驳回和审计验证。
+`verify:admin` 在第一次写入前会通过 `/api/version` 同时校验 `environment=preview`、预期 branch/ref、完整 Git SHA 和 Deployment ID；目标主机还必须精确列入 `ADMIN_VERIFY_ALLOWED_PREVIEW_HOSTS`，不接受通配符。任何元数据缺失或不一致都会 fail closed，因此保护不再依赖单个 Production hostname。
+
+脚本还会先确认已有浏览器状态确实能访问 `/admin`，然后才执行公开提交、批准、编辑、隐藏、恢复、驳回和审计验证。每次运行使用独立 UUID 标记；无论中途成功或失败，`finally` 都调用仅在 Vercel Preview 可用、且仍要求管理员会话与同源 `Origin` 的清理接口。该接口只能删除同时匹配测试来源 URL、测试备注、赛事名和队名 UUID 后缀的本次验证记录，并在清理后重建 Runtime Cache 快照、立即失效 Next Data Cache；Production 环境固定返回 `404`。
