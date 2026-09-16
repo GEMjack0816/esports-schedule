@@ -222,6 +222,51 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       .toMatchObject({ kind: "source-rate-limited", retryAfterSeconds: 60 });
   });
 
+  it("applies the source window to honeypot requests without creating submissions", async () => {
+    const source = `honeypot-source-${randomUUID()}`;
+    rateLimitSources.push(source);
+    const now = new Date("2026-08-20T01:00:00.000Z");
+    const limiterPolicy = policy({ maxPerSource: 1 });
+    const [before] = await cleanup`select count(*)::int as value from match_submissions`;
+
+    const first = await repository.consumePublicSubmissionHoneypot(source, now, limiterPolicy);
+    const second = await repository.consumePublicSubmissionHoneypot(source, now, limiterPolicy);
+
+    expect(first).toEqual({ kind: "honeypot" });
+    expect(second).toMatchObject({ kind: "source-rate-limited", retryAfterSeconds: 60 });
+    const [after] = await cleanup`select count(*)::int as value from match_submissions`;
+    expect(Number(after.value)).toBe(Number(before.value));
+  });
+
+  it("shares the fixed global window between honeypot and normal submissions", async () => {
+    const sources = Array.from({ length: 3 }, () => `honeypot-global-${randomUUID()}`);
+    rateLimitSources.push(...sources);
+    const now = new Date("2026-08-20T02:00:00.000Z");
+    const limiterPolicy = policy({ maxGlobalRequests: 2, maxNewSources: 100 });
+
+    const honeypot = await repository.consumePublicSubmissionHoneypot(
+      sources[0],
+      now,
+      limiterPolicy,
+    );
+    const normal = await repository.createPublicSubmission(
+      submission(`honeypot-global-${randomUUID()}`),
+      sources[1],
+      now,
+      limiterPolicy,
+    );
+    const exhausted = await repository.consumePublicSubmissionHoneypot(
+      sources[2],
+      now,
+      limiterPolicy,
+    );
+
+    expect(honeypot.kind).toBe("honeypot");
+    expect(normal.kind).toBe("created");
+    rememberCreated([normal]);
+    expect(exhausted).toMatchObject({ kind: "global-rate-limited", retryAfterSeconds: 60 });
+  });
+
   it("atomically admits only one concurrent submission when the pending queue has one slot", async () => {
     const baseline = (await repository.getSubmissionCounts()).pending;
     const sources = [`source-${randomUUID()}`, `source-${randomUUID()}`];
@@ -264,6 +309,60 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       where source_hash = any(${sources}::text[])
     `;
     expect(Number(persisted.value)).toBe(3);
+  });
+
+  it("bounds persistent limiter rows during a flood of unique honeypot sources", async () => {
+    const floodPolicy = policy({ maxNewSources: 3, maxGlobalRequests: 100 });
+    const sources = Array.from({ length: 7 }, () => `honeypot-flood-${randomUUID()}`);
+    rateLimitSources.push(...sources);
+    const results: PublicSubmissionResult[] = [];
+    for (const source of sources) {
+      results.push(await repository.consumePublicSubmissionHoneypot(
+        source,
+        new Date("2026-08-21T01:00:00.000Z"),
+        floodPolicy,
+      ));
+    }
+    expect(results.filter((result) => result.kind === "honeypot")).toHaveLength(3);
+    expect(results.filter((result) => result.kind === "new-source-rate-limited")).toHaveLength(4);
+    const [persisted] = await cleanup`
+      select count(*)::int as value
+      from submission_rate_limits
+      where source_hash = any(${sources}::text[])
+    `;
+    expect(Number(persisted.value)).toBe(3);
+  });
+
+  it("does not exceed the global limit under concurrent mixed honeypot traffic", async () => {
+    const globalPolicy = policy({
+      maxGlobalRequests: 4,
+      maxNewSources: 100,
+      gateLockMaxWaitMs: 2_000,
+    });
+    const sources = Array.from({ length: 12 }, () => `honeypot-race-${randomUUID()}`);
+    rateLimitSources.push(...sources);
+    const results = await Promise.all(sources.map((source, index) => index % 2 === 0
+      ? repository.consumePublicSubmissionHoneypot(
+        source,
+        new Date("2026-08-24T01:00:00.000Z"),
+        globalPolicy,
+      )
+      : repository.createPublicSubmission(
+        submission(`honeypot-race-${index}-${randomUUID()}`),
+        source,
+        new Date("2026-08-24T01:00:00.000Z"),
+        globalPolicy,
+      )));
+    rememberCreated(results);
+    expect(results.filter((result) => (
+      result.kind === "created" || result.kind === "honeypot"
+    ))).toHaveLength(4);
+    expect(results.filter((result) => result.kind === "global-rate-limited")).toHaveLength(8);
+    const globalKey = submissionControlWindowKey(globalPolicy.counterNamespace, "global-requests");
+    const [counter] = await cleanup`
+      select request_count from submission_rate_limit_windows where window_key = ${globalKey}
+    `;
+    expect(Number(counter.request_count)).toBe(4);
   });
 
   it("does not create source limiter state when the pending queue is already full", async () => {

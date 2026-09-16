@@ -48,6 +48,10 @@ describe("POST /api/submissions", () => {
       message: "已保存为待审核，审核通过前不会公开。",
     });
     expect(createSubmission.mock.calls[0]?.[1]).toMatch(/^[a-f0-9]{64}$/);
+    expect(createSubmission.mock.calls[0]?.[0]).toMatchObject({
+      kind: "submission",
+      input: expect.objectContaining({ league: "LPL" }),
+    });
   });
 
   it("returns 409 for an active duplicate fingerprint", async () => {
@@ -99,15 +103,34 @@ describe("POST /api/submissions", () => {
     expect(await response.json()).toMatchObject({ ok: false });
   });
 
-  it("accepts a honeypot hit without writing or exposing a record id", async () => {
-    const createSubmission = vi.fn();
+  it("routes a honeypot hit through abuse protection without exposing a record id", async () => {
+    const createSubmission = vi.fn(async () => ({ kind: "honeypot" as const }));
     const response = await handleSubmissionPost(
       request({ ...valid, website: "spam.example" }),
       createSubmission,
     );
     expect(response.status).toBe(201);
-    expect(createSubmission).not.toHaveBeenCalled();
+    expect(createSubmission).toHaveBeenCalledWith(
+      { kind: "honeypot" },
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+    );
     expect(await response.json()).not.toHaveProperty("id");
+  });
+
+  it.each([
+    "source-rate-limited" as const,
+    "global-rate-limited" as const,
+    "new-source-rate-limited" as const,
+    "service-busy" as const,
+  ])("does not let honeypot requests bypass %s", async (kind) => {
+    const createSubmission = vi.fn(async () => ({ kind, retryAfterSeconds: 17 }));
+    const response = await handleSubmissionPost(
+      request({ website: "spam.example" }),
+      createSubmission,
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("17");
+    expect(createSubmission).toHaveBeenCalledOnce();
   });
 
   it("rejects payloads above 10 KB", async () => {

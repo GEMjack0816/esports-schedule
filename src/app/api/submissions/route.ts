@@ -23,6 +23,7 @@ type PublicSubmissionOutcome =
     kind: "created";
     submission: { id: string; status: string; submittedAt: Date };
   }
+  | { kind: "honeypot" }
   | { kind: "duplicate" }
   | { kind: "source-rate-limited"; retryAfterSeconds: number }
   | { kind: "global-rate-limited"; retryAfterSeconds: number }
@@ -33,7 +34,7 @@ type PublicSubmissionOutcome =
 export async function handleSubmissionPost(
   request: Request,
   createSubmission: (
-    input: MatchSubmissionInput,
+    attempt: { kind: "submission"; input: MatchSubmissionInput } | { kind: "honeypot" },
     sourceHash: string,
   ) => Promise<PublicSubmissionOutcome>,
 ) {
@@ -54,14 +55,10 @@ export async function handleSubmissionPost(
       });
     }
     const parsed: unknown = JSON.parse(body);
-    if (isHoneypotHit(parsed)) {
-      return Response.json({
-        ok: true,
-        status: "pending",
-        message: "已保存为待审核，审核通过前不会公开。",
-      }, { status: 201, headers: NO_STORE_HEADERS });
-    }
-    const result = await createSubmission(validateSubmission(parsed), submissionSourceHash(request));
+    const attempt = isHoneypotHit(parsed)
+      ? { kind: "honeypot" as const }
+      : { kind: "submission" as const, input: validateSubmission(parsed) };
+    const result = await createSubmission(attempt, submissionSourceHash(request));
     if (
       result.kind === "source-rate-limited"
       || result.kind === "global-rate-limited"
@@ -92,6 +89,13 @@ export async function handleSubmissionPost(
         status: 409,
         headers: NO_STORE_HEADERS,
       });
+    }
+    if (result.kind === "honeypot") {
+      return Response.json({
+        ok: true,
+        status: "pending",
+        message: "已保存为待审核，审核通过前不会公开。",
+      }, { status: 201, headers: NO_STORE_HEADERS });
     }
     const submission = result.submission;
     return Response.json({
@@ -134,6 +138,8 @@ export async function handleSubmissionPost(
 export async function POST(request: Request) {
   return handleSubmissionPost(
     request,
-    (input, sourceHash) => getReviewRepository().createPublicSubmission(input, sourceHash),
+    (attempt, sourceHash) => attempt.kind === "honeypot"
+      ? getReviewRepository().consumePublicSubmissionHoneypot(sourceHash)
+      : getReviewRepository().createPublicSubmission(attempt.input, sourceHash),
   );
 }
