@@ -51,7 +51,7 @@ npm run verify:browser -- http://localhost:3000
 $env:ALLOW_ISOLATED_ADMIN_VERIFY = "1"
 $env:ADMIN_STORAGE_STATE = "<authenticated-playwright-storage-state>"
 $env:ADMIN_VERIFY_ALLOWED_PREVIEW_HOSTS = "<exact-preview-host>"
-npm run verify:admin -- <isolated-preview-url> <expected-git-sha> <expected-git-ref>
+npm run verify:admin -- <isolated-preview-url> <expected-git-sha> <expected-git-ref> <expected-deployment-id>
 ```
 
-`verify:admin` 在任何写入前通过 `/api/version` 验证服务身份、`environment=preview`、精确 Git SHA/ref、Deployment 元数据及显式 hostname allowlist；任一元数据缺失或不一致都会 fail closed。它还要求显式标记隔离环境和已认证浏览器状态。验证产生的 submission、人工比赛和关联审计记录会在 `finally` 中通过仅 Preview 可用的管理员清理端点按本次 ID 删除；清理失败会使验证失败，禁止把 Production hostname 加入 allowlist。
+`verify:admin` 在任何写入前通过 `/api/version` 验证服务身份、`environment=preview`、精确 Git SHA/ref、Deployment ID 及显式 hostname allowlist；目标必须是无路径、查询或凭据的 HTTPS origin，allowlist 不接受通配符。脚本还会确认现有浏览器状态确实能打开 `/admin`，任一检查失败都会 fail closed。验证产生的 submission、人工比赛和关联审计记录会在 `finally` 中通过仅 Preview 可用的管理员清理端点按本次 ID 删除；清理失败会使验证失败，浏览器仍会关闭，禁止把 Production hostname 加入 allowlist。

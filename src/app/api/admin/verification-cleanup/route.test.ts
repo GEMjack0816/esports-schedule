@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   trustedMutationOrigin: vi.fn(),
   cleanup: vi.fn(),
   synchronize: vi.fn(),
-  invalidate: vi.fn(),
+  revalidateTag: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/admin-page", () => ({ requireAdminApi: mocks.requireAdminApi }));
@@ -16,7 +16,7 @@ vi.mock("@/lib/review/public-matches", () => ({
 vi.mock("@/lib/review/repository", () => ({
   getReviewRepository: () => ({ cleanupIsolatedVerificationRun: mocks.cleanup }),
 }));
-vi.mock("@/lib/review/service", () => ({ invalidatePublishedManualMatches: mocks.invalidate }));
+vi.mock("next/cache", () => ({ revalidateTag: mocks.revalidateTag }));
 
 import { POST } from "./route";
 
@@ -33,9 +33,11 @@ function request(body: unknown) {
 describe("POST /api/admin/verification-cleanup", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
     vi.stubEnv("VERCEL_ENV", "preview");
     vi.stubEnv("VERCEL_GIT_COMMIT_SHA", "sha");
     vi.stubEnv("VERCEL_GIT_COMMIT_REF", "fix/ref");
+    vi.stubEnv("VERCEL_DEPLOYMENT_ID", "dpl_preview");
     mocks.requireAdminApi.mockResolvedValue({ ok: true, sub: "admin" });
     mocks.cleanup.mockResolvedValue({ submissions: 1, manualMatches: 1, auditEvents: 4 });
     mocks.synchronize.mockResolvedValue(undefined);
@@ -47,11 +49,15 @@ describe("POST /api/admin/verification-cleanup", () => {
       league: "Codex isolated review run",
       gitCommitSha: "sha",
       gitCommitRef: "fix/ref",
+      deploymentId: "dpl_preview",
     }));
     expect(response.status).toBe(200);
     expect(mocks.cleanup).toHaveBeenCalledWith([id], "Codex isolated review run");
     expect(mocks.synchronize).toHaveBeenCalledOnce();
-    expect(mocks.invalidate).toHaveBeenCalledOnce();
+    expect(mocks.revalidateTag).toHaveBeenCalledWith(
+      "published-manual-matches",
+      { expire: 0 },
+    );
   });
 
   it("is unavailable outside Preview", async () => {
@@ -61,12 +67,15 @@ describe("POST /api/admin/verification-cleanup", () => {
     expect(mocks.cleanup).not.toHaveBeenCalled();
   });
 
-  it("fails closed when SHA or ref do not match", async () => {
+  it.each([
+    ["SHA", { gitCommitSha: "wrong", gitCommitRef: "fix/ref", deploymentId: "dpl_preview" }],
+    ["ref", { gitCommitSha: "sha", gitCommitRef: "fix/other", deploymentId: "dpl_preview" }],
+    ["deployment", { gitCommitSha: "sha", gitCommitRef: "fix/ref", deploymentId: "dpl_other" }],
+  ])("fails closed when %s does not match", async (_label, identity) => {
     const response = await POST(request({
       submissionIds: [id],
       league: "Codex isolated review run",
-      gitCommitSha: "wrong",
-      gitCommitRef: "fix/ref",
+      ...identity,
     }));
     expect(response.status).toBe(409);
     expect(mocks.cleanup).not.toHaveBeenCalled();

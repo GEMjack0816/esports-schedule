@@ -1,8 +1,8 @@
 import { requireAdminApi } from "@/lib/auth/admin-page";
+import { revalidateTag } from "next/cache";
 import { trustedMutationOrigin } from "@/lib/auth/vercel";
 import { synchronizePublishedManualMatchesSnapshot } from "@/lib/review/public-matches";
 import { getReviewRepository } from "@/lib/review/repository";
-import { invalidatePublishedManualMatches } from "@/lib/review/service";
 import { ReviewConflictError } from "@/lib/review/types";
 
 export const dynamic = "force-dynamic";
@@ -16,8 +16,11 @@ function validIds(value: unknown): value is string[] {
 }
 
 export async function POST(request: Request) {
-  if (process.env.VERCEL_ENV !== "preview") {
-    return Response.json({ error: "Not found" }, { status: 404 });
+  if ((process.env.VERCEL_TARGET_ENV ?? process.env.VERCEL_ENV) !== "preview") {
+    return Response.json({ error: "Not found" }, {
+      status: 404,
+      headers: { "Cache-Control": "no-store" },
+    });
   }
   const auth = await requireAdminApi();
   if (!auth.ok) return auth.response;
@@ -35,11 +38,14 @@ export async function POST(request: Request) {
   }
   const deployedSha = process.env.VERCEL_GIT_COMMIT_SHA?.trim();
   const deployedRef = process.env.VERCEL_GIT_COMMIT_REF?.trim();
+  const deploymentId = process.env.VERCEL_DEPLOYMENT_ID?.trim();
   if (
     !deployedSha
     || !deployedRef
+    || !deploymentId
     || body.gitCommitSha !== deployedSha
     || body.gitCommitRef !== deployedRef
+    || body.deploymentId !== deploymentId
     || typeof body.league !== "string"
     || body.league.length > 160
     || !body.league.startsWith("Codex isolated review ")
@@ -52,7 +58,7 @@ export async function POST(request: Request) {
   try {
     const deleted = await repository.cleanupIsolatedVerificationRun(body.submissionIds, body.league);
     await synchronizePublishedManualMatchesSnapshot(repository);
-    invalidatePublishedManualMatches();
+    revalidateTag("published-manual-matches", { expire: 0 });
     return Response.json({ ok: true, deleted }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const status = error instanceof ReviewConflictError ? 409 : 503;
