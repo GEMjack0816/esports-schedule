@@ -164,6 +164,23 @@ export class DrizzleReviewRepository {
     now = new Date(),
     policy: PublicSubmissionPolicy = PUBLIC_SUBMISSION_POLICY,
   ): Promise<PublicSubmissionResult> {
+    return this.attemptPublicSubmission(input, sourceHash, now, policy);
+  }
+
+  async consumePublicSubmissionHoneypot(
+    sourceHash: string,
+    now = new Date(),
+    policy: PublicSubmissionPolicy = PUBLIC_SUBMISSION_POLICY,
+  ): Promise<PublicSubmissionResult> {
+    return this.attemptPublicSubmission(null, sourceHash, now, policy);
+  }
+
+  private async attemptPublicSubmission(
+    input: MatchSubmissionInput | null,
+    sourceHash: string,
+    now: Date,
+    policy: PublicSubmissionPolicy,
+  ): Promise<PublicSubmissionResult> {
     try {
       return await getDatabase().transaction(async (tx) => {
         await tx.execute(sql`select set_config(
@@ -283,6 +300,42 @@ export class DrizzleReviewRepository {
           }).where(eq(submissionRateLimits.sourceHash, sourceHash));
         }
 
+        const createSourceLimitState = async () => {
+          const newSourceWindow = await consumeControlWindow("new-sources", policy.maxNewSources);
+          if (!newSourceWindow.allowed) {
+            return {
+              allowed: false as const,
+              retryAfterSeconds: newSourceWindow.retryAfterSeconds,
+            };
+          }
+          const sourceRows = await tx.insert(submissionRateLimits).values({
+            sourceHash,
+            windowStartedAt: now,
+            requestCount: 1,
+            updatedAt: now,
+          }).onConflictDoNothing().returning({ sourceHash: submissionRateLimits.sourceHash });
+          if (sourceRows.length !== 1) throw new Error("SUBMISSION_RATE_LIMIT_ROW_RACE");
+          return {
+            allowed: true as const,
+            windowKey: newSourceWindow.windowKey,
+          };
+        };
+
+        // Bots still receive the same non-disclosing success response, but the request first
+        // consumes the shared abuse-protection budget and never reaches the review queue.
+        if (!input) {
+          if (!currentSource) {
+            const sourceState = await createSourceLimitState();
+            if (!sourceState.allowed) {
+              return {
+                kind: "new-source-rate-limited" as const,
+                retryAfterSeconds: sourceState.retryAfterSeconds,
+              };
+            }
+          }
+          return { kind: "honeypot" as const };
+        }
+
         const fingerprint = createSubmissionFingerprint(input);
         const [duplicate] = await tx.select({ id: matchSubmissions.id }).from(matchSubmissions)
           .where(and(
@@ -304,22 +357,15 @@ export class DrizzleReviewRepository {
         let createdSourceState = false;
         let newSourceWindowKey: string | null = null;
         if (!currentSource) {
-          const newSourceWindow = await consumeControlWindow("new-sources", policy.maxNewSources);
-          if (!newSourceWindow.allowed) {
+          const sourceState = await createSourceLimitState();
+          if (!sourceState.allowed) {
             return {
               kind: "new-source-rate-limited" as const,
-              retryAfterSeconds: newSourceWindow.retryAfterSeconds,
+              retryAfterSeconds: sourceState.retryAfterSeconds,
             };
           }
-          newSourceWindowKey = newSourceWindow.windowKey;
-          const sourceRows = await tx.insert(submissionRateLimits).values({
-            sourceHash,
-            windowStartedAt: now,
-            requestCount: 1,
-            updatedAt: now,
-          }).onConflictDoNothing().returning({ sourceHash: submissionRateLimits.sourceHash });
-          createdSourceState = sourceRows.length === 1;
-          if (!createdSourceState) throw new Error("SUBMISSION_RATE_LIMIT_ROW_RACE");
+          newSourceWindowKey = sourceState.windowKey;
+          createdSourceState = true;
         }
 
         const rows = await tx.insert(matchSubmissions).values({

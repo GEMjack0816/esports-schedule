@@ -76,6 +76,7 @@ export type LegacyInsertResult = "imported" | "duplicate";
 
 export type PublicSubmissionResult =
   | { kind: "created"; submission: MatchSubmissionRow }
+  | { kind: "honeypot" }
   | { kind: "duplicate" }
   | { kind: "source-rate-limited"; retryAfterSeconds: number }
   | { kind: "global-rate-limited"; retryAfterSeconds: number }
