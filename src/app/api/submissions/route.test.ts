@@ -90,6 +90,19 @@ describe("POST /api/submissions", () => {
     expect(await response.json()).toMatchObject({ ok: false, error: expect.stringContaining("队列") });
   });
 
+  it.each([
+    { ...valid, league: "LPL\u0000spoof" },
+    { ...valid, teamA: "Alpha\u202Etxt.exe" },
+    { ...valid, sourceUrl: "https://user:password@example.com/match" },
+  ])("rejects unsafe text before repository work", async (candidate) => {
+    const createSubmission = vi.fn();
+    const response = await handleSubmissionPost(request(candidate), createSubmission);
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(createSubmission).not.toHaveBeenCalled();
+  });
+
   it("returns 503 without pretending success when PostgreSQL is unavailable", async () => {
     const createSubmission = async () => {
       throw Object.assign(new Error("unavailable"), { code: "DATABASE_UNAVAILABLE" });
