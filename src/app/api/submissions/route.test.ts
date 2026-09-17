@@ -13,12 +13,50 @@ const valid = {
   website: "",
 };
 
-function request(body: unknown) {
+function request(body: unknown, extraHeaders: Record<string, string> = {}) {
   return new Request("https://example.com/api/submissions", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-real-ip": "203.0.113.10" },
+    headers: {
+      "Content-Type": "application/json",
+      "x-real-ip": "203.0.113.10",
+      ...extraHeaders,
+    },
     body: JSON.stringify(body),
   });
+}
+
+function streamRequest(
+  chunks: string[],
+  options: { contentLength?: string; onCancel?: () => void; onPull?: () => void } = {},
+) {
+  const encoder = new TextEncoder();
+  let index = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      options.onPull?.();
+      const chunk = chunks[index];
+      index += 1;
+      if (chunk === undefined) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(encoder.encode(chunk));
+    },
+    cancel() {
+      options.onCancel?.();
+    },
+  }, { highWaterMark: 0 });
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    "x-real-ip": "203.0.113.10",
+  });
+  if (options.contentLength) headers.set("content-length", options.contentLength);
+  return new Request("https://example.com/api/submissions", {
+    method: "POST",
+    headers,
+    body,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
 }
 
 describe("POST /api/submissions", () => {
@@ -48,6 +86,10 @@ describe("POST /api/submissions", () => {
       message: "已保存为待审核，审核通过前不会公开。",
     });
     expect(createSubmission.mock.calls[0]?.[1]).toMatch(/^[a-f0-9]{64}$/);
+    expect(createSubmission.mock.calls[0]?.[0]).toMatchObject({
+      kind: "submission",
+      input: expect.objectContaining({ league: "LPL" }),
+    });
   });
 
   it("returns 409 for an active duplicate fingerprint", async () => {
@@ -55,6 +97,43 @@ describe("POST /api/submissions", () => {
     const response = await handleSubmissionPost(request(valid), createSubmission);
     expect(response.status).toBe(409);
   });
+
+  it("accepts a same-origin browser request with a JSON media type parameter", async () => {
+    const createSubmission = vi.fn(async () => ({ kind: "duplicate" as const }));
+    const response = await handleSubmissionPost(request(valid, {
+      Origin: "https://example.com",
+      "Content-Type": "application/json; charset=utf-8",
+    }), createSubmission);
+
+    expect(response.status).toBe(409);
+    expect(createSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["https://attacker.example", "null", "not an origin"])(
+    "rejects a browser submission from an untrusted origin: %s",
+    async (origin) => {
+      const createSubmission = vi.fn();
+      const response = await handleSubmissionPost(request(valid, { Origin: origin }), createSubmission);
+
+      expect(response.status).toBe(403);
+      expect(response.headers.get("cache-control")).toContain("no-store");
+      expect(createSubmission).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["text/plain", "application/x-www-form-urlencoded", "multipart/form-data", ""])(
+    "rejects a non-JSON submission media type before database work: %s",
+    async (contentType) => {
+      const createSubmission = vi.fn();
+      const submitted = request(valid, { "Content-Type": contentType });
+      if (!contentType) submitted.headers.delete("content-type");
+      const response = await handleSubmissionPost(submitted, createSubmission);
+
+      expect(response.status).toBe(415);
+      expect(response.headers.get("cache-control")).toContain("no-store");
+      expect(createSubmission).not.toHaveBeenCalled();
+    },
+  );
 
   it("returns 429 with Retry-After when the source window is exhausted", async () => {
     const response = await handleSubmissionPost(
@@ -90,6 +169,19 @@ describe("POST /api/submissions", () => {
     expect(await response.json()).toMatchObject({ ok: false, error: expect.stringContaining("队列") });
   });
 
+  it.each([
+    { ...valid, league: "LPL\u0000spoof" },
+    { ...valid, teamA: "Alpha\u202Etxt.exe" },
+    { ...valid, sourceUrl: "https://user:password@example.com/match" },
+  ])("rejects unsafe text before repository work", async (candidate) => {
+    const createSubmission = vi.fn();
+    const response = await handleSubmissionPost(request(candidate), createSubmission);
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(createSubmission).not.toHaveBeenCalled();
+  });
+
   it("returns 503 without pretending success when PostgreSQL is unavailable", async () => {
     const createSubmission = async () => {
       throw Object.assign(new Error("unavailable"), { code: "DATABASE_UNAVAILABLE" });
@@ -99,15 +191,34 @@ describe("POST /api/submissions", () => {
     expect(await response.json()).toMatchObject({ ok: false });
   });
 
-  it("accepts a honeypot hit without writing or exposing a record id", async () => {
-    const createSubmission = vi.fn();
+  it("routes a honeypot hit through abuse protection without exposing a record id", async () => {
+    const createSubmission = vi.fn(async () => ({ kind: "honeypot" as const }));
     const response = await handleSubmissionPost(
       request({ ...valid, website: "spam.example" }),
       createSubmission,
     );
     expect(response.status).toBe(201);
-    expect(createSubmission).not.toHaveBeenCalled();
+    expect(createSubmission).toHaveBeenCalledWith(
+      { kind: "honeypot" },
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+    );
     expect(await response.json()).not.toHaveProperty("id");
+  });
+
+  it.each([
+    "source-rate-limited" as const,
+    "global-rate-limited" as const,
+    "new-source-rate-limited" as const,
+    "service-busy" as const,
+  ])("does not let honeypot requests bypass %s", async (kind) => {
+    const createSubmission = vi.fn(async () => ({ kind, retryAfterSeconds: 17 }));
+    const response = await handleSubmissionPost(
+      request({ website: "spam.example" }),
+      createSubmission,
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("17");
+    expect(createSubmission).toHaveBeenCalledOnce();
   });
 
   it("rejects payloads above 10 KB", async () => {
@@ -117,6 +228,49 @@ describe("POST /api/submissions", () => {
       createSubmission,
     );
     expect(response.status).toBe(413);
+    expect(createSubmission).not.toHaveBeenCalled();
+  });
+
+  it("rejects a multibyte body above 10 KB even when its character count is smaller", async () => {
+    const createSubmission = vi.fn();
+    const body = JSON.stringify({ ...valid, padding: "界".repeat(4_000) });
+    expect(body.length).toBeLessThan(10_000);
+    expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(10_000);
+
+    const response = await handleSubmissionPost(streamRequest([body]), createSubmission);
+
+    expect(response.status).toBe(413);
+    expect(createSubmission).not.toHaveBeenCalled();
+  });
+
+  it("stops reading and cancels an oversized chunked request", async () => {
+    const createSubmission = vi.fn();
+    const onCancel = vi.fn();
+    const onPull = vi.fn();
+    const response = await handleSubmissionPost(
+      streamRequest(["x".repeat(6_000), "y".repeat(5_000), "z".repeat(1_000)], {
+        onCancel,
+        onPull,
+      }),
+      createSubmission,
+    );
+
+    expect(response.status).toBe(413);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onPull).toHaveBeenCalledTimes(2);
+    expect(createSubmission).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized declared content length without reading the body", async () => {
+    const createSubmission = vi.fn();
+    const onCancel = vi.fn();
+    const response = await handleSubmissionPost(
+      streamRequest([JSON.stringify(valid)], { contentLength: "10001", onCancel }),
+      createSubmission,
+    );
+
+    expect(response.status).toBe(413);
+    expect(onCancel).toHaveBeenCalledTimes(1);
     expect(createSubmission).not.toHaveBeenCalled();
   });
 });

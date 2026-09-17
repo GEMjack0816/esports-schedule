@@ -17,12 +17,91 @@ const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, no-cache, must-revalidate",
   "Vercel-CDN-Cache-Control": "no-store",
 };
+const MAX_SUBMISSION_BODY_BYTES = 10_000;
+
+class SubmissionBodyTooLargeError extends Error {
+  constructor() {
+    super("Submission request body exceeds the allowed byte limit.");
+    this.name = "SubmissionBodyTooLargeError";
+  }
+}
+
+class SubmissionOriginError extends Error {}
+class SubmissionMediaTypeError extends Error {}
+
+function cancelRequestBody(body: ReadableStream<Uint8Array> | null): void {
+  if (!body) return;
+  void body.cancel().catch(() => undefined);
+}
+
+function validateSubmissionRequestBoundary(request: Request): void {
+  const origin = request.headers.get("origin");
+  if (origin) {
+    let sourceOrigin: string;
+    try {
+      sourceOrigin = new URL(origin).origin;
+    } catch {
+      cancelRequestBody(request.body);
+      throw new SubmissionOriginError();
+    }
+    if (sourceOrigin !== new URL(request.url).origin) {
+      cancelRequestBody(request.body);
+      throw new SubmissionOriginError();
+    }
+  }
+
+  const mediaType = request.headers.get("content-type")
+    ?.split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  if (mediaType !== "application/json") {
+    cancelRequestBody(request.body);
+    throw new SubmissionMediaTypeError();
+  }
+}
+
+async function readSubmissionRequestBody(request: Request): Promise<string> {
+  const contentLength = request.headers.get("content-length")?.trim();
+  if (contentLength && /^\d+$/.test(contentLength) && Number(contentLength) > MAX_SUBMISSION_BODY_BYTES) {
+    cancelRequestBody(request.body);
+    throw new SubmissionBodyTooLargeError();
+  }
+
+  const reader = request.body?.getReader();
+  if (!reader) return "";
+
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_SUBMISSION_BODY_BYTES) {
+        void reader.cancel().catch(() => undefined);
+        throw new SubmissionBodyTooLargeError();
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
 
 type PublicSubmissionOutcome =
   | {
     kind: "created";
     submission: { id: string; status: string; submittedAt: Date };
   }
+  | { kind: "honeypot" }
   | { kind: "duplicate" }
   | { kind: "source-rate-limited"; retryAfterSeconds: number }
   | { kind: "global-rate-limited"; retryAfterSeconds: number }
@@ -33,35 +112,18 @@ type PublicSubmissionOutcome =
 export async function handleSubmissionPost(
   request: Request,
   createSubmission: (
-    input: MatchSubmissionInput,
+    attempt: { kind: "submission"; input: MatchSubmissionInput } | { kind: "honeypot" },
     sourceHash: string,
   ) => Promise<PublicSubmissionOutcome>,
 ) {
-  const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (contentLength > 10_000) {
-    return Response.json({ ok: false, error: "提交内容过大。" }, {
-      status: 413,
-      headers: NO_STORE_HEADERS,
-    });
-  }
-
   try {
-    const body = await request.text();
-    if (body.length > 10_000) {
-      return Response.json({ ok: false, error: "提交内容过大。" }, {
-        status: 413,
-        headers: NO_STORE_HEADERS,
-      });
-    }
+    validateSubmissionRequestBoundary(request);
+    const body = await readSubmissionRequestBody(request);
     const parsed: unknown = JSON.parse(body);
-    if (isHoneypotHit(parsed)) {
-      return Response.json({
-        ok: true,
-        status: "pending",
-        message: "已保存为待审核，审核通过前不会公开。",
-      }, { status: 201, headers: NO_STORE_HEADERS });
-    }
-    const result = await createSubmission(validateSubmission(parsed), submissionSourceHash(request));
+    const attempt = isHoneypotHit(parsed)
+      ? { kind: "honeypot" as const }
+      : { kind: "submission" as const, input: validateSubmission(parsed) };
+    const result = await createSubmission(attempt, submissionSourceHash(request));
     if (
       result.kind === "source-rate-limited"
       || result.kind === "global-rate-limited"
@@ -93,6 +155,13 @@ export async function handleSubmissionPost(
         headers: NO_STORE_HEADERS,
       });
     }
+    if (result.kind === "honeypot") {
+      return Response.json({
+        ok: true,
+        status: "pending",
+        message: "已保存为待审核，审核通过前不会公开。",
+      }, { status: 201, headers: NO_STORE_HEADERS });
+    }
     const submission = result.submission;
     return Response.json({
       ok: true,
@@ -102,6 +171,24 @@ export async function handleSubmissionPost(
       message: "已保存为待审核，审核通过前不会公开。",
     }, { status: 201, headers: NO_STORE_HEADERS });
   } catch (error) {
+    if (error instanceof SubmissionOriginError) {
+      return Response.json({ ok: false, error: "跨站提交请求被拒绝。" }, {
+        status: 403,
+        headers: NO_STORE_HEADERS,
+      });
+    }
+    if (error instanceof SubmissionMediaTypeError) {
+      return Response.json({ ok: false, error: "提交内容必须使用 JSON 格式。" }, {
+        status: 415,
+        headers: NO_STORE_HEADERS,
+      });
+    }
+    if (error instanceof SubmissionBodyTooLargeError) {
+      return Response.json({ ok: false, error: "提交内容过大。" }, {
+        status: 413,
+        headers: NO_STORE_HEADERS,
+      });
+    }
     const errorCode = error && typeof error === "object" && "code" in error
       ? (error as { code?: unknown }).code
       : null;
@@ -134,6 +221,8 @@ export async function handleSubmissionPost(
 export async function POST(request: Request) {
   return handleSubmissionPost(
     request,
-    (input, sourceHash) => getReviewRepository().createPublicSubmission(input, sourceHash),
+    (attempt, sourceHash) => attempt.kind === "honeypot"
+      ? getReviewRepository().consumePublicSubmissionHoneypot(sourceHash)
+      : getReviewRepository().createPublicSubmission(attempt.input, sourceHash),
   );
 }
