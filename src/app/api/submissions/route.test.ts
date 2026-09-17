@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleSubmissionPost } from "./route";
+import { SUBMISSION_REQUEST_POLICY } from "@/lib/submission-request-policy";
 
 const valid = {
   game: "lol",
@@ -13,15 +14,191 @@ const valid = {
   website: "",
 };
 
-function request(body: unknown) {
+function request(body: unknown, extraHeaders: Record<string, string> = {}) {
   return new Request("https://example.com/api/submissions", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-real-ip": "203.0.113.10" },
+    headers: {
+      "Content-Type": "application/json",
+      "x-real-ip": "203.0.113.10",
+      ...extraHeaders,
+    },
     body: JSON.stringify(body),
   });
 }
 
+function streamRequest(
+  chunks: string[],
+  options: { contentLength?: string; onCancel?: () => void; onPull?: () => void } = {},
+) {
+  const encoder = new TextEncoder();
+  let index = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      options.onPull?.();
+      const chunk = chunks[index];
+      index += 1;
+      if (chunk === undefined) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(encoder.encode(chunk));
+    },
+    cancel() {
+      options.onCancel?.();
+    },
+  }, { highWaterMark: 0 });
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    "x-real-ip": "203.0.113.10",
+  });
+  if (options.contentLength) headers.set("content-length", options.contentLength);
+  return new Request("https://example.com/api/submissions", {
+    method: "POST",
+    headers,
+    body,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+}
+
 describe("POST /api/submissions", () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("rejects a pre-aborted request without pulling its body", async () => {
+    const abort = new AbortController();
+    abort.abort();
+    const onPull = vi.fn();
+    const onCancel = vi.fn();
+    const createSubmission = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ pull: onPull, cancel: onCancel }, { highWaterMark: 0 });
+    const input = new Request("https://example.com/api/submissions", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body,
+      signal: abort.signal, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const response = await handleSubmissionPost(input, createSubmission);
+    expect(response.status).toBe(408);
+    expect(onPull).not.toHaveBeenCalled();
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(createSubmission).not.toHaveBeenCalled();
+    expect(body.locked).toBe(false);
+  });
+
+  it("bounds a stalled body even when stream cancellation never resolves", async () => {
+    vi.useFakeTimers();
+    const createSubmission = vi.fn();
+    const onCancel = vi.fn(() => new Promise<void>(() => undefined));
+    let bodyController: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { bodyController = controller; },
+      cancel: onCancel,
+    });
+    const input = new Request("https://example.com/api/submissions", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    let completed = false;
+    const pending = handleSubmissionPost(input, createSubmission).then(response => {
+      completed = true;
+      return response;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(SUBMISSION_REQUEST_POLICY.maxBodyReadMs);
+      expect(completed).toBe(true);
+      const response = await pending;
+      expect(response.status).toBe(408);
+      expect(response.headers.get("cache-control")).toContain("no-store");
+      expect(onCancel).toHaveBeenCalledOnce();
+      expect(createSubmission).not.toHaveBeenCalled();
+      expect(body.locked).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      if (!completed) bodyController!.close();
+      await pending;
+    }
+  });
+
+  it("does not reset the total deadline when small chunks keep arriving", async () => {
+    vi.useFakeTimers();
+    const createSubmission = vi.fn();
+    const onCancel = vi.fn();
+    let bodyController: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { bodyController = controller; }, cancel: onCancel,
+    });
+    const input = new Request("https://example.com/api/submissions", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const pending = handleSubmissionPost(input, createSubmission);
+    await vi.advanceTimersByTimeAsync(SUBMISSION_REQUEST_POLICY.maxBodyReadMs - 1);
+    bodyController!.enqueue(new TextEncoder().encode("{"));
+    await vi.advanceTimersByTimeAsync(1);
+    expect((await pending).status).toBe(408);
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(createSubmission).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds empty chunk floods independently of their byte count", async () => {
+    const createSubmission = vi.fn();
+    const onCancel = vi.fn();
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) { pulls += 1; controller.enqueue(new Uint8Array()); }, cancel: onCancel,
+    }, { highWaterMark: 0 });
+    const input = new Request("https://example.com/api/submissions", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const response = await handleSubmissionPost(input, createSubmission);
+    expect(response.status).toBe(413);
+    expect(pulls).toBe(SUBMISSION_REQUEST_POLICY.maxBodyChunks + 1);
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(createSubmission).not.toHaveBeenCalled();
+    expect(body.locked).toBe(false);
+  });
+
+  it("clears the reader deadline after an ordinary valid body", async () => {
+    vi.useFakeTimers();
+    const createSubmission = vi.fn(async () => ({ kind: "duplicate" as const }));
+    const response = await handleSubmissionPost(request(valid), createSubmission);
+    expect(response.status).toBe(409);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(SUBMISSION_REQUEST_POLICY.maxBodyReadMs);
+    expect(createSubmission).toHaveBeenCalledOnce();
+  });
+
+  it("stops reading an aborted request before repository work", async () => {
+    const abort = new AbortController();
+    const createSubmission = vi.fn();
+    const onCancel = vi.fn();
+    let bodyController: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { bodyController = controller; },
+      cancel: onCancel,
+    });
+    const input = new Request("https://example.com/api/submissions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal: abort.signal,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    let completed = false;
+    const pending = handleSubmissionPost(input, createSubmission).then(response => {
+      completed = true;
+      return response;
+    });
+    try {
+      abort.abort();
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(completed).toBe(true);
+      expect((await pending).status).toBe(408);
+      expect(onCancel).toHaveBeenCalledOnce();
+      expect(createSubmission).not.toHaveBeenCalled();
+    } finally {
+      // Release the pre-fix stalled read so the regression itself leaves no hanging task.
+      if (!completed) bodyController!.close();
+      await pending;
+    }
+  });
+
   it("returns only the public receipt fields and no-store headers", async () => {
     const createSubmission = vi.fn(async (...args: unknown[]) => {
       expect(args).toHaveLength(2);
@@ -55,6 +232,43 @@ describe("POST /api/submissions", () => {
     const response = await handleSubmissionPost(request(valid), createSubmission);
     expect(response.status).toBe(409);
   });
+
+  it("accepts a same-origin browser request with a JSON media type parameter", async () => {
+    const createSubmission = vi.fn(async () => ({ kind: "duplicate" as const }));
+    const response = await handleSubmissionPost(request(valid, {
+      Origin: "https://example.com",
+      "Content-Type": "application/json; charset=utf-8",
+    }), createSubmission);
+
+    expect(response.status).toBe(409);
+    expect(createSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["https://attacker.example", "null", "not an origin"])(
+    "rejects a browser submission from an untrusted origin: %s",
+    async (origin) => {
+      const createSubmission = vi.fn();
+      const response = await handleSubmissionPost(request(valid, { Origin: origin }), createSubmission);
+
+      expect(response.status).toBe(403);
+      expect(response.headers.get("cache-control")).toContain("no-store");
+      expect(createSubmission).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["text/plain", "application/x-www-form-urlencoded", "multipart/form-data", ""])(
+    "rejects a non-JSON submission media type before database work: %s",
+    async (contentType) => {
+      const createSubmission = vi.fn();
+      const submitted = request(valid, { "Content-Type": contentType });
+      if (!contentType) submitted.headers.delete("content-type");
+      const response = await handleSubmissionPost(submitted, createSubmission);
+
+      expect(response.status).toBe(415);
+      expect(response.headers.get("cache-control")).toContain("no-store");
+      expect(createSubmission).not.toHaveBeenCalled();
+    },
+  );
 
   it("returns 429 with Retry-After when the source window is exhausted", async () => {
     const response = await handleSubmissionPost(
@@ -117,6 +331,49 @@ describe("POST /api/submissions", () => {
       createSubmission,
     );
     expect(response.status).toBe(413);
+    expect(createSubmission).not.toHaveBeenCalled();
+  });
+
+  it("rejects a multibyte body above 10 KB even when its character count is smaller", async () => {
+    const createSubmission = vi.fn();
+    const body = JSON.stringify({ ...valid, padding: "界".repeat(4_000) });
+    expect(body.length).toBeLessThan(10_000);
+    expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(10_000);
+
+    const response = await handleSubmissionPost(streamRequest([body]), createSubmission);
+
+    expect(response.status).toBe(413);
+    expect(createSubmission).not.toHaveBeenCalled();
+  });
+
+  it("stops reading and cancels an oversized chunked request", async () => {
+    const createSubmission = vi.fn();
+    const onCancel = vi.fn();
+    const onPull = vi.fn();
+    const response = await handleSubmissionPost(
+      streamRequest(["x".repeat(6_000), "y".repeat(5_000), "z".repeat(1_000)], {
+        onCancel,
+        onPull,
+      }),
+      createSubmission,
+    );
+
+    expect(response.status).toBe(413);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onPull).toHaveBeenCalledTimes(2);
+    expect(createSubmission).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized declared content length without reading the body", async () => {
+    const createSubmission = vi.fn();
+    const onCancel = vi.fn();
+    const response = await handleSubmissionPost(
+      streamRequest([JSON.stringify(valid)], { contentLength: "10001", onCancel }),
+      createSubmission,
+    );
+
+    expect(response.status).toBe(413);
+    expect(onCancel).toHaveBeenCalledTimes(1);
     expect(createSubmission).not.toHaveBeenCalled();
   });
 });
