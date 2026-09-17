@@ -2,11 +2,12 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useId, useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { rangeForNavigationKey, scheduleRangeTabs } from "@/lib/schedule/range-navigation";
+import type { RangeKey } from "@/lib/schedule/range-navigation";
 
-type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
 
 const subscribeToTimeZone = () => () => undefined;
@@ -158,6 +159,8 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [query, setQuery] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const rangeId = useId();
+  const rangePanelId = `${rangeId}-panel`;
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
@@ -242,6 +245,12 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     setGame("all"); setLeague("all"); setStatus("all"); setQuery(""); setSelectedDate("");
   }
 
+  function selectRange(nextRange: RangeKey) {
+    setRange(nextRange);
+    // A calendar date is an explicit override; activating a shortcut replaces it.
+    setSelectedDate("");
+  }
+
   function toggleTheme() {
     const nextTheme: Theme = theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = nextTheme;
@@ -264,7 +273,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           <button className="theme-button" type="button" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}>
             <span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
           </button>
-          <button className="refresh-button" type="button" onClick={refreshSchedule} disabled={refreshing}>
+          <button className="refresh-button" type="button" onClick={refreshSchedule} disabled={refreshing} aria-label={refreshing ? "正在刷新赛程" : "刷新赛程"} aria-busy={refreshing}>
             <svg className={refreshing ? "is-spinning" : ""} viewBox="0 0 18 18" aria-hidden="true"><path d="M14.6 6.5A6 6 0 1 0 15 10M14.6 3.5v3h-3" /></svg>
             <span>{refreshing ? "更新中" : "刷新"}</span>
           </button>
@@ -319,22 +328,39 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           </div>
 
           <div className="range-tabs" role="tablist" aria-label="选择时间范围">
-            {([ ["today", "今日"], ["tomorrow", "明日"], ["seven", "未来 7 天"], ["history", "历史比赛"], ["all", "全部收录"] ] as const).map(([key, label]) => (
-              <button key={key} role="tab" aria-selected={range === key} className={range === key ? "active" : ""} type="button" onClick={() => setRange(key)}>
+            {scheduleRangeTabs.map(([key, label]) => (
+              <button
+                key={key}
+                id={`${rangeId}-${key}`}
+                role="tab"
+                aria-selected={range === key}
+                aria-controls={rangePanelId}
+                tabIndex={range === key ? 0 : -1}
+                className={range === key ? "active" : ""}
+                type="button"
+                onClick={() => selectRange(key)}
+                onKeyDown={(event) => {
+                  const nextRange = rangeForNavigationKey(key, event.key);
+                  if (!nextRange) return;
+                  event.preventDefault();
+                  selectRange(nextRange);
+                  document.getElementById(`${rangeId}-${nextRange}`)?.focus();
+                }}
+              >
                 <span>{label}</span><em>{rangeCounts[key]}</em>
               </button>
             ))}
           </div>
 
           <div className="filter-panel">
-            <label className="search-field"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索战队或赛事" /></label>
+            <label className="search-field"><span className="sr-only">搜索战队或赛事</span><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索战队或赛事" /></label>
             <label><span className="sr-only">游戏</span><select value={game} onChange={(event) => setGame(event.target.value as GameKey | "all")}><option value="all">全部游戏</option>{Object.entries(games).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
             <label><span className="sr-only">赛事</span><select value={league} onChange={(event) => setLeague(event.target.value)}><option value="all">全部赛事</option>{leagues.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
             <label><span className="sr-only">状态</span><select value={status} onChange={(event) => setStatus(event.target.value as MatchStatus | "all")}><option value="all">全部状态</option>{Object.entries(statusMeta).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
             <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt?.slice(0, 10)} max={payload.coverage.range.latestMatchAt?.slice(0, 10)} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
           </div>
 
-          <div className="match-list" aria-live="polite">
+          <div className="match-list" id={rangePanelId} role="tabpanel" aria-labelledby={`${rangeId}-${range}`} tabIndex={0} aria-live="polite">
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
               <section className="date-group" key={key}>
                 <div className="date-divider"><span>{formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>

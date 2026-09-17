@@ -97,10 +97,13 @@ npm start
 ```powershell
 Invoke-RestMethod http://localhost:3000/api/health/data-coverage
 npm run verify:browser -- http://localhost:3000
+npm run verify:range-controls -- http://localhost:3000
 npm run verify:production -- http://localhost:3000 <expected-git-sha>
 ```
 
 没有 `PANDASCORE_TOKEN` 时，本地只返回可用的上次缓存/人工数据并明确标记数据源未配置，不会生成模拟比赛。不要为了测试把真实 Token 写入仓库。
+
+`verify:range-controls` 仅接受 loopback 地址，使用全新无登录态浏览器检查 1440px/390px 下刷新与搜索控件的可访问名称、时间范围的方向键/Home/End 导航、单一 Tab 停靠点、tabpanel 关联，以及快捷范围清除日期覆盖；不提交比赛或执行管理员操作。
 
 ## Vercel 部署后验证
 

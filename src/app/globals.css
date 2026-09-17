@@ -178,6 +178,8 @@ a { color: inherit; text-decoration: none; }
 .range-tabs { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 1px solid var(--line); margin-bottom: 18px; }
 .range-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); min-height: 55px; cursor: pointer; display: flex; justify-content: center; align-items: center; gap: 9px; margin-bottom: -1px; transition: .2s ease; }
 .range-tabs button:hover { color: var(--foreground); }
+.range-tabs button:focus-visible { outline: 2px solid var(--cyan); outline-offset: -4px; }
+.match-list:focus-visible { outline: 2px solid var(--cyan); outline-offset: 4px; }
 .range-tabs button.active { color: var(--foreground); border-bottom-color: var(--cyan); }
 .range-tabs button span { font-size: 13px; font-weight: 600; }
 .range-tabs button em { font-style: normal; min-width: 21px; height: 21px; line-height: 21px; padding: 0 6px; background: var(--surface-raised); border-radius: 11px; font-size: 10px; font-family: var(--font-geist-mono), monospace; }
