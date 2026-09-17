@@ -2,17 +2,24 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import {
   calendarClockSnapshot,
   parseCalendarClockSnapshot,
   subscribeCalendarClock,
 } from "@/lib/schedule/client-calendar-clock";
+import {
+  MATCH_RENDER_BATCH_SIZE,
+  nextMatchLimit,
+  visibleMatchLimit,
+  windowMatches,
+} from "@/lib/schedule/client-list-window";
 import { requestScheduleRefresh, SCHEDULE_REFRESH_ERROR } from "@/lib/schedule/client-refresh";
 import { addDaysKey, dateInputBound, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { rangeForNavigationKey, scheduleRangeTabs } from "@/lib/schedule/range-navigation";
+import type { RangeKey } from "@/lib/schedule/range-navigation";
 
-type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
 
 const getBrowserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -177,6 +184,9 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState(false);
   const refreshInFlight = useRef(false);
+  const [listWindow, setListWindow] = useState({ filterKey: "", limit: MATCH_RENDER_BATCH_SIZE });
+  const rangeId = useId();
+  const rangePanelId = `${rangeId}-panel`;
   const calendarClock = useSyncExternalStore(
     subscribeCalendarClock,
     getBrowserCalendarClock,
@@ -232,9 +242,16 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     });
   }, [game, league, payload.matches, query, range, selectedDate, sevenDaysOut, status, timeZone, today, tomorrow]);
 
+  const filterKey = [range, game, league, status, query.trim(), selectedDate, timeZone, today].join("\u001f");
+  const matchLimit = visibleMatchLimit(listWindow, filterKey);
+  const visibleMatches = useMemo(
+    () => windowMatches(filtered, matchLimit, range === "history" && !selectedDate),
+    [filtered, matchLimit, range, selectedDate],
+  );
+
   const grouped = useMemo(() => {
     const groups = new Map<string, EsportsMatch[]>();
-    for (const match of filtered) {
+    for (const match of visibleMatches) {
       const key = matchDateKey(match, timeZone);
       groups.set(key, [...(groups.get(key) ?? []), match]);
     }
@@ -243,7 +260,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
       if (b === "unscheduled") return -1;
       return range === "history" ? b.localeCompare(a) : a.localeCompare(b);
     });
-  }, [filtered, range, timeZone]);
+  }, [range, timeZone, visibleMatches]);
 
   const liveCount = payload.matches.filter((match) => match.status === "running").length;
   const upcomingCount = payload.matches.filter((match) => match.status === "scheduled").length;
@@ -265,6 +282,12 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
 
   function resetFilters() {
     setGame("all"); setLeague("all"); setStatus("all"); setQuery(""); setSelectedDate("");
+  }
+
+  function selectRange(nextRange: RangeKey) {
+    setRange(nextRange);
+    // A calendar date is an explicit override; activating a shortcut replaces it.
+    setSelectedDate("");
   }
 
   function toggleTheme() {
@@ -289,7 +312,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           <button className="theme-button" type="button" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}>
             <span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
           </button>
-          <button className="refresh-button" type="button" onClick={refreshSchedule} disabled={refreshing}>
+          <button className="refresh-button" type="button" onClick={refreshSchedule} disabled={refreshing} aria-label={refreshing ? "正在刷新赛程" : "刷新赛程"} aria-busy={refreshing}>
             <svg className={refreshing ? "is-spinning" : ""} viewBox="0 0 18 18" aria-hidden="true"><path d="M14.6 6.5A6 6 0 1 0 15 10M14.6 3.5v3h-3" /></svg>
             <span>{refreshing ? "更新中" : "刷新"}</span>
           </button>
@@ -345,22 +368,39 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           </div>
 
           <div className="range-tabs" role="tablist" aria-label="选择时间范围">
-            {([ ["today", "今日"], ["tomorrow", "明日"], ["seven", "未来 7 天"], ["history", "历史比赛"], ["all", "全部收录"] ] as const).map(([key, label]) => (
-              <button key={key} role="tab" aria-selected={range === key} className={range === key ? "active" : ""} type="button" onClick={() => setRange(key)}>
+            {scheduleRangeTabs.map(([key, label]) => (
+              <button
+                key={key}
+                id={`${rangeId}-${key}`}
+                role="tab"
+                aria-selected={range === key}
+                aria-controls={rangePanelId}
+                tabIndex={range === key ? 0 : -1}
+                className={range === key ? "active" : ""}
+                type="button"
+                onClick={() => selectRange(key)}
+                onKeyDown={(event) => {
+                  const nextRange = rangeForNavigationKey(key, event.key);
+                  if (!nextRange) return;
+                  event.preventDefault();
+                  selectRange(nextRange);
+                  document.getElementById(`${rangeId}-${nextRange}`)?.focus();
+                }}
+              >
                 <span>{label}</span><em>{rangeCounts[key]}</em>
               </button>
             ))}
           </div>
 
           <div className="filter-panel">
-            <label className="search-field"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索战队或赛事" /></label>
+            <label className="search-field"><span className="sr-only">搜索战队或赛事</span><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索战队或赛事" /></label>
             <label><span className="sr-only">游戏</span><select value={game} onChange={(event) => setGame(event.target.value as GameKey | "all")}><option value="all">全部游戏</option>{Object.entries(games).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
             <label><span className="sr-only">赛事</span><select value={league} onChange={(event) => setLeague(event.target.value)}><option value="all">全部赛事</option>{leagues.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
             <label><span className="sr-only">状态</span><select value={status} onChange={(event) => setStatus(event.target.value as MatchStatus | "all")}><option value="all">全部状态</option>{Object.entries(statusMeta).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
             <label className="date-field"><span className="sr-only">日期</span><input type="date" min={dateInputBound(payload.coverage.range.earliestMatchAt, timeZone)} max={dateInputBound(payload.coverage.range.latestMatchAt, timeZone)} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
           </div>
 
-          <div className="match-list" aria-live="polite">
+          <div className="match-list" id={rangePanelId} role="tabpanel" aria-labelledby={`${rangeId}-${range}`} tabIndex={0} aria-live="polite">
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
               <section className="date-group" key={key}>
                 <div className="date-divider"><span>{formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
@@ -368,6 +408,18 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
               </section>
             )) : (
               <div className="empty-state"><span className="empty-glyph">⌁</span><h3>没有找到符合条件的比赛</h3><p>试试切换时间范围，或清除部分筛选条件。</p><button type="button" onClick={resetFilters}>清除筛选</button></div>
+            )}
+            {visibleMatches.length < filtered.length && (
+              <div className="match-list-more">
+                <p>已显示 {visibleMatches.length} / {filtered.length} 场</p>
+                <button
+                  type="button"
+                  onClick={() => setListWindow({
+                    filterKey,
+                    limit: nextMatchLimit(matchLimit, filtered.length),
+                  })}
+                >加载更多比赛</button>
+              </div>
             )}
           </div>
         </section>
