@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
+import { readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+// This verifier owns its target. Never accept a Preview/Production URL or
+// inherit database, OAuth, PandaScore or cron credentials into the server.
+assert.equal(process.argv.length, 2, "LOOPBACK_VERIFIER_ACCEPTS_NO_TARGET");
+const localEnvFiles = (await readdir(root)).filter(name => /^\.env(?:\.|$)/.test(name) && name !== ".env.example");
+assert.equal(localEnvFiles.length, 0, "LOCAL_ENV_FILES_FORBIDDEN");
 const probe = createServer();
 await new Promise(resolve => probe.listen(0, "127.0.0.1", resolve));
 const port = probe.address().port;
@@ -25,14 +31,14 @@ try {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     if (child.exitCode !== null) throw new Error("LOCAL_SERVER_EXITED");
     try {
-      ready = (await fetch(`${base}/api/version`, { redirect: "error" })).ok;
+      ready = (await fetch(`${base}/api/version`, { redirect: "error", signal: AbortSignal.timeout(2_000) })).ok;
     } catch {}
     if (ready) break;
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   assert.ok(ready, "LOCAL_SERVER_NOT_READY");
 
-  const response = await fetch(`${base}/api/matches`, { redirect: "error" });
+  const response = await fetch(`${base}/api/matches`, { redirect: "error", signal: AbortSignal.timeout(5_000) });
   assert.equal(response.status, 200);
   const payload = await response.json();
   const start = Date.now() + 86_400_000;
@@ -56,16 +62,34 @@ try {
   }));
 
   browser = await chromium.launch({
-    executablePath: process.env.CHROME_PATH || "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    // Linux CI uses the headless shell installed by the locked Playwright CLI.
+    // Windows retains the existing fresh, headless system Chrome fallback.
+    ...(process.env.CHROME_PATH
+      ? { executablePath: process.env.CHROME_PATH }
+      : process.platform === "win32"
+        ? { executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe" }
+        : {}),
     headless: true,
   });
   for (const width of [1440, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 900 }, locale: "zh-CN" });
     const page = await context.newPage();
     const errors = [];
-    page.on("pageerror", error => errors.push(error.message));
+    page.on("pageerror", () => errors.push("PAGE_ERROR"));
     page.on("console", message => {
-      if (message.type() === "error") errors.push(message.text());
+      if (message.type() === "error") errors.push("CONSOLE_ERROR");
+    });
+    page.on("response", response => {
+      const url = new URL(response.url());
+      if (url.origin === base && (url.pathname === "/" || url.pathname.startsWith("/api/") || url.pathname.startsWith("/_next/")) && response.status() >= 400) {
+        errors.push("KEY_REQUEST_FAILED");
+      }
+    });
+    page.on("requestfailed", request => {
+      const url = new URL(request.url());
+      if (url.origin === base && (url.pathname === "/" || url.pathname.startsWith("/api/") || url.pathname.startsWith("/_next/"))) {
+        errors.push("KEY_REQUEST_FAILED");
+      }
     });
     await context.route("**/*", async route => {
       const request = route.request();
@@ -92,11 +116,19 @@ try {
     await page.locator(".filter-panel select").first().selectOption("lol");
     await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 200);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-    assert.deepEqual(errors, []);
+    assert.equal(errors.length, 0, "BROWSER_ERRORS_FOUND");
     console.log(`PASS ${width}px: 200 -> 400 -> 450, filter reset -> 200, no page error or overflow`);
     await context.close();
   }
+} catch {
+  // Do not serialize browser messages, response bodies, headers or launch
+  // environment on failure. CI should expose only the failed verifier name.
+  console.error("FAIL isolated loopback list-window browser regression");
+  process.exitCode = 1;
 } finally {
-  await browser?.close();
-  child.kill();
+  try {
+    await browser?.close();
+  } finally {
+    child.kill();
+  }
 }

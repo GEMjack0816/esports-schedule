@@ -107,6 +107,10 @@ npm run verify:production -- http://localhost:3000 <expected-git-sha>
 
 `verify:range-controls` 仅接受 loopback 地址，使用全新无登录态浏览器检查 1440px/390px 下刷新与搜索控件的可访问名称、时间范围的方向键/Home/End 导航、单一 Tab 停靠点、tabpanel 关联，以及快捷范围清除日期覆盖；不提交比赛或执行管理员操作。
 
+`npm run verify:list-window` 在构建后自行启动随机端口的 `127.0.0.1` 服务，不接受目标 URL，拒绝本地 `.env`（`.env.example` 除外），服务进程不继承数据库/OAuth/PandaScore/cron 凭据。全新 1440px/390px 浏览器上下文仅通过内存中的合成赛程验证 200 → 400 → 450 条渲染、筛选后重置、控制台和关键请求错误及横向溢出；外部请求和写请求全部阻断，不保存登录态、截图或响应。
+
+PR/main 的代码质量 CI 在既有测试、构建和凭据扫描后，通过已锁定的 `playwright-core` CLI 安装 Chromium headless shell，并运行该隔离浏览器回归。Linux 本地可先执行 `node node_modules/playwright-core/cli.js install --with-deps --only-shell chromium`；Windows 使用系统 Chrome 或显式 `CHROME_PATH`。这不是受保护 Preview 的 OAuth/数据库 E2E，不代替独立 Preview 验收，也不触发生产同步 workflow。
+
 ## Vercel 部署后验证
 
 1. 确认本地目录仍链接到 Vercel 项目 `esports-schedule`，Production 环境存在 `PANDASCORE_TOKEN` 和 `CRON_SECRET`。

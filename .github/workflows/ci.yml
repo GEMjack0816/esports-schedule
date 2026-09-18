@@ -70,3 +70,9 @@ jobs:
 
       - name: Scan client assets for server credentials
         run: npm run test:client-bundle
+
+      - name: Install locked headless Chromium and system dependencies
+        run: node node_modules/playwright-core/cli.js install --with-deps --only-shell chromium
+
+      - name: Verify isolated desktop and mobile list rendering
+        run: npm run verify:list-window
