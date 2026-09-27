@@ -260,6 +260,7 @@ async function revokeVercelAccessToken(config: AuthConfig, accessToken: string):
     },
     body: new URLSearchParams({ token: accessToken }),
     cache: "no-store",
+    redirect: "error",
     signal: AbortSignal.timeout(10_000),
   }));
 }
@@ -316,6 +317,7 @@ export async function completeVercelAuthorization(request: Request): Promise<str
       redirect_uri: `${origin}/api/auth/callback`,
     }),
     cache: "no-store",
+    redirect: "error",
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) throw new AuthForbiddenError("Vercel 登录令牌交换失败。");
@@ -402,3 +404,4 @@ export async function revokeAndClearSession(): Promise<void> {
     }
   }
 }
+
