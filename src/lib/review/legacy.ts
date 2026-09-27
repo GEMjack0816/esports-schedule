@@ -26,10 +26,21 @@ export async function importLegacyRuntimeSubmissions(
   let invalid = 0;
 
   for (const id of ids) {
+    if (!UUID_PATTERN.test(id)) {
+      invalid += 1;
+      continue;
+    }
+
+    // A cache read failure is an incomplete import, not an invalid legacy
+    // record. Let it abort before the repository transaction can commit a
+    // misleading partial import and audit result.
+    const raw = await cache.get(`pending:${id}`);
+    if (!raw || typeof raw !== "object") {
+      invalid += 1;
+      continue;
+    }
+
     try {
-      if (!UUID_PATTERN.test(id)) throw new Error("invalid id");
-      const raw = await cache.get(`pending:${id}`);
-      if (!raw || typeof raw !== "object") throw new Error("missing");
       const record = raw as Record<string, unknown>;
       const submittedAt = typeof record.submittedAt === "string"
         ? new Date(record.submittedAt)
@@ -37,11 +48,7 @@ export async function importLegacyRuntimeSubmissions(
       if (Number.isNaN(submittedAt.getTime())) throw new Error("invalid time");
       const input = validateSubmission({ ...record, notes: record.notes ?? null });
       records.push({ id, input, submittedAt });
-    } catch (error) {
-      if (error && typeof error === "object" && "code" in error
-        && (error as { code?: string }).code === "DATABASE_UNAVAILABLE") {
-        throw error;
-      }
+    } catch {
       invalid += 1;
     }
   }
@@ -51,3 +58,4 @@ export async function importLegacyRuntimeSubmissions(
     invalid,
   });
 }
+
