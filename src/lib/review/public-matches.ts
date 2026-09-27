@@ -215,11 +215,16 @@ async function readCurrentPublishedMatches(observeRevision: (revision: number) =
   // Fence writes are awaited under the serialized mutation transaction; this
   // read still uses PostgreSQL's committed revision as the authoritative check.
   const repository = getReviewRepository();
-  const revision = await repository.getCurrentManualMatchRevision();
+  // The pending outbox is authoritative for an undelivered Runtime Cache write.
+  // A matching Next Data Cache revision must not suppress that retry.
+  const cacheStatus = await repository.getManualMatchCacheStatus();
+  const revision = cacheStatus.revision;
   observeRevision(revision);
   const cached = await readPublishedMatchesCached();
   const fence = await readCurrentFence();
-  if (cached.revision !== revision || shouldRefreshCachedSnapshot(cached.revision, fence)) {
+  if (cacheStatus.pendingRevisions > 0
+    || cached.revision !== revision
+    || shouldRefreshCachedSnapshot(cached.revision, fence)) {
     return synchronizePublishedManualMatchesSnapshot(repository);
   }
   return cached;
