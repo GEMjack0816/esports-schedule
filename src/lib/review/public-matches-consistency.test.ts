@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   set: vi.fn(),
   cached: vi.fn(),
-  revision: vi.fn(),
+  cacheStatus: vi.fn(),
   snapshot: vi.fn(),
   delivered: vi.fn(),
   failed: vi.fn(),
@@ -14,7 +14,7 @@ vi.mock("@vercel/functions", () => ({ getCache: () => ({ get: mocks.get, set: mo
 vi.mock("next/cache", () => ({ unstable_cache: () => mocks.cached }));
 vi.mock("@/db", () => ({ isDatabaseConfigured: () => true }));
 vi.mock("./repository", () => ({ getReviewRepository: () => ({
-  getCurrentManualMatchRevision: mocks.revision,
+  getManualMatchCacheStatus: mocks.cacheStatus,
   readManualMatchCacheSnapshot: mocks.snapshot,
   markManualMatchCacheDelivered: mocks.delivered,
   markManualMatchCacheDeliveryFailed: mocks.failed,
@@ -26,7 +26,7 @@ describe("manual match cache authoritative version checks", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.cached.mockResolvedValue({ matches: [], fetchedAt: new Date().toISOString(), revision: 4 });
-    mocks.revision.mockResolvedValue(5);
+    mocks.cacheStatus.mockResolvedValue({ revision: 5, pendingRevisions: 0 });
     mocks.snapshot.mockResolvedValue({ rows: [], revision: 5, pendingRevisions: 1 });
     mocks.get.mockResolvedValue({ revision: 4 });
     mocks.set.mockResolvedValue(undefined);
@@ -51,11 +51,25 @@ describe("manual match cache authoritative version checks", () => {
     expect(mocks.failed).toHaveBeenCalledWith(5);
   });
 
+  it("retries Runtime Cache delivery when the outbox is pending despite matching cached revisions", async () => {
+    mocks.cached.mockResolvedValue({ matches: [], fetchedAt: new Date().toISOString(), revision: 5 });
+    mocks.cacheStatus.mockResolvedValue({ revision: 5, pendingRevisions: 1 });
+    mocks.get.mockImplementation(async (key: string) => key.includes("fence")
+      ? { revision: 5 }
+      : { matches: [], fetchedAt: new Date().toISOString(), revision: 4 });
+
+    const result = await getPublishedDatabaseMatches();
+
+    expect(result.state.cacheRevision).toBe(5);
+    expect(mocks.snapshot).toHaveBeenCalledOnce();
+    expect(mocks.delivered).toHaveBeenCalledWith(5);
+  });
+
   it("reuses the payload when its revision matches PostgreSQL", async () => {
-    mocks.revision.mockResolvedValue(4);
+    mocks.cacheStatus.mockResolvedValue({ revision: 4, pendingRevisions: 0 });
     const result = await getPublishedDatabaseMatches();
     expect(result.state.cacheRevision).toBe(4);
-    expect(mocks.revision).toHaveBeenCalledOnce();
+    expect(mocks.cacheStatus).toHaveBeenCalledOnce();
     expect(mocks.snapshot).not.toHaveBeenCalled();
   });
 
