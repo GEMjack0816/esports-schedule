@@ -100,6 +100,18 @@ function isCacheFence(value: unknown): value is { revision: number } {
   return Number.isSafeInteger(revision) && Number(revision) >= 0;
 }
 
+function observeManualMatchRevision(revision: number): void {
+  if (!Number.isSafeInteger(revision) || revision < 0) {
+    throw new Error("invalid manual match cache revision");
+  }
+  if (revision < publicState.cacheRevision) {
+    throw new Error("manual match cache revision regressed");
+  }
+  if (revision > publicState.cacheRevision) {
+    publicState = { ...publicState, cacheRevision: revision };
+  }
+}
+
 export function selectRuntimeFallback(snapshot: unknown, fence: unknown, minimumRevision = 0): CachedPublicMatches | null {
   if (!isCachedPublicMatches(snapshot)) return null;
   // The snapshot and fence can be evicted independently. Without the fence,
@@ -124,7 +136,10 @@ async function readLastSuccess(minimumRevision: number): Promise<CachedPublicMat
   try {
     const cache = publicCache();
     const [value, fence] = await Promise.all([cache.get(CACHE_KEY), cache.get(FENCE_KEY)]);
-    return selectRuntimeFallback(value, fence, minimumRevision);
+    // Keep the process-local high-water mark in the comparison too. A prior
+    // successful database read can know about a newer generation than this
+    // region's Runtime Cache fence (Runtime Cache is region-local).
+    return selectRuntimeFallback(value, fence, Math.max(minimumRevision, publicState.cacheRevision));
   } catch {
     return null;
   }
@@ -214,9 +229,9 @@ async function readCurrentPublishedMatches(observeRevision: (revision: number) =
   // Runtime Cache is regional and set() has no CAS or cancellation support.
   // Fence writes are awaited under the serialized mutation transaction; this
   // read still uses PostgreSQL's committed revision as the authoritative check.
+  // A matching Next Data Cache entry is not proof that the Runtime Cache
+  // delivery succeeded: the outbox may still contain a pending revision.
   const repository = getReviewRepository();
-  // The pending outbox is authoritative for an undelivered Runtime Cache write.
-  // A matching Next Data Cache revision must not suppress that retry.
   const cacheStatus = await repository.getManualMatchCacheStatus();
   const revision = cacheStatus.revision;
   observeRevision(revision);
@@ -225,7 +240,15 @@ async function readCurrentPublishedMatches(observeRevision: (revision: number) =
   if (cacheStatus.pendingRevisions > 0
     || cached.revision !== revision
     || shouldRefreshCachedSnapshot(cached.revision, fence)) {
-    return synchronizePublishedManualMatchesSnapshot(repository);
+    const refreshed = await synchronizePublishedManualMatchesSnapshot(repository);
+    observeRevision(refreshed.revision);
+    if (refreshed.revision < publicState.cacheRevision) {
+      throw new Error("manual match cache revision regressed");
+    }
+    return refreshed;
+  }
+  if (cached.revision < publicState.cacheRevision) {
+    throw new Error("manual match cache revision regressed");
   }
   return cached;
 }
@@ -247,35 +270,47 @@ export async function getPublishedDatabaseMatches(): Promise<{
     return { matches: [], state: publicState };
   }
 
-  let observedRevision = 0;
+  // A warm function instance may already have served a newer generation than
+  // the local Runtime Cache region currently holds. Never accept fallback data
+  // below that observed high-water mark when a later database read fails.
+  let observedRevision = publicState.cacheRevision;
   const result = await preserveLastSuccessfulPublicMatches(
     () => withTimeout(readCurrentPublishedMatches((revision) => {
+      if (revision < publicState.cacheRevision) {
+        throw new Error("manual match cache revision regressed");
+      }
       observedRevision = Math.max(observedRevision, revision);
+      observeManualMatchRevision(revision);
     })),
     // If the full read fails after the committed watermark was observed,
     // never let a regressed regional fence authorize an older snapshot.
     () => readLastSuccess(observedRevision),
   );
-  if (result.value && !result.fallback) {
+  if (result.value && !result.fallback && result.value.revision >= publicState.cacheRevision) {
     const value = result.value;
+    observeManualMatchRevision(value.revision);
     publicState = {
       configured: true,
       status: "connected",
       lastSuccessfulReadAt: value.fetchedAt,
       cachedManualMatches: value.matches.length,
-      cacheRevision: value.revision,
+      cacheRevision: Math.max(publicState.cacheRevision, value.revision),
       pendingCacheRevisions: 0,
     };
     return { matches: value.matches, state: publicState };
   }
 
-  const cached = result.value;
+  // Another overlapping request can advance the process watermark after this
+  // request starts reading the regional fallback. Filter again before return.
+  const cached = result.value && result.value.revision >= publicState.cacheRevision
+    ? result.value
+    : null;
   publicState = {
     configured: true,
     status: cached ? "cached" : "unavailable",
     lastSuccessfulReadAt: cached?.fetchedAt ?? publicState.lastSuccessfulReadAt,
     cachedManualMatches: cached?.matches.length ?? 0,
-    cacheRevision: cached?.revision ?? publicState.cacheRevision,
+    cacheRevision: Math.max(cached?.revision ?? 0, publicState.cacheRevision),
     pendingCacheRevisions: publicState.pendingCacheRevisions,
   };
   console.warn("[review-db] database read unavailable; preserving last successful public manual matches");
@@ -298,14 +333,15 @@ export async function getDatabaseHealth(): Promise<DatabasePublicState & {
       getReviewRepository().ping(),
       getReviewRepository().getManualMatchCacheStatus(),
     ]));
-    return {
+    observeManualMatchRevision(cacheStatus.revision);
+    publicState = {
       ...getDatabasePublicState(),
       configured: true,
       status: "connected",
       cacheRevision: cacheStatus.revision,
       pendingCacheRevisions: cacheStatus.pendingRevisions,
-      submissionCounts: counts,
     };
+    return { ...publicState, submissionCounts: counts };
   } catch {
     return {
       ...getDatabasePublicState(),
@@ -315,3 +351,4 @@ export async function getDatabaseHealth(): Promise<DatabasePublicState & {
     };
   }
 }
+
