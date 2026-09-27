@@ -237,16 +237,21 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect(countRow?.count).toBe(1);
   });
 
-  it("rolls back all imported rows when the audit write fails", async () => {
-    const id = randomUUID();
-    const input = submission(`legacy-rollback-${randomUUID()}`);
-    const record = legacyRecord(id, input);
+  it("rolls back every imported batch when the audit write fails", async () => {
+    const records = Array.from({ length: 41 }, (_, index) => legacyRecord(
+      randomUUID(),
+      submission(`legacy-rollback-${index}-${randomUUID()}`),
+    ));
+    const ids = records.map((record) => record.id);
     await expect(repository.importLegacySubmissions(
       null as unknown as string,
-      [record],
-      { scanned: 1, invalid: 0 },
+      records,
+      { scanned: records.length, invalid: 0 },
     )).rejects.toThrow();
-    expect(await repository.getSubmission(id)).toBeNull();
+    const [countRow] = await cleanup`
+      select count(*)::int as count from match_submissions where id = any(${ids}::uuid[])
+    `;
+    expect(countRow?.count).toBe(0);
   });
 
   it("serializes concurrent retries through unique constraints and audits both outcomes", async () => {
