@@ -25,12 +25,20 @@ export class SubmissionValidationError extends Error {
   readonly code = "INVALID_SUBMISSION";
 }
 
+// PostgreSQL rejects NUL bytes, and invisible formatting controls can disguise
+// text in the administrator review UI. Keep ordinary whitespace and natural
+// right-to-left scripts valid while rejecting non-printing control sequences.
+const UNSAFE_TEXT_CONTROLS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+
 function normalizedText(value: unknown, maxLength: number, required = true): string | null {
   if (value === null || value === undefined || value === "") {
     if (required) throw new SubmissionValidationError("请完整填写必填字段。");
     return null;
   }
   if (typeof value !== "string") throw new SubmissionValidationError("提交内容格式无效。");
+  if (UNSAFE_TEXT_CONTROLS.test(value)) {
+    throw new SubmissionValidationError("字段包含不允许的控制字符。");
+  }
   const normalized = value.normalize("NFKC").trim().replace(/\s+/g, " ");
   if ((required && normalized.length === 0) || normalized.length > maxLength) {
     throw new SubmissionValidationError("字段为空或超过允许长度。");
@@ -48,6 +56,9 @@ function validatedUrl(value: unknown, maxLength: number, httpsOnly = false): str
   }
   const allowed = httpsOnly ? parsed.protocol === "https:" : ["http:", "https:"].includes(parsed.protocol);
   if (!allowed) throw new SubmissionValidationError(httpsOnly ? "链接必须使用 HTTPS。" : "链接必须使用 HTTP 或 HTTPS。");
+  if (parsed.username || parsed.password) {
+    throw new SubmissionValidationError("链接不能包含账号或密码。");
+  }
   return parsed.toString();
 }
 
