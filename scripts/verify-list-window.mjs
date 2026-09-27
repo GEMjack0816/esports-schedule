@@ -88,6 +88,9 @@ try {
     await loadMore.click();
     await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 450);
     assert.equal(await loadMore.count(), 0);
+    const completion = page.locator(".match-list-more p");
+    assert.match(await completion.innerText(), /450 \/ 450.*已全部显示/);
+    await page.waitForFunction(() => document.activeElement?.matches(".match-list-more p"));
 
     await page.locator(".filter-panel select").first().selectOption("lol");
     await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 200);

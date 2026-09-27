@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import {
   MATCH_RENDER_BATCH_SIZE,
@@ -165,6 +165,8 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [selectedDate, setSelectedDate] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [listWindow, setListWindow] = useState({ filterKey: "", limit: MATCH_RENDER_BATCH_SIZE });
+  const focusListCompletion = useRef(false);
+  const listCompletionStatus = useRef<HTMLParagraphElement>(null);
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
@@ -225,6 +227,12 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     () => windowMatches(filtered, matchLimit, range === "history" && !selectedDate),
     [filtered, matchLimit, range, selectedDate],
   );
+
+  useEffect(() => {
+    if (!focusListCompletion.current || visibleMatches.length < filtered.length) return;
+    focusListCompletion.current = false;
+    listCompletionStatus.current?.focus();
+  }, [filtered.length, visibleMatches.length]);
 
   const grouped = useMemo(() => {
     const groups = new Map<string, EsportsMatch[]>();
@@ -357,16 +365,27 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             )) : (
               <div className="empty-state"><span className="empty-glyph">⌁</span><h3>没有找到符合条件的比赛</h3><p>试试切换时间范围，或清除部分筛选条件。</p><button type="button" onClick={resetFilters}>清除筛选</button></div>
             )}
-            {visibleMatches.length < filtered.length && (
+            {filtered.length > MATCH_RENDER_BATCH_SIZE && (
               <div className="match-list-more">
-                <p>已显示 {visibleMatches.length} / {filtered.length} 场</p>
-                <button
-                  type="button"
-                  onClick={() => setListWindow({
-                    filterKey,
-                    limit: nextMatchLimit(matchLimit, filtered.length),
-                  })}
-                >加载更多比赛</button>
+                <p
+                  ref={listCompletionStatus}
+                  tabIndex={visibleMatches.length === filtered.length ? -1 : undefined}
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
+                  已显示 {visibleMatches.length} / {filtered.length} 场
+                  {visibleMatches.length === filtered.length ? "，已全部显示。" : ""}
+                </p>
+                {visibleMatches.length < filtered.length && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextLimit = nextMatchLimit(matchLimit, filtered.length);
+                      focusListCompletion.current = nextLimit >= filtered.length;
+                      setListWindow({ filterKey, limit: nextLimit });
+                    }}
+                  >加载更多比赛</button>
+                )}
               </div>
             )}
           </div>
