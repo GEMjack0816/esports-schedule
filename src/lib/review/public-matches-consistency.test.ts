@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   snapshot: vi.fn(),
   delivered: vi.fn(),
   failed: vi.fn(),
+  counts: vi.fn(),
+  ping: vi.fn(),
 }));
 
 vi.mock("@vercel/functions", () => ({ getCache: () => ({ get: mocks.get, set: mocks.set }) }));
@@ -18,13 +20,22 @@ vi.mock("./repository", () => ({ getReviewRepository: () => ({
   readManualMatchCacheSnapshot: mocks.snapshot,
   markManualMatchCacheDelivered: mocks.delivered,
   markManualMatchCacheDeliveryFailed: mocks.failed,
+  getSubmissionCounts: mocks.counts,
+  ping: mocks.ping,
 }) }));
 
-import { getPublishedDatabaseMatches, writeManualMatchCacheFence } from "./public-matches";
+let getPublishedDatabaseMatches: typeof import("./public-matches")["getPublishedDatabaseMatches"];
+let getDatabaseHealth: typeof import("./public-matches")["getDatabaseHealth"];
+let writeManualMatchCacheFence: typeof import("./public-matches")["writeManualMatchCacheFence"];
 
 describe("manual match cache authoritative version checks", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    const publicMatches = await import("./public-matches");
+    getPublishedDatabaseMatches = publicMatches.getPublishedDatabaseMatches;
+    getDatabaseHealth = publicMatches.getDatabaseHealth;
+    writeManualMatchCacheFence = publicMatches.writeManualMatchCacheFence;
     mocks.cached.mockResolvedValue({ matches: [], fetchedAt: new Date().toISOString(), revision: 4 });
     mocks.cacheStatus.mockResolvedValue({ revision: 5, pendingRevisions: 0 });
     mocks.snapshot.mockResolvedValue({ rows: [], revision: 5, pendingRevisions: 1 });
@@ -32,10 +43,12 @@ describe("manual match cache authoritative version checks", () => {
     mocks.set.mockResolvedValue(undefined);
     mocks.delivered.mockResolvedValue(undefined);
     mocks.failed.mockResolvedValue(undefined);
+    mocks.counts.mockResolvedValue({ total: 0, pending: 0, approved: 0, rejected: 0 });
+    mocks.ping.mockResolvedValue(true);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
   });
 
-  afterEach(() => { vi.useRealTimers(); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it("does not let a matching old regional cache and fence hide a newer committed revision", async () => {
     const result = await getPublishedDatabaseMatches();
@@ -93,6 +106,44 @@ describe("manual match cache authoritative version checks", () => {
     expect(result.state.cacheRevision).toBe(5);
   });
 
+  it("does not serve an older regional fallback after this instance already returned a newer generation", async () => {
+    mocks.cacheStatus
+      .mockResolvedValueOnce({ revision: 5, pendingRevisions: 0 })
+      .mockRejectedValueOnce(new Error("database unavailable"));
+    mocks.cached.mockResolvedValueOnce({ matches: [], fetchedAt: "fresh", revision: 4 });
+    mocks.snapshot.mockResolvedValueOnce({ rows: [], revision: 5, pendingRevisions: 0 });
+    mocks.get.mockImplementation(async (key: string) => key.includes("fence")
+      ? { revision: 4 }
+      : { matches: [], fetchedAt: "stale", revision: 4 });
+    mocks.set.mockRejectedValueOnce(new Error("runtime cache unavailable"));
+
+    const fresh = await getPublishedDatabaseMatches();
+    expect(fresh.state.cacheRevision).toBe(5);
+    expect(fresh.state.status).toBe("connected");
+
+    const afterDatabaseFailure = await getPublishedDatabaseMatches();
+    expect(afterDatabaseFailure.state.status).toBe("unavailable");
+    expect(afterDatabaseFailure.state.cacheRevision).toBe(5);
+    expect(afterDatabaseFailure.matches).toEqual([]);
+  });
+
+  it("keeps the health-observed generation as the minimum during a later database outage", async () => {
+    mocks.cacheStatus
+      .mockResolvedValueOnce({ revision: 5, pendingRevisions: 0 })
+      .mockRejectedValueOnce(new Error("database unavailable"));
+    const health = await getDatabaseHealth();
+    expect(health.cacheRevision).toBe(5);
+
+    mocks.get.mockImplementation(async (key: string) => key.includes("fence")
+      ? { revision: 4 }
+      : { matches: [], fetchedAt: "stale", revision: 4 });
+
+    const afterDatabaseFailure = await getPublishedDatabaseMatches();
+    expect(afterDatabaseFailure.state.status).toBe("unavailable");
+    expect(afterDatabaseFailure.state.cacheRevision).toBe(5);
+    expect(afterDatabaseFailure.matches).toEqual([]);
+  });
+
   it("does not abandon a pending fence write that could complete out of order", async () => {
     vi.useFakeTimers();
     let fence = { revision: 3 };
@@ -119,3 +170,4 @@ describe("manual match cache authoritative version checks", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
