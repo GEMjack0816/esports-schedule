@@ -92,6 +92,7 @@ describe("POST /api/submissions", () => {
 
   it.each([
     { ...valid, league: "LPL\u0000spoof" },
+    { ...valid, teamB: "Beta\u200Fspoof" },
     { ...valid, teamA: "Alpha\u202Etxt.exe" },
     { ...valid, sourceUrl: "https://user:password@example.com/match" },
   ])("rejects unsafe text before repository work", async (candidate) => {

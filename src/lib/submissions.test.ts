@@ -48,6 +48,9 @@ describe("public match submission validation", () => {
   it.each([
     ["league", "LPL\u0000spoof"],
     ["teamA", "Alpha\u001B[31m"],
+    ["league", "LPL\u061Cspoof"],
+    ["teamA", "Alpha\u200Espoof"],
+    ["teamB", "Beta\u200Fspoof"],
     ["teamB", "Beta\u202Etxt.exe"],
     ["notes", "trusted\u2066untrusted\u2069"],
   ])("rejects non-printing or bidirectional controls in %s", (field, value) => {
