@@ -4,10 +4,15 @@ import {
   generateKeyPair,
   SignJWT,
 } from "jose";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const authCookieStore = vi.hoisted(() => ({ get: vi.fn(), set: vi.fn() }));
+vi.mock("next/headers", () => ({ cookies: async () => authCookieStore }));
+
 import {
   AuthForbiddenError,
   authCookieNames,
+  completeVercelAuthorization,
   isAuthorizedAdminSubject,
   revokeAccessTokenWithRetry,
   revokeRejectedAccessToken,
@@ -17,6 +22,13 @@ import {
   verifyVercelIdentityToken,
 } from "./vercel";
 import { safeAdminReturnPath } from "./paths";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  authCookieStore.get.mockReset();
+  authCookieStore.set.mockReset();
+});
 
 async function identityToken(overrides: {
   nonce?: string;
@@ -182,4 +194,40 @@ describe("Vercel administrator identity validation", () => {
     expect(request).toHaveBeenCalledTimes(1);
     expect(wait).not.toHaveBeenCalled();
   });
+
+  it("rejects redirects on token exchange and revocation requests", async () => {
+    vi.stubEnv("VERCEL_ENV", "development");
+    vi.stubEnv("NEXT_PUBLIC_VERCEL_APP_CLIENT_ID", "client-test");
+    vi.stubEnv("VERCEL_APP_CLIENT_SECRET", "secret-test");
+    vi.stubEnv("ADMIN_VERCEL_USER_IDS", "admin-test");
+
+    const names = authCookieNames(false);
+    const cookieValues = new Map([
+      [names.state, "state-test"],
+      [names.nonce, "nonce-test"],
+      [names.verifier, "verifier-test"],
+    ]);
+    authCookieStore.get.mockImplementation((name: string) => {
+      const value = cookieValues.get(name);
+      return value === undefined ? undefined : { value };
+    });
+
+    const mockedFetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: "opaque-test-token" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", mockedFetch);
+
+    const callback = new Request(
+      "http://localhost:3000/api/auth/callback?code=authorization-code&state=state-test",
+    );
+    await expect(completeVercelAuthorization(callback)).rejects.toBeInstanceOf(AuthForbiddenError);
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(mockedFetch.mock.calls.map(([, init]) => (init as RequestInit).redirect))
+      .toEqual(["error", "error"]);
+  });
 });
+
