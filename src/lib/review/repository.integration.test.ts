@@ -12,6 +12,7 @@ import type { PublicSubmissionPolicy, SubmissionControlWindowKind } from "./subm
 import type { PublishedMatchWrite } from "./types";
 import {
   preserveLastSuccessfulPublicMatches,
+  selectRuntimeFallback,
   synchronizePublishedManualMatchesSnapshot,
 } from "./public-matches";
 import type { CachedPublicMatches } from "./public-matches";
@@ -110,17 +111,42 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     return { id, input, row };
   }
 
-  it("reads only committed manual-match revisions and retains the latest after outbox cleanup", async () => {
+  it("keeps a monotonic sequence watermark after an aborted fence and outbox cleanup", async () => {
     const before = await repository.getCurrentManualMatchRevision();
-    await expect(repository.createManualMatch(published(submission("rolled-back revision")), "admin-a", async () => {
-      throw new Error("cache fence unavailable");
+    const rolledBackInput = submission(`rolled-back revision ${randomUUID()}`);
+    let externallyPublishedFence = 0;
+    await expect(repository.createManualMatch(published(rolledBackInput), "admin-a", async (revision) => {
+      // Model a Runtime Cache write that landed but whose acknowledgement was
+      // lost, so the database transaction must roll back after the fence moved.
+      externallyPublishedFence = revision;
+      throw new Error("cache fence acknowledgement was lost");
     })).rejects.toMatchObject({ code: "DATABASE_UNAVAILABLE" });
-    expect(await repository.getCurrentManualMatchRevision()).toBe(before);
+    expect(externallyPublishedFence).toBeGreaterThan(before);
+    expect(await repository.getCurrentManualMatchRevision()).toBe(externallyPublishedFence);
+
+    const rolledBackSnapshot = await repository.readManualMatchCacheSnapshot();
+    expect(rolledBackSnapshot.revision).toBe(externallyPublishedFence);
+    expect(rolledBackSnapshot.rows.some((match) => match.league === rolledBackInput.league)).toBe(false);
+    const staleFallback: CachedPublicMatches = {
+      matches: [],
+      fetchedAt: new Date().toISOString(),
+      revision: before,
+    };
+    expect(selectRuntimeFallback(staleFallback, { revision: externallyPublishedFence })).toBeNull();
+    let reconciledFallback: CachedPublicMatches | null = null;
+    await synchronizePublishedManualMatchesSnapshot(repository, async (value) => {
+      reconciledFallback = value;
+    });
+    expect(selectRuntimeFallback(
+      reconciledFallback,
+      { revision: externallyPublishedFence },
+      externallyPublishedFence,
+    )?.revision).toBe(externallyPublishedFence);
 
     const row = await repository.createManualMatch(published(submission("committed revision")), "admin-a");
     manualMatchIds.push(row.id);
     const created = await repository.getCurrentManualMatchRevision();
-    expect(created).toBeGreaterThan(before);
+    expect(created).toBeGreaterThan(externallyPublishedFence);
     await repository.setManualMatchHidden(row.id, true, "admin-a", row.updatedAt);
     const hidden = await repository.getCurrentManualMatchRevision();
     expect(hidden).toBeGreaterThan(created);
@@ -129,6 +155,21 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     const snapshot = await repository.readManualMatchCacheSnapshot();
     expect(snapshot.revision).toBe(hidden);
     expect(snapshot.rows.some(match => match.id === row.id)).toBe(false);
+  });
+
+  it("does not publish a Runtime Cache fence when the business write fails before revision allocation", async () => {
+    const before = await repository.getCurrentManualMatchRevision();
+    const input = published(submission(`failed insert ${randomUUID()}`));
+    input.homeScore = 32_768;
+    const fence = vi.fn<(revision: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await expect(repository.createManualMatch(input, "admin-a", fence)).rejects.toBeDefined();
+
+    expect(fence).not.toHaveBeenCalled();
+    expect(await repository.getCurrentManualMatchRevision()).toBe(before);
+    const snapshot = await repository.readManualMatchCacheSnapshot();
+    expect(snapshot.revision).toBe(before);
+    expect(snapshot.rows.some((match) => match.league === input.league)).toBe(false);
   });
 
   function policy(overrides: Partial<PublicSubmissionPolicy> = {}): PublicSubmissionPolicy {
@@ -623,3 +664,4 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     }
   });
 });
+
