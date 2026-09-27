@@ -98,18 +98,38 @@ export function assertPreviewDeployment({ baseUrl, version, expectedRef, expecte
   return { deploymentUrl, deploymentId: version.deploymentId };
 }
 
-export async function cleanupVerifyAdminData(database, league) {
+export async function cleanupVerifyAdminData(database, league, hideVisibleMatch) {
+  const candidateSubmissions = await database`
+    select id from match_submissions where league = ${league}
+  `;
+  const candidateSubmissionIds = candidateSubmissions.map((row) => row.id);
+  const candidates = await database`
+    select id, hidden from published_manual_matches
+    where league = ${league}
+      or league = ${`${league} edited`}
+      or source_submission_id = any(${candidateSubmissionIds}::uuid[])
+  `;
+
+  for (const match of candidates) {
+    if (!match.hidden) {
+      if (typeof hideVisibleMatch !== "function") fail("ADMIN_VERIFY_CACHE_SAFE_HIDE_REQUIRED");
+      await hideVisibleMatch(match.id);
+    }
+  }
+
   await database.begin(async (transaction) => {
     const submissions = await transaction`
-      select id from match_submissions where league = ${league}
+      select id from match_submissions where league = ${league} for update
     `;
     const submissionIds = submissions.map((row) => row.id);
     const manualMatches = await transaction`
-      select id from published_manual_matches
+      select id, hidden from published_manual_matches
       where league = ${league}
         or league = ${`${league} edited`}
         or source_submission_id = any(${submissionIds}::uuid[])
+      for update
     `;
+    if (manualMatches.some((row) => !row.hidden)) fail("ADMIN_VERIFY_CACHE_SAFE_HIDE_FAILED");
     const manualMatchIds = manualMatches.map((row) => row.id);
     const entityIds = [...new Set([...submissionIds, ...manualMatchIds])];
 
@@ -144,3 +164,4 @@ export async function runWithAdminVerifyCleanup(run, cleanup) {
   if (runFailed) fail("ADMIN_VERIFY_RUN_FAILED_CLEANUP_SUCCEEDED");
   return result;
 }
+

@@ -175,7 +175,18 @@ async function runChecks() {
         "audit summary",
       ],
     };
-  }, () => cleanupVerifyAdminData(database, league));
+  }, () => cleanupVerifyAdminData(database, league, async (id) => {
+    await page.goto(`${baseUrl}/admin/matches/${id}`, { waitUntil: "networkidle" });
+    const hidden = page.getByRole("button", { name: "隐藏比赛" });
+    const restore = page.getByRole("button", { name: "恢复公开" });
+    if (await hidden.count() === 1) {
+      await hidden.click();
+      await page.getByText("当前：已隐藏").waitFor();
+      return;
+    }
+    if (await restore.count() === 1 && await page.getByText("当前：已隐藏").count() === 1) return;
+    fail("ADMIN_VERIFY_CACHE_SAFE_HIDE_FAILED");
+  }));
 
   console.log(JSON.stringify({ passed: true, ...checks }, null, 2));
 }
@@ -193,3 +204,4 @@ try {
   try { await browser?.close(); } catch {}
   try { await database?.end({ timeout: 2 }); } catch {}
 }
+

@@ -100,20 +100,30 @@ describe("verify:admin target safeguards", () => {
 describe("verify:admin cleanup", () => {
   it("deletes only marked submissions, their published matches, and related audit events in one transaction", async () => {
     const calls = [];
+    let hidden = false;
     const statement = (strings, ...values) => {
       const query = strings.join("?").replace(/\s+/g, " ").trim().toLowerCase();
       calls.push({ query, values });
       if (query.startsWith("select id from match_submissions")) return Promise.resolve([{ id: "submission-1" }]);
-      if (query.startsWith("select id from published_manual_matches")) return Promise.resolve([{ id: "match-1" }]);
+      if (query.startsWith("select id, hidden from published_manual_matches")) {
+        return Promise.resolve([{ id: "match-1", hidden }]);
+      }
       return Promise.resolve([]);
     };
     statement.begin = async (callback) => callback(statement);
 
-    await cleanupVerifyAdminData(statement, "Codex isolated review unique-run");
+    await cleanupVerifyAdminData(statement, "Codex isolated review unique-run", async (id) => {
+      expect(id).toBe("match-1");
+      hidden = true;
+      calls.push({ query: "cache-synchronized hide", values: [id] });
+    });
 
     expect(calls.map(({ query }) => query)).toEqual([
       "select id from match_submissions where league = ?",
-      "select id from published_manual_matches where league = ? or league = ? or source_submission_id = any(?::uuid[])",
+      "select id, hidden from published_manual_matches where league = ? or league = ? or source_submission_id = any(?::uuid[])",
+      "cache-synchronized hide",
+      "select id from match_submissions where league = ? for update",
+      "select id, hidden from published_manual_matches where league = ? or league = ? or source_submission_id = any(?::uuid[]) for update",
       "delete from admin_audit_events where entity_id = any(?::uuid[])",
       "delete from published_manual_matches where id = any(?::uuid[])",
       "delete from match_submissions where id = any(?::uuid[])",
@@ -121,6 +131,23 @@ describe("verify:admin cleanup", () => {
     expect(calls.every(({ values }) => values.length === 0 || values.every((value) =>
       Array.isArray(value) || value === "Codex isolated review unique-run" || value === "Codex isolated review unique-run edited" || value === "submission-1" || value === "match-1",
     ))).toBe(true);
+  });
+
+  it("fails closed before deletion when a visible match cannot be cache-safely hidden", async () => {
+    const statement = (strings) => {
+      const query = strings.join("?").replace(/\s+/g, " ").trim().toLowerCase();
+      if (query.startsWith("select id from match_submissions")) return Promise.resolve([]);
+      if (query.startsWith("select id, hidden from published_manual_matches")) {
+        return Promise.resolve([{ id: "visible-match", hidden: false }]);
+      }
+      throw new Error("cleanup transaction must not start before a successful hide");
+    };
+    statement.begin = vi.fn(async (callback) => callback(statement));
+
+    await expect(cleanupVerifyAdminData(statement, "Codex isolated review unique-run", async () => {
+      throw new Error("cache sync failed");
+    })).rejects.toThrow("cache sync failed");
+    expect(statement.begin).not.toHaveBeenCalled();
   });
 
   it("always attempts cleanup after both successful and failed E2E runs", async () => {
@@ -140,3 +167,4 @@ describe("verify:admin cleanup", () => {
     })).rejects.toThrow("ADMIN_VERIFY_CLEANUP_FAILED");
   });
 });
+

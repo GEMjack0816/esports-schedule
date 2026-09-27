@@ -22,7 +22,9 @@ describe.skipIf(!enabled)("verify:admin cleanup against isolated PostgreSQL", ()
     if (!client) return;
     const activeClient = client;
     try {
-      if (league) await cleanupVerifyAdminData(activeClient, league);
+      if (league) await cleanupVerifyAdminData(activeClient, league, async (id) => {
+        await activeClient`update published_manual_matches set hidden = true where id = ${id}::uuid`;
+      });
     } finally {
       await activeClient.end({ timeout: 2 });
     }
@@ -65,7 +67,9 @@ describe.skipIf(!enabled)("verify:admin cleanup against isolated PostgreSQL", ()
         ('integration-test', 'manual_match.edited', 'manual_match', ${manualMatch.id})
     `;
 
-    await cleanupVerifyAdminData(client, league);
+    await cleanupVerifyAdminData(client, league, async (id) => {
+      await client`update published_manual_matches set hidden = true where id = ${id}::uuid`;
+    });
 
     const [remainingSubmissions] = await client`
       select count(*)::int as count from match_submissions where league = ${league}
@@ -85,3 +89,4 @@ describe.skipIf(!enabled)("verify:admin cleanup against isolated PostgreSQL", ()
     expect(remainingAudit.count).toBe(0);
   });
 });
+

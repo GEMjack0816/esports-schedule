@@ -58,6 +58,7 @@ npm run verify:admin -- <isolated-preview-url> <expected-git-branch> <expected-4
 
 `verify:admin` 在第一次写入前会通过带现有 Playwright 登录态的只读 `/api/version` 请求，要求目标环境为 `preview`，并逐字匹配预期 Git 分支、40 位 SHA、明确列出的 Preview hostname 和 Deployment ID；固定 Production Alias 也会被额外拒绝。hostname/deployment allowlist 不接受通配符。它还要求 `DATABASE_URL` 的 hostname 命中单独提供的 Preview Neon hostname allowlist，并先确认连接可用；不要提供 Production 连接串。所有安全预检失败时，脚本不会发起公开提交或管理员写操作。
 
-成功创建的测试记录都带有唯一随机赛事标记。无论 E2E 成功还是失败，脚本都会在 `finally` 路径内用单个数据库事务删除该标记对应的提交、发布比赛和审计事件；数据库操作按记录 ID 精确收窄。清理失败会使脚本非零退出并隐藏底层连接错误。成功输出不包含业务记录 ID、Cookie 或认证材料。若进程被强制终止或机器断电，语言运行时无法保证执行 `finally`，因此应只在可控的隔离 Preview 中运行。
+成功创建的测试记录都带有唯一随机赛事标记。无论 E2E 成功还是失败，脚本都会先通过当前已认证的管理员页面隐藏仍公开的测试比赛，让正常 mutation 流程同步 Runtime/Next 缓存；随后再在单个数据库事务内锁定并确认目标均已隐藏，删除对应提交、发布比赛和审计事件。若缓存同步隐藏失败，脚本会在删除事务开始前失败关闭。数据库清理失败会使脚本非零退出并隐藏底层连接错误。成功输出不包含业务记录 ID、Cookie 或认证材料。若进程被强制终止或机器断电，语言运行时无法保证执行 `finally`，因此应只在可控的隔离 Preview 中运行。
 
 `ADMIN_STORAGE_STATE` 应是本机未跟踪的 Playwright storage state；`DATABASE_URL` 必须来自目标分支的独立 Preview 数据库，且只在进程环境中使用。不要把 storage state、连接串或任何 Secret 加入 Git、命令日志或 PR 内容。
+
