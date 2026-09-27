@@ -43,6 +43,10 @@ function publicCache() {
   return getCache({ namespace: "esports-schedule-review" });
 }
 
+function snapshotCacheKey(revision: number): string {
+  return `${CACHE_KEY}:${revision}`;
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs = DB_TIMEOUT_MS): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
   return Promise.race([
@@ -135,18 +139,32 @@ export async function writeManualMatchCacheFence(revision: number): Promise<void
 async function readLastSuccess(minimumRevision: number): Promise<CachedPublicMatches | null> {
   try {
     const cache = publicCache();
-    const [value, fence] = await Promise.all([cache.get(CACHE_KEY), cache.get(FENCE_KEY)]);
+    const fence = await cache.get(FENCE_KEY);
+    if (!isCacheFence(fence)) return null;
+
     // Keep the process-local high-water mark in the comparison too. A prior
     // successful database read can know about a newer generation than this
     // region's Runtime Cache fence (Runtime Cache is region-local).
-    return selectRuntimeFallback(value, fence, Math.max(minimumRevision, publicState.cacheRevision));
+    const requiredRevision = Math.max(minimumRevision, publicState.cacheRevision, fence.revision);
+    const versioned = await cache.get(snapshotCacheKey(requiredRevision));
+    if (isCachedPublicMatches(versioned) && versioned.revision >= requiredRevision) {
+      return selectRuntimeFallback(versioned, fence, requiredRevision);
+    }
+
+    // Read pre-versioned snapshots during rollout only when their stored
+    // revision still satisfies the current fence/high-water mark.
+    const legacy = await cache.get(CACHE_KEY);
+    return selectRuntimeFallback(legacy, fence, requiredRevision);
   } catch {
     return null;
   }
 }
 
 async function writeRuntimeFallback(value: CachedPublicMatches): Promise<void> {
-  await publicCache().set(CACHE_KEY, value, {
+  // A fixed key lets a slow older read overwrite a newer snapshot after its
+  // set() completes. Per-generation keys make writes immutable with respect
+  // to each other; the fence selects which generation may be served.
+  await publicCache().set(snapshotCacheKey(value.revision), value, {
     name: "Published manual matches last successful database read",
     tags: [RUNTIME_FALLBACK_TAG],
     ttl: CACHE_TTL_SECONDS,
