@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DrizzleReviewRepository } from "./repository";
-import type { MatchSubmissionInput } from "@/lib/submissions";
+import type { LegacyImportSourceCounts, LegacySubmissionImportRecord } from "./types";
 
 const cacheState = vi.hoisted(() => ({
   values: new Map<string, unknown>(),
@@ -36,29 +36,32 @@ describe("legacy Runtime Cache submission migration", () => {
         submittedAt: "2026-07-01T00:00:00.000Z",
       });
     }
-    const insertLegacySubmission = vi.fn(async (
-      _input: MatchSubmissionInput,
-      id: string,
-      submittedAt: Date,
+    const importLegacySubmissions = vi.fn(async (
+      _actorId: string,
+      records: LegacySubmissionImportRecord[],
+      sourceCounts: LegacyImportSourceCounts,
     ) => {
-      expect(submittedAt.toISOString()).toBe("2026-07-01T00:00:00.000Z");
-      return id === importedId ? "imported" as const : "duplicate" as const;
+      expect(records.every((record) => record.submittedAt.toISOString() === "2026-07-01T00:00:00.000Z")).toBe(true);
+      return {
+        ...sourceCounts,
+        imported: 1,
+        duplicate: records.length - 1,
+      };
     });
-    const auditLegacyImport = vi.fn();
     const repository = {
-      insertLegacySubmission,
-      auditLegacyImport,
+      importLegacySubmissions,
     } as unknown as DrizzleReviewRepository;
 
     const counts = await importLegacyRuntimeSubmissions("admin-user", repository);
 
     expect(counts).toEqual({ scanned: 3, imported: 1, duplicate: 1, invalid: 1 });
-    expect(insertLegacySubmission).toHaveBeenCalledTimes(2);
-    expect(insertLegacySubmission.mock.calls.map((call) => call[1])).toEqual([
+    expect(importLegacySubmissions).toHaveBeenCalledTimes(1);
+    expect(importLegacySubmissions.mock.calls[0]?.[0]).toBe("admin-user");
+    expect(importLegacySubmissions.mock.calls[0]?.[1].map((record) => record.id)).toEqual([
       importedId,
       duplicateId,
     ]);
-    expect(auditLegacyImport).toHaveBeenCalledWith("admin-user", counts);
+    expect(importLegacySubmissions.mock.calls[0]?.[2]).toEqual({ scanned: 3, invalid: 1 });
     expect(cacheState.delete).not.toHaveBeenCalled();
   });
 });
