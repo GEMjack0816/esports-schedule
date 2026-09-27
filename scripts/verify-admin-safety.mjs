@@ -49,6 +49,7 @@ export function assertPreviewBaseUrl(value, allowedHosts) {
   }
   if (
     url.protocol !== "https:"
+    || url.port
     || url.username
     || url.password
     || url.search
