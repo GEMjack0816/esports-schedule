@@ -66,6 +66,13 @@ describe("verify:admin target safeguards", () => {
       .toThrow("ADMIN_VERIFY_PREVIEW_HOST_NOT_ALLOWED");
   });
 
+  it("rejects a non-standard port on an otherwise allowlisted Preview hostname", () => {
+    expect(() => assertPreviewBaseUrl("https://schedule-branch.vercel.app:8443", previewHosts))
+      .toThrow("ADMIN_VERIFY_PREVIEW_HOST_NOT_ALLOWED");
+    expect(assertPreviewBaseUrl("https://schedule-branch.vercel.app:443", previewHosts))
+      .toBe("https://schedule-branch.vercel.app");
+  });
+
   it("fails closed for a wrong branch, SHA, or non-allowlisted deployment ID", () => {
     for (const patch of [
       { gitCommitRef: "main" },
