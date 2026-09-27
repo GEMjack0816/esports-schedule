@@ -27,6 +27,7 @@ vi.mock("./repository", () => ({ getReviewRepository: () => ({
 let getPublishedDatabaseMatches: typeof import("./public-matches")["getPublishedDatabaseMatches"];
 let getDatabaseHealth: typeof import("./public-matches")["getDatabaseHealth"];
 let writeManualMatchCacheFence: typeof import("./public-matches")["writeManualMatchCacheFence"];
+let synchronizePublishedManualMatchesSnapshot: typeof import("./public-matches")["synchronizePublishedManualMatchesSnapshot"];
 
 describe("manual match cache authoritative version checks", () => {
   beforeEach(async () => {
@@ -36,6 +37,7 @@ describe("manual match cache authoritative version checks", () => {
     getPublishedDatabaseMatches = publicMatches.getPublishedDatabaseMatches;
     getDatabaseHealth = publicMatches.getDatabaseHealth;
     writeManualMatchCacheFence = publicMatches.writeManualMatchCacheFence;
+    synchronizePublishedManualMatchesSnapshot = publicMatches.synchronizePublishedManualMatchesSnapshot;
     mocks.cached.mockResolvedValue({ matches: [], fetchedAt: new Date().toISOString(), revision: 4 });
     mocks.cacheStatus.mockResolvedValue({ revision: 5, pendingRevisions: 0 });
     mocks.snapshot.mockResolvedValue({ rows: [], revision: 5, pendingRevisions: 1 });
@@ -106,6 +108,24 @@ describe("manual match cache authoritative version checks", () => {
     expect(result.state.cacheRevision).toBe(5);
   });
 
+  it("loads the generation selected by the Runtime Cache fence during a database outage", async () => {
+    const latest = { matches: [], fetchedAt: "generation-5", revision: 5 };
+    mocks.cacheStatus.mockRejectedValue(new Error("database unavailable"));
+    mocks.cached.mockRejectedValue(new Error("database unavailable"));
+    mocks.get.mockImplementation(async (key: string) => {
+      if (key === "published-manual-matches-fence-v1") return { revision: 5 };
+      if (key === "published-manual-matches-v1:5") return latest;
+      return undefined;
+    });
+
+    const result = await getPublishedDatabaseMatches();
+
+    expect(mocks.get).toHaveBeenCalledWith("published-manual-matches-v1:5");
+    expect(result.state.status).toBe("cached");
+    expect(result.state.cacheRevision).toBe(5);
+    expect(result.state.lastSuccessfulReadAt).toBe("generation-5");
+  });
+
   it("does not serve an older regional fallback after this instance already returned a newer generation", async () => {
     mocks.cacheStatus
       .mockResolvedValueOnce({ revision: 5, pendingRevisions: 0 })
@@ -168,6 +188,41 @@ describe("manual match cache authoritative version checks", () => {
     const result = await getPublishedDatabaseMatches();
     expect(result.state.cacheRevision).toBe(5);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps a delayed old snapshot write from replacing a newer Runtime Cache generation", async () => {
+    const runtimeSnapshots = new Map<string, { revision: number }>();
+    let releaseOldSnapshot!: () => void;
+    let announceOldSnapshotWrite!: () => void;
+    const oldSnapshotStarted = new Promise<void>((resolve) => {
+      announceOldSnapshotWrite = resolve;
+    });
+    const oldSnapshotGate = new Promise<void>((resolve) => {
+      releaseOldSnapshot = resolve;
+    });
+    mocks.set.mockImplementation(async (key: string, value: { revision: number }) => {
+      if (value.revision === 4) {
+        announceOldSnapshotWrite();
+        await oldSnapshotGate;
+      }
+      runtimeSnapshots.set(key, value);
+    });
+    const repository = {
+      readManualMatchCacheSnapshot: vi.fn()
+        .mockResolvedValueOnce({ rows: [], revision: 4, pendingRevisions: 0 })
+        .mockResolvedValueOnce({ rows: [], revision: 5, pendingRevisions: 0 }),
+      markManualMatchCacheDelivered: mocks.delivered,
+      markManualMatchCacheDeliveryFailed: mocks.failed,
+    };
+
+    const olderWrite = synchronizePublishedManualMatchesSnapshot(repository as never);
+    await oldSnapshotStarted;
+    await synchronizePublishedManualMatchesSnapshot(repository as never);
+    releaseOldSnapshot();
+    await olderWrite;
+
+    expect(runtimeSnapshots.get("published-manual-matches-v1:5")?.revision).toBe(5);
+    expect(runtimeSnapshots.get("published-manual-matches-v1:4")?.revision).toBe(4);
   });
 });
 
