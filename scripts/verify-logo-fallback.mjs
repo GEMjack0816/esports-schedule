@@ -74,7 +74,13 @@ try {
     const persistentMark = page.locator(".team-mark").nth(1);
     await page.waitForFunction(() => {
       const image = document.querySelectorAll(".team-mark img")[1];
-      return image && new URL(image.currentSrc).pathname === "/team-placeholder.svg";
+      const source = image?.currentSrc;
+      if (!source) return false;
+      try {
+        return new URL(source, window.location.href).pathname === "/team-placeholder.svg";
+      } catch {
+        return false;
+      }
     });
     assert.equal(persistentAttempts, 2, "a persistent remote failure should stop after one retry");
     assert.ok(await persistentMark.locator("img").count());
