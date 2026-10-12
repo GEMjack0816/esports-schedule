@@ -69,10 +69,22 @@ try {
       assert.equal(await search.evaluate((element) => element === document.activeElement), true);
 
       const date = page.getByLabel("日期", { exact: true });
-      await date.fill("2026-01-01");
+      async function setDateOverride() {
+        const min = await date.getAttribute("min");
+        const max = await date.getAttribute("max");
+        const value = min ?? max ?? await date.evaluate(() => {
+          const localDate = new Date();
+          localDate.setMinutes(localDate.getMinutes() - localDate.getTimezoneOffset());
+          return localDate.toISOString().slice(0, 10);
+        });
+        await date.fill(value);
+        assert.equal(await date.inputValue(), value, "date override should be set before testing its reset");
+      }
+
+      await setDateOverride();
       await page.getByRole("tab", { name: /^今日/ }).click();
       assert.equal(await date.inputValue(), "");
-      await date.fill("2026-01-01");
+      await setDateOverride();
       await page.getByRole("tab", { name: /^今日/ }).focus();
       await page.keyboard.press("ArrowRight");
       await selected("明日");
@@ -88,3 +100,4 @@ try {
 } finally {
   await browser.close();
 }
+
