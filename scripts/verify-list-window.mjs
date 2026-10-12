@@ -96,9 +96,37 @@ try {
     await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 200);
     await page.locator(".filter-panel select").first().selectOption("all");
     await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 200);
+
+    await loadMore.click();
+    await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 400);
+    await page.getByRole("button", { name: "加载更多比赛" }).click();
+    await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 450);
+    const search = page.getByPlaceholder("搜索战队或赛事");
+    await search.fill("Alpha");
+    await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 200);
+    await search.fill("");
+    await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 200);
+
+    await loadMore.click();
+    await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 400);
+    await page.getByRole("button", { name: "加载更多比赛" }).click();
+    await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 450);
+    await page.getByRole("tab", { name: /未来 7 天/ }).click();
+    await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 200);
+    await page.getByRole("tab", { name: /全部收录/ }).click();
+    await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 200);
+
+    await loadMore.click();
+    await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 400);
+    await page.getByRole("button", { name: "加载更多比赛" }).click();
+    await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 450);
+    await search.fill("no matching team");
+    await page.getByRole("button", { name: "清除筛选" }).click();
+    await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 200);
+
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     assert.deepEqual(errors, []);
-    console.log(`PASS ${width}px: 200 -> 400 -> 450, filter A -> B -> A resets -> 200, no page error or overflow`);
+    console.log(`PASS ${width}px: bounded list; game/search/range/reset all return to 200; no page error or overflow`);
     await context.close();
   }
 } finally {
