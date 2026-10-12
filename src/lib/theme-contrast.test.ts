@@ -132,7 +132,7 @@ describe("schedule theme text contrast", () => {
       expectAa(`${name} ${selectorName} on surface`, cyan, surface);
     }
 
-    for (const selectorName of [".filter-panel input::placeholder", ".no-stream", ".team-score"]) {
+    for (const selectorName of [".filter-panel input::placeholder", ".no-stream", ".team-score", ".sync-status-card small"]) {
       expect(declarationsFor(selectorName).color).toBe("var(--muted)");
       expectAa(`${name} ${selectorName}`, muted, card);
     }
@@ -143,6 +143,8 @@ describe("schedule theme text contrast", () => {
     expectAa(`${name} sync success`, parseColor(variables["--sync-success"]!, variables), card);
     expect(declarationsFor(".sync-delayed strong").color).toBe("var(--sync-warning)");
     expectAa(`${name} sync delayed`, parseColor(variables["--sync-warning"]!, variables), card);
+    expect(declarationsFor(".sync-failed strong").color).toBe("var(--danger)");
+    expectAa(`${name} sync failed`, parseColor(variables["--danger"]!, variables), card);
     expect(declarationsFor(".submit-message.success").color).toBe("var(--success)");
     expectAa(`${name} submit success`, parseColor(variables["--success"]!, variables), card);
     expect(declarationsFor(".submit-message.error").color).toBe("var(--danger)");
