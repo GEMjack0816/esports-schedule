@@ -116,6 +116,17 @@ describe("published database manual matches", () => {
     expect(shouldRefreshCachedSnapshot(5, { available: false, revision: 0 })).toBe(true);
   });
 
+  it("clears the pending count only after snapshot delivery is acknowledged", async () => {
+    const repository = {
+      readManualMatchCacheSnapshot: async () => ({ rows: [row()], revision: 7, pendingRevisions: 2 }),
+      markManualMatchCacheDelivered: vi.fn().mockResolvedValue(undefined),
+      markManualMatchCacheDeliveryFailed: vi.fn().mockResolvedValue(undefined),
+    };
+    const snapshot = await synchronizePublishedManualMatchesSnapshot(repository, async () => undefined);
+    expect(snapshot.pendingCacheRevisions).toBe(0);
+    expect(repository.markManualMatchCacheDelivered).toHaveBeenCalledWith(7);
+  });
+
   it("keeps a failed cache delivery pending without losing current database results", async () => {
     const repository = {
       readManualMatchCacheSnapshot: async () => ({ rows: [row()], revision: 8, pendingRevisions: 1 }),
@@ -127,6 +138,7 @@ describe("published database manual matches", () => {
       async () => { throw new Error("runtime cache unavailable"); },
     );
     expect(snapshot.revision).toBe(8);
+    expect(snapshot.pendingCacheRevisions).toBe(1);
     expect(snapshot.matches).toHaveLength(1);
     expect(repository.markManualMatchCacheDeliveryFailed).toHaveBeenCalledWith(8);
   });

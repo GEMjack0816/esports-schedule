@@ -19,6 +19,8 @@ export type CachedPublicMatches = {
   matches: EsportsMatch[];
   fetchedAt: string;
   revision: number;
+  // Counts outbox deliveries still pending after the cache write attempt.
+  pendingCacheRevisions?: number;
 };
 
 export type DatabasePublicState = {
@@ -95,7 +97,10 @@ function isCachedPublicMatches(value: unknown): value is CachedPublicMatches {
   return typeof candidate.fetchedAt === "string"
     && Array.isArray(candidate.matches)
     && Number.isSafeInteger(candidate.revision)
-    && (candidate.revision ?? -1) >= 0;
+    && (candidate.revision ?? -1) >= 0
+    && (candidate.pendingCacheRevisions === undefined
+      || (Number.isSafeInteger(candidate.pendingCacheRevisions)
+        && (candidate.pendingCacheRevisions ?? -1) >= 0));
 }
 
 function isCacheFence(value: unknown): value is { revision: number } {
@@ -182,6 +187,7 @@ export async function synchronizePublishedManualMatchesSnapshot(
     matches: uniqueAndSort(snapshot.rows.map(publishedRowToMatch)),
     fetchedAt: new Date().toISOString(),
     revision: snapshot.revision,
+    pendingCacheRevisions: snapshot.pendingRevisions,
   };
   try {
     await write(value);
@@ -192,10 +198,11 @@ export async function synchronizePublishedManualMatchesSnapshot(
   }
   try {
     await repository.markManualMatchCacheDelivered(snapshot.revision);
+    return { ...value, pendingCacheRevisions: 0 };
   } catch {
     console.warn("[review-db] manual match cache delivery acknowledgement failed");
+    return value;
   }
-  return value;
 }
 
 async function readCurrentFence(): Promise<{ available: boolean; revision: number }> {
@@ -268,7 +275,7 @@ async function readCurrentPublishedMatches(observeRevision: (revision: number) =
   if (cached.revision < publicState.cacheRevision) {
     throw new Error("manual match cache revision regressed");
   }
-  return cached;
+  return { ...cached, pendingCacheRevisions: cacheStatus.pendingRevisions };
 }
 
 export async function getPublishedDatabaseMatches(): Promise<{
@@ -313,7 +320,7 @@ export async function getPublishedDatabaseMatches(): Promise<{
       lastSuccessfulReadAt: value.fetchedAt,
       cachedManualMatches: value.matches.length,
       cacheRevision: Math.max(publicState.cacheRevision, value.revision),
-      pendingCacheRevisions: 0,
+      pendingCacheRevisions: value.pendingCacheRevisions ?? 0,
     };
     return { matches: value.matches, state: publicState };
   }
