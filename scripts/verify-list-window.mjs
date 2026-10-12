@@ -55,8 +55,10 @@ try {
     lastUpdatedAt: new Date(start).toISOString(),
   }));
 
+  const executablePath = process.env.CHROME_PATH
+    || (process.platform === "win32" ? "C:/Program Files/Google/Chrome/Application/chrome.exe" : undefined);
   browser = await chromium.launch({
-    executablePath: process.env.CHROME_PATH || "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    ...(executablePath ? { executablePath } : {}),
     headless: true,
   });
   for (const width of [1440, 390]) {
