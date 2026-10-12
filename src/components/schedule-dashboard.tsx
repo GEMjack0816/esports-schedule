@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { getScheduleFormatters } from "@/lib/schedule/formatters";
+import { countLiveAndUpcoming } from "@/lib/schedule/status-counts";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -208,8 +209,10 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     });
   }, [filtered, range, timeZone]);
 
-  const liveCount = payload.matches.filter((match) => match.status === "running").length;
-  const upcomingCount = payload.matches.filter((match) => match.status === "scheduled").length;
+  const { live: liveCount, upcoming: upcomingCount } = useMemo(
+    () => countLiveAndUpcoming(payload.matches),
+    [payload.matches],
+  );
 
   async function refreshSchedule() {
     setRefreshing(true);
