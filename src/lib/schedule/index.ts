@@ -46,9 +46,9 @@ import type {
 } from "./types";
 import { pandaEndpointKeys, pandaGameKeys } from "./types";
 import { uniqueAndSort } from "./utils";
+import { FRESH_FOR_MS, gameSyncStatusAt } from "./freshness";
 
-export const FRESH_FOR_MS = 15 * 60 * 1_000;
-const FAILED_AFTER_MS = 60 * 60 * 1_000;
+export { FRESH_FOR_MS } from "./freshness";
 
 type SnapshotMap = Partial<Record<PandaGameKey, PandaGameSnapshot>>;
 type SyncStateMap = Partial<Record<PandaGameKey, PandaScoreGameSyncState>>;
@@ -174,16 +174,10 @@ export function deriveGameCoverage(
     const sourceFetchedAt = snapshot?.fetchedAt ?? null;
     const lastSuccessfulSyncAt = state?.lastSuccessfulSyncAt ?? sourceFetchedAt;
     const lastAttemptAt = state?.lastAttemptAt ?? lastSuccessfulSyncAt;
-    const snapshotAgeMs = sourceFetchedAt
+    const snapshotAgeMs = sourceFetchedAt && Number.isFinite(Date.parse(sourceFetchedAt))
       ? Math.max(0, now.getTime() - Date.parse(sourceFetchedAt))
       : null;
-    const failedAttempt = !!state?.lastErrorAt
-      && (!sourceFetchedAt || Date.parse(state.lastErrorAt) >= Date.parse(sourceFetchedAt));
-    const syncStatus = failedAttempt || snapshotAgeMs === null || snapshotAgeMs > FAILED_AFTER_MS
-      ? "failed"
-      : snapshotAgeMs > FRESH_FOR_MS
-        ? "delayed"
-        : "normal";
+    const syncStatus = gameSyncStatusAt(sourceFetchedAt, state?.lastErrorAt ?? null, now.getTime());
 
     games[game] = {
       ...base,
@@ -875,3 +869,4 @@ export type {
   PandaGameKey,
   SchedulePayload,
 } from "./types";
+
