@@ -68,5 +68,25 @@ jobs:
       - name: Build the production bundle
         run: npm run build
 
+      - name: Install Chromium for the logo fault-injection regression
+        run: npx playwright-core install --with-deps chromium
+
+      - name: Run logo retry and fallback regression against the local build
+        run: |
+          set -euo pipefail
+          npm start -- --port 3105 > "$RUNNER_TEMP/logo-test-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3105/api/version >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          npm run verify:logo-fallback -- http://127.0.0.1:3105
+
       - name: Scan client assets for server credentials
         run: npm run test:client-bundle

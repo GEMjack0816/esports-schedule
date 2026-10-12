@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { chromium } from "playwright-core";
 
 const base = new URL(process.argv[2] || "http://localhost:3105");
@@ -12,8 +13,13 @@ assert.ok(template.matches.length > 0, "NO_MATCHES_FOR_LOGO_TEST");
 const transientLogo = "https://cdn.pandascore.co/images/team/image/test/transient.png";
 const persistentLogo = "https://cdn.pandascore.co/images/team/image/test/persistent.png";
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jvT8AAAAASUVORK5CYII=", "base64");
+const installedChrome = process.env.CHROME_PATH ?? [
+  "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
+  "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+].find(existsSync);
 const browser = await chromium.launch({
-  executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  ...(installedChrome ? { executablePath: installedChrome } : {}),
   headless: true,
 });
 try {
