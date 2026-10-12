@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
+import { getScheduleFormatters } from "@/lib/schedule/formatters";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -39,35 +40,17 @@ const statusMeta: Record<MatchStatus, { label: string; className: string }> = {
 
 function formatTime(value: string | null, timeZone: string): string {
   if (!value) return "待定";
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(value));
+  return getScheduleFormatters(timeZone).time.format(new Date(value));
 }
 
 function formatDate(value: string | null, timeZone: string): string {
   if (!value) return "时间待定";
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone,
-    month: "long",
-    day: "numeric",
-    weekday: "short",
-  }).format(new Date(value));
+  return getScheduleFormatters(timeZone).date.format(new Date(value));
 }
 
 function formatDateTime(value: string | null, timeZone: string): string {
   if (!value) return "暂无";
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(value));
+  return getScheduleFormatters(timeZone).dateTime.format(new Date(value));
 }
 
 function initials(name: string): string {
