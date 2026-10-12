@@ -21,4 +21,3 @@ export function gameSyncStatusAt(
   if (snapshotAge > FRESH_FOR_MS) return "delayed";
   return "normal";
 }
-

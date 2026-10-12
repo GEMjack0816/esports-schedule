@@ -33,4 +33,3 @@ describe("gameSyncStatusAt", () => {
     expect(gameSyncStatusAt("2026-10-13T00:01:00.000Z", null, fetchedMs)).toBe("normal");
   });
 });
-
