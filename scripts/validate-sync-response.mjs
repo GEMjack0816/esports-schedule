@@ -19,6 +19,9 @@ export function validateSyncResponse(payload, httpStatus) {
   if (httpStatus < 200 || httpStatus >= 300) {
     return { ok: false, message: `sync endpoint returned HTTP ${httpStatus}` };
   }
+  if (payload.ok !== true) {
+    return { ok: false, message: "sync response did not confirm success" };
+  }
   if (payload.lockAcquired !== true) {
     return { ok: false, message: "sync did not acquire the refresh lock" };
   }
@@ -77,3 +80,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   console.log(result.message);
   if (!result.ok) process.exit(1);
 }
+

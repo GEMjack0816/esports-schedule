@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const success = {
+  ok: true,
   status: "success",
   lockAcquired: true,
   generation: 41,
@@ -48,6 +49,15 @@ describe("sync workflow response validation", () => {
   });
   it("accepts a complete successful refresh", () => {
     expect(validateSyncResponse(success, 200).ok).toBe(true);
+  });
+
+  it.each([false, undefined])("rejects a successful outcome without an affirmative ok flag (%s)", ok => {
+    const payload = { ...success, ok };
+    if (ok === undefined) Reflect.deleteProperty(payload, "ok");
+    expect(validateSyncResponse(payload, 200)).toEqual({
+      ok: false,
+      message: "sync response did not confirm success",
+    });
   });
 
   it("reports a busy lock as non-success because this run did not refresh data", () => {
@@ -132,3 +142,4 @@ describe("sync workflow response validation", () => {
     expect(validateSyncResponse({ status: "busy", lockAcquired: false, generation: 41 }, 409).ok).toBe(false);
   });
 });
+
