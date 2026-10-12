@@ -108,18 +108,27 @@ function TeamRow({ team, score, winning }: {
 
 function TeamLogo({ src, label }: { src: string; label: string }) {
   const [failure, setFailure] = useState<"none" | "remote" | "all">("none");
+  const [remoteRetries, setRemoteRetries] = useState(0);
   if (failure === "all") return <span className="team-logo-text">{label}</span>;
   const current = failure === "remote" ? "/team-placeholder.svg" : src;
   return (
     <Image
-      key={current}
+      key={`${current}:${remoteRetries}`}
       src={current}
       alt=""
       width={28}
       height={28}
       unoptimized
       referrerPolicy="no-referrer"
-      onError={() => setFailure(current === "/team-placeholder.svg" ? "all" : "remote")}
+      onError={() => {
+        if (current === "/team-placeholder.svg") {
+          setFailure("all");
+        } else if (remoteRetries === 0) {
+          setRemoteRetries(1);
+        } else {
+          setFailure("remote");
+        }
+      }}
     />
   );
 }
