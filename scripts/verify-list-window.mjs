@@ -94,9 +94,11 @@ try {
 
     await page.locator(".filter-panel select").first().selectOption("lol");
     await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 200);
+    await page.locator(".filter-panel select").first().selectOption("all");
+    await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 200);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     assert.deepEqual(errors, []);
-    console.log(`PASS ${width}px: 200 -> 400 -> 450, filter reset -> 200, no page error or overflow`);
+    console.log(`PASS ${width}px: 200 -> 400 -> 450, filter A -> B -> A resets -> 200, no page error or overflow`);
     await context.close();
   }
 } finally {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MATCH_RENDER_BATCH_SIZE,
   nextMatchLimit,
+  resetMatchListWindow,
   visibleMatchLimit,
   windowMatches,
 } from "./client-list-window";
@@ -14,6 +15,16 @@ describe("progressive match list window", () => {
 
   it("retains the expanded window while the filter is unchanged", () => {
     expect(visibleMatchLimit({ filterKey: "all", limit: 600 }, "all")).toBe(600);
+  });
+
+  it("does not restore an old expanded window after switching away and back", () => {
+    const expanded = { filterKey: "all", limit: 400 };
+    const afterChangingToLol = resetMatchListWindow();
+    expect(visibleMatchLimit(afterChangingToLol, "lol")).toBe(MATCH_RENDER_BATCH_SIZE);
+
+    const afterReturningToAll = resetMatchListWindow();
+    expect(visibleMatchLimit(afterReturningToAll, "all")).toBe(MATCH_RENDER_BATCH_SIZE);
+    expect(visibleMatchLimit(expanded, "all")).toBe(400);
   });
 
   it("advances one batch without exceeding the complete result count", () => {

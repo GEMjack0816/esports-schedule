@@ -5,6 +5,10 @@ export type MatchListWindow = {
   limit: number;
 };
 
+export function resetMatchListWindow(): MatchListWindow {
+  return { filterKey: "", limit: MATCH_RENDER_BATCH_SIZE };
+}
+
 export function visibleMatchLimit(window: MatchListWindow, filterKey: string): number {
   return window.filterKey === filterKey ? window.limit : MATCH_RENDER_BATCH_SIZE;
 }
