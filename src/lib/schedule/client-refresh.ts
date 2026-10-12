@@ -107,6 +107,14 @@ function isClientSchedulePayload(value: unknown): value is SchedulePayload {
     && (value.warning === undefined || typeof value.warning === "string");
 }
 
+/** Do not replace a usable live schedule with an unavailable fallback. */
+export function canReplaceSchedulePayload(
+  currentMode: SchedulePayload["mode"],
+  refreshedMode: SchedulePayload["mode"],
+): boolean {
+  return currentMode !== "live" || refreshedMode !== "unavailable";
+}
+
 export async function requestScheduleRefresh(fetcher: typeof fetch = fetch): Promise<
   { ok: true; payload: SchedulePayload } | { ok: false }
 > {

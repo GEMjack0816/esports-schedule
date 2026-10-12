@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
-import { requestScheduleRefresh, SCHEDULE_REFRESH_ERROR } from "@/lib/schedule/client-refresh";
+import { canReplaceSchedulePayload, requestScheduleRefresh, SCHEDULE_REFRESH_ERROR } from "@/lib/schedule/client-refresh";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -238,7 +238,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     setRefreshError(false);
     try {
       const result = await requestScheduleRefresh();
-      if (result.ok) setPayload(result.payload);
+      if (result.ok && canReplaceSchedulePayload(payload.mode, result.payload.mode)) setPayload(result.payload);
       else setRefreshError(true);
     } finally {
       refreshInFlight.current = false;

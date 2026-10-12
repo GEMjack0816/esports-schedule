@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { requestScheduleRefresh, SCHEDULE_REFRESH_TIMEOUT_MS } from "./client-refresh";
+import { canReplaceSchedulePayload, requestScheduleRefresh, SCHEDULE_REFRESH_TIMEOUT_MS } from "./client-refresh";
 
 afterEach(() => vi.useRealTimers());
 
@@ -95,5 +95,15 @@ describe("schedule refresh transport", () => {
     vi.useFakeTimers();
     await requestScheduleRefresh(vi.fn<typeof fetch>().mockResolvedValue(Response.json({ matches: [] })));
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("retains a live schedule when the endpoint has no usable snapshot", () => {
+    expect(canReplaceSchedulePayload("live", "unavailable")).toBe(false);
+    expect(canReplaceSchedulePayload("live", "live")).toBe(true);
+  });
+
+  it("allows an unavailable page to receive a later usable schedule", () => {
+    expect(canReplaceSchedulePayload("unavailable", "live")).toBe(true);
+    expect(canReplaceSchedulePayload("unavailable", "unavailable")).toBe(true);
   });
 });
