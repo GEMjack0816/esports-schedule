@@ -93,6 +93,12 @@ try {
     const completion = page.locator(".match-list-more p");
     assert.match(await completion.innerText(), /450 \/ 450.*已全部显示/);
     await page.waitForFunction(() => document.activeElement?.matches(".match-list-more p"));
+    const focusIndicator = await completion.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { outlineStyle: style.outlineStyle, outlineWidth: Number.parseFloat(style.outlineWidth) };
+    });
+    assert.equal(focusIndicator.outlineStyle, "solid");
+    assert.ok(focusIndicator.outlineWidth >= 2);
 
     await page.locator(".filter-panel select").first().selectOption("lol");
     await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 200);
