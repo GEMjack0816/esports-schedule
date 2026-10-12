@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
-import { scheduleResultAnnouncement } from "@/lib/schedule/announcements";
+import { ScheduleResultStatus } from "@/components/schedule-result-status";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -335,9 +335,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt?.slice(0, 10)} max={payload.coverage.range.latestMatchAt?.slice(0, 10)} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
           </div>
 
-          <p className="sr-only schedule-result-status" role="status" aria-live="polite" aria-atomic="true">
-            {scheduleResultAnnouncement(filtered.length)}
-          </p>
+          <ScheduleResultStatus count={filtered.length} />
 
           <div className="match-list">
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
