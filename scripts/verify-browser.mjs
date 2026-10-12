@@ -1,8 +1,12 @@
+import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright-core";
 
 const baseUrl = process.argv[2] || "http://localhost:3000";
+const resultAnnouncement = (count) => count <= 0
+  ? "没有符合条件的比赛。"
+  : `筛选结果：${count} 场比赛。`;
 const executableCandidates = [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -83,17 +87,25 @@ for (const profile of [
 
   const gameFilterCounts = {};
   const statusFilterCounts = {};
+  const resultStatus = page.locator(".schedule-result-status");
+  const matchList = page.locator(".match-list");
+  if (await matchList.getAttribute("aria-live")) {
+    errors.push("match list must not announce every match card as a live region");
+  }
   await page.getByRole("tab", { name: /全部收录/ }).click();
+  assert.equal(await resultStatus.innerText(), resultAnnouncement(await page.locator(".match-card").count()));
   const gameSelect = page.locator(".filter-panel select").nth(0);
   for (const game of ["lol", "valorant", "honor-of-kings", "cs2", "dota2"]) {
     await gameSelect.selectOption(game);
     gameFilterCounts[game] = await page.locator(".match-card").count();
+    assert.equal(await resultStatus.innerText(), resultAnnouncement(gameFilterCounts[game]));
   }
   await gameSelect.selectOption("all");
   const statusSelect = page.locator(".filter-panel select").nth(2);
   for (const status of ["running", "finished", "scheduled"]) {
     await statusSelect.selectOption(status);
     statusFilterCounts[status] = await page.locator(".match-card").count();
+    assert.equal(await resultStatus.innerText(), resultAnnouncement(statusFilterCounts[status]));
   }
   await statusSelect.selectOption("all");
   await page.getByRole("tab", { name: /^今日/ }).click();
