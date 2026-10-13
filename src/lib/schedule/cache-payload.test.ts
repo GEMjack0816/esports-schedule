@@ -3,7 +3,7 @@ import { gzipSync } from "node:zlib";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { testPandaSnapshot } from "@/test/pandascore-snapshot";
 import {
-  decodeRuntimeSnapshot, encodeRuntimeSnapshot,
+  decodeRuntimeSnapshot, encodeRuntimeSnapshot, estimateSnapshotJsonBytes,
   MAX_DECODED_SNAPSHOT_BYTES, MAX_RUNTIME_SNAPSHOT_BYTES,
 } from "./cache-payload";
 
@@ -22,6 +22,42 @@ describe("bounded Runtime Cache snapshot codec", () => {
     const original = testPandaSnapshot();
     expect(await encodeRuntimeSnapshot(original)).toBe(original);
     expect(await decodeRuntimeSnapshot(original)).toBe(original);
+  });
+
+  it("estimates JSON UTF-8 bytes exactly for escaping and Unicode", () => {
+    const value = {
+      quote: 'a"b\\c\u0000\b\t\n\f\r\u001f',
+      cjk: "赛事",
+      emoji: "🏆",
+      loneSurrogate: "\ud800",
+      numbers: [-0, 1e21, Number.NaN],
+      array: [null, true, undefined],
+      omitted: undefined,
+    };
+    const expected = Buffer.byteLength(JSON.stringify(value), "utf8");
+    expect(estimateSnapshotJsonBytes(value, expected)).toBe(expected);
+    expect(estimateSnapshotJsonBytes(value, expected - 1)).toBeNull();
+  });
+
+  it("declines an excessive snapshot before serializing the full object", async () => {
+    const original = testPandaSnapshot();
+    original.matches[0].league = "x".repeat(MAX_DECODED_SNAPSHOT_BYTES);
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+    try {
+      await expect(encodeRuntimeSnapshot(original)).resolves.toBeNull();
+      expect(stringifySpy).not.toHaveBeenCalled();
+    } finally {
+      stringifySpy.mockRestore();
+    }
+  });
+
+  it("fails closed for cycles, custom serialization hooks and accessors", () => {
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    expect(estimateSnapshotJsonBytes(cycle)).toBeNull();
+    expect(estimateSnapshotJsonBytes({ toJSON: () => ({}) })).toBeNull();
+    const accessor = Object.defineProperty({}, "value", { enumerable: true, get: () => "unsafe" });
+    expect(estimateSnapshotJsonBytes(accessor)).toBeNull();
   });
 
   it("round-trips all matches, metadata and generation above the raw cache limit", async () => {

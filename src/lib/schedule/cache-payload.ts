@@ -13,6 +13,111 @@ export const MAX_DECODED_SNAPSHOT_BYTES = 16 * 1024 * 1024;
 const FORMAT = "pandascore-json-gzip-v1";
 const compress = promisify(gzip);
 const decompress = promisify(gunzip);
+const MAX_SNAPSHOT_NODES = 250_000;
+
+/**
+ * Count the UTF-8 bytes JSON.stringify would emit without allocating the full
+ * string. The traversal is budgeted and only accepts normalized JSON data;
+ * accessors, custom objects, cycles, and toJSON hooks fail closed so cache
+ * encoding can be skipped while the full PostgreSQL snapshot is retained.
+ */
+export function estimateSnapshotJsonBytes(
+  value: unknown,
+  maxBytes: number = MAX_DECODED_SNAPSHOT_BYTES,
+): number | null {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) return null;
+
+  let bytes = 0;
+  let nodes = 0;
+  const ancestors = new Set<object>();
+  const add = (count: number): boolean => {
+    bytes += count;
+    return bytes <= maxBytes;
+  };
+  const addString = (text: string): boolean => {
+    if (!add(2)) return false; // opening and closing quotes
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      if (code === 0x22 || code === 0x5c
+        || code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d) {
+        if (!add(2)) return false;
+      } else if (code < 0x20) {
+        if (!add(6)) return false;
+      } else if (code >= 0xd800 && code <= 0xdbff) {
+        const next = text.charCodeAt(index + 1);
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          if (!add(4)) return false;
+          index += 1;
+        } else if (!add(6)) return false; // JSON.stringify escapes lone surrogates
+      } else if (code >= 0xdc00 && code <= 0xdfff) {
+        if (!add(6)) return false;
+      } else if (code < 0x80) {
+        if (!add(1)) return false;
+      } else if (code < 0x800) {
+        if (!add(2)) return false;
+      } else if (!add(3)) return false;
+    }
+    return true;
+  };
+  const visit = (current: unknown, depth: number): boolean => {
+    nodes += 1;
+    if (nodes > MAX_SNAPSHOT_NODES || depth > 100) return false;
+    if (current === null) return add(4);
+    if (typeof current === "string") return addString(current);
+    if (typeof current === "boolean") return add(current ? 4 : 5);
+    if (typeof current === "number") return add(Number.isFinite(current) ? String(current).length : 4);
+    if (typeof current !== "object") return false;
+    if (ancestors.has(current)) return false;
+
+    ancestors.add(current);
+    let valid = true;
+    if (Array.isArray(current)) {
+      if (Object.getPrototypeOf(current) !== Array.prototype
+        || Object.prototype.hasOwnProperty.call(current, "toJSON")) valid = false;
+      if (valid) valid = add(1); // [
+      for (let index = 0; valid && index < current.length; index += 1) {
+        if (index > 0) valid = add(1); // comma
+        const descriptor = Object.getOwnPropertyDescriptor(current, String(index));
+        if (descriptor && !("value" in descriptor)) valid = false;
+        const item = descriptor ? descriptor.value : null;
+        if (valid) {
+          valid = item === undefined || typeof item === "function" || typeof item === "symbol"
+            ? add(4) // JSON.stringify emits null for unsupported array entries
+            : visit(item, depth + 1);
+        }
+      }
+      if (valid) valid = add(1); // ]
+    } else {
+      const prototype = Object.getPrototypeOf(current);
+      if ((prototype !== Object.prototype && prototype !== null)
+        || Object.prototype.hasOwnProperty.call(current, "toJSON")) valid = false;
+      if (valid) valid = add(1); // {
+      let first = true;
+      if (valid) {
+        // for...in avoids allocating a full keys/descriptors array. Snapshot
+        // objects are normalized plain records; inherited keys are ignored.
+        for (const key in current) {
+          if (!Object.prototype.hasOwnProperty.call(current, key)) continue;
+          const descriptor = Object.getOwnPropertyDescriptor(current, key);
+          if (!descriptor || !("value" in descriptor)) { valid = false; break; }
+          const propertyValue = descriptor.value;
+          if (propertyValue === undefined || typeof propertyValue === "function" || typeof propertyValue === "symbol") continue;
+          if (!first) valid = add(1); // comma
+          if (valid) valid = addString(key);
+          if (valid) valid = add(1); // colon
+          if (valid) valid = visit(propertyValue, depth + 1);
+          first = false;
+          if (!valid) break;
+        }
+      }
+      if (valid) valid = add(1); // }
+    }
+    ancestors.delete(current);
+    return valid;
+  };
+
+  return visit(value, 0) ? bytes : null;
+}
 
 type CompressedSnapshot = {
   format: typeof FORMAT;
@@ -23,6 +128,11 @@ type CompressedSnapshot = {
 export async function encodeRuntimeSnapshot(
   snapshot: PandaGameSnapshot,
 ): Promise<PandaGameSnapshot | CompressedSnapshot | null> {
+  // Bound traversal before JSON.stringify allocates an entire serialized copy.
+  // PostgreSQL keeps the complete snapshot if this optional cache encoding is
+  // too large or contains an unsupported shape.
+  if (estimateSnapshotJsonBytes(snapshot) === null) return null;
+
   const json = JSON.stringify(snapshot);
   const bytes = Buffer.byteLength(json, "utf8");
   if (bytes <= MAX_RUNTIME_SNAPSHOT_BYTES) return snapshot;

@@ -9,7 +9,7 @@ Vercel documents a 2 MB per-item Runtime Cache limit ([API reference](https://ve
 - Small snapshots retain the existing plain-object format.
 - Larger snapshots use asynchronous gzip level 1 plus base64. The entire match list and metadata round-trip without truncation.
 - If the encoded item still exceeds the budget, no cache write is attempted. The existing writer returns `false`, the sync result includes its existing `CACHE_WRITE` diagnostic, and the complete PostgreSQL snapshot remains available.
-- If the original JSON exceeds 16 MiB, compression is skipped. This bounds optional codec work; it is **not** a database or schedule-size cap.
+- A bounded preflight counts JSON UTF-8 bytes before `JSON.stringify` allocates a serialized copy. Snapshots above 16 MiB, with more than 250,000 JSON nodes, or with unsupported object shapes skip the optional Runtime Cache write. This bounds codec work; it is **not** a database or schedule-size cap.
 - Decoding validates format, canonical base64 and declared output size. Actual decompression is bounded by `maxOutputLength`, at most 16 MiB. Bad or oversized data is a cache miss; the normal persistent recovery path applies.
 - Decompression is followed by the existing snapshot/game/status validation. No payload, parser error or token is logged.
 
@@ -21,6 +21,6 @@ This change does not bound upstream JSON ingestion or the persistent JSONB store
 
 ## Verification
 
-`npm test -- src/lib/schedule/cache-payload.test.ts` covers large lossless round-trips, Unicode byte accounting, incompressible data, oversized decoded input, corrupt envelopes, invalid base64, decompression expansion, and post-decode schema/game validation.
+`npm test -- src/lib/schedule/cache-payload.test.ts` covers exact escaped/Unicode byte accounting, rejection before full serialization, unsupported/cyclic objects, large lossless round-trips, incompressible data, oversized decoded input, corrupt envelopes, invalid base64, decompression expansion, and post-decode schema/game validation.
 
 The existing isolated PostgreSQL CI service additionally exercises a 6,000-match persistent recovery and an over-budget snapshot retained in full. Tests do not call PandaScore or any live database. CI also runs migrations, `db:check`, TypeScript, ESLint, build and the client credential scan.
