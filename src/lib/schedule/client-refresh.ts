@@ -25,6 +25,14 @@ function isNullableNumber(value: unknown): value is number | null {
   return value === null || (typeof value === "number" && Number.isFinite(value));
 }
 
+function hasJsonContentType(response: Response): boolean {
+  const mediaType = response.headers.get("content-type")
+    ?.split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  return mediaType === "application/json";
+}
+
 function isTeam(value: unknown): boolean {
   return isRecord(value)
     && typeof value.name === "string"
@@ -122,7 +130,7 @@ export async function requestScheduleRefresh(fetcher: typeof fetch = fetch): Pro
   const timer = setTimeout(() => controller.abort(), SCHEDULE_REFRESH_TIMEOUT_MS);
   try {
     const response = await fetcher("/api/matches", { cache: "no-store", signal: controller.signal });
-    if (!response.ok) return { ok: false };
+    if (!response.ok || !hasJsonContentType(response)) return { ok: false };
     const payload = await response.json() as unknown;
     if (!isClientSchedulePayload(payload)) return { ok: false };
     return { ok: true, payload };

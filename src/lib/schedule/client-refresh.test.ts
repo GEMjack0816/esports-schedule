@@ -69,6 +69,18 @@ describe("schedule refresh transport", () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("<html>failure</html>"));
     expect(await requestScheduleRefresh(fetcher)).toEqual({ ok: false });
   });
+  it("rejects valid-looking payloads served with a JSON-like but invalid media type", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(payload, {
+      headers: { "Content-Type": "application/jsonp" },
+    }));
+    expect(await requestScheduleRefresh(fetcher)).toEqual({ ok: false });
+  });
+  it("accepts application/json with a charset parameter", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(payload, {
+      headers: { "Content-Type": "Application/JSON; charset=utf-8" },
+    }));
+    expect(await requestScheduleRefresh(fetcher)).toEqual({ ok: true, payload });
+  });
   it.each([
     {},
     { ...payload, matches: null },
