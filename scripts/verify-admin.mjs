@@ -6,6 +6,7 @@ import {
   assertPreviewBaseUrl,
   assertPreviewDatabaseUrl,
   assertPreviewDeployment,
+  assertSamePreviewDeployment,
   cleanupVerifyAdminData,
   parseDeploymentAllowlist,
   parseHostnameAllowlist,
@@ -38,7 +39,7 @@ const allowedDatabaseHosts = parseHostnameAllowlist(
   process.env.ADMIN_VERIFY_PREVIEW_DATABASE_HOSTS,
   "PREVIEW_DATABASE_HOSTS",
 );
-const baseUrl = assertPreviewBaseUrl(requestedBaseUrl, allowedHosts);
+let baseUrl = assertPreviewBaseUrl(requestedBaseUrl, allowedHosts);
 assertPreviewDatabaseUrl(databaseUrl, allowedDatabaseHosts);
 
 const executableCandidates = [
@@ -96,7 +97,7 @@ async function runChecks() {
   } catch {
     fail("ADMIN_VERIFY_VERSION_RESPONSE_INVALID");
   }
-  const deployment = assertPreviewDeployment({
+  const bootstrapDeployment = assertPreviewDeployment({
     baseUrl,
     version,
     expectedRef,
@@ -104,6 +105,28 @@ async function runChecks() {
     allowedHosts,
     allowedDeploymentIds,
   });
+  baseUrl = bootstrapDeployment.deploymentUrl;
+
+  const pinnedVersionResponse = await context.request.get(`${baseUrl}/api/version`, { timeout: 15_000 });
+  if (!pinnedVersionResponse.ok()) fail("ADMIN_VERIFY_PINNED_VERSION_ENDPOINT_UNAVAILABLE");
+  let pinnedVersion;
+  try {
+    pinnedVersion = await pinnedVersionResponse.json();
+  } catch {
+    fail("ADMIN_VERIFY_PINNED_VERSION_RESPONSE_INVALID");
+  }
+  const deployment = assertPreviewDeployment({
+    baseUrl,
+    version: pinnedVersion,
+    expectedRef,
+    expectedSha,
+    allowedHosts,
+    allowedDeploymentIds,
+  });
+  assertSamePreviewDeployment(version, pinnedVersion);
+  if (deployment.deploymentId !== bootstrapDeployment.deploymentId) {
+    fail("ADMIN_VERIFY_DEPLOYMENT_IDENTITY_CHANGED");
+  }
 
   database = postgres(databaseUrl, {
     max: 1,

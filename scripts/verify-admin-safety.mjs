@@ -93,10 +93,15 @@ export function assertPreviewDeployment({ baseUrl, version, expectedRef, expecte
     fail("ADMIN_VERIFY_DEPLOYMENT_IDENTITY_MISMATCH");
   }
   const deploymentUrl = assertPreviewBaseUrl(version.deploymentUrl, allowedHosts);
-  if (new URL(baseUrl).origin !== assertPreviewBaseUrl(baseUrl, allowedHosts)) {
-    fail("ADMIN_VERIFY_PREVIEW_ORIGIN_MISMATCH");
-  }
+  assertPreviewBaseUrl(baseUrl, allowedHosts);
   return { deploymentUrl, deploymentId: version.deploymentId };
+}
+
+export function assertSamePreviewDeployment(first, pinned) {
+  const stableFields = ["service", "environment", "gitCommitRef", "gitCommitSha", "deploymentId", "deploymentUrl"];
+  if (stableFields.some((field) => first?.[field] !== pinned?.[field])) {
+    fail("ADMIN_VERIFY_DEPLOYMENT_IDENTITY_CHANGED");
+  }
 }
 
 export async function cleanupVerifyAdminData(database, league, hideVisibleMatch) {

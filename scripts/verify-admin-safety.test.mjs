@@ -3,6 +3,7 @@ import {
   assertPreviewBaseUrl,
   assertPreviewDatabaseUrl,
   assertPreviewDeployment,
+  assertSamePreviewDeployment,
   cleanupVerifyAdminData,
   parseDeploymentAllowlist,
   parseHostnameAllowlist,
@@ -36,6 +37,18 @@ describe("verify:admin target safeguards", () => {
       deploymentUrl: "https://schedule-deployment.vercel.app",
       deploymentId: "dpl_Preview123",
     });
+  });
+
+  it("requires the immutable deployment URL to report the same deployment identity", () => {
+    expect(() => assertSamePreviewDeployment(validVersion, {
+      ...validVersion,
+      deploymentId: "dpl_Other",
+    })).toThrow("ADMIN_VERIFY_DEPLOYMENT_IDENTITY_CHANGED");
+    expect(() => assertSamePreviewDeployment(validVersion, {
+      ...validVersion,
+      deploymentUrl: "https://another-deployment.vercel.app",
+    })).toThrow("ADMIN_VERIFY_DEPLOYMENT_IDENTITY_CHANGED");
+    expect(() => assertSamePreviewDeployment(validVersion, { ...validVersion })).not.toThrow();
   });
 
   it("rejects every Production deployment regardless of hostname", () => {
