@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { MANUAL_MATCH_MUTATION_LOCK } from "./repository";
 import type { DrizzleReviewRepository } from "./repository";
 import type { MatchSubmissionInput } from "@/lib/submissions";
 import {
@@ -11,6 +12,7 @@ import type { PublicSubmissionPolicy, SubmissionControlWindowKind } from "./subm
 import type { PublishedMatchWrite } from "./types";
 import {
   preserveLastSuccessfulPublicMatches,
+  selectRuntimeFallback,
   synchronizePublishedManualMatchesSnapshot,
 } from "./public-matches";
 import type { CachedPublicMatches } from "./public-matches";
@@ -108,6 +110,105 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     const row = await repository.createSubmission(input, { id });
     return { id, input, row };
   }
+
+  it("keeps a monotonic sequence watermark after an aborted fence and outbox cleanup", async () => {
+    const before = await repository.getCurrentManualMatchRevision();
+    const rolledBackInput = submission(`rolled-back revision ${randomUUID()}`);
+    let externallyPublishedFence = 0;
+    await expect(repository.createManualMatch(published(rolledBackInput), "admin-a", async (revision) => {
+      // Model a Runtime Cache write that landed but whose acknowledgement was
+      // lost, so the database transaction must roll back after the fence moved.
+      externallyPublishedFence = revision;
+      throw new Error("cache fence acknowledgement was lost");
+    })).rejects.toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+    expect(externallyPublishedFence).toBeGreaterThan(before);
+    expect(await repository.getCurrentManualMatchRevision()).toBe(externallyPublishedFence);
+
+    const rolledBackSnapshot = await repository.readManualMatchCacheSnapshot();
+    expect(rolledBackSnapshot.revision).toBe(externallyPublishedFence);
+    expect(rolledBackSnapshot.rows.some((match) => match.league === rolledBackInput.league)).toBe(false);
+    const staleFallback: CachedPublicMatches = {
+      matches: [],
+      fetchedAt: new Date().toISOString(),
+      revision: before,
+    };
+    expect(selectRuntimeFallback(staleFallback, { revision: externallyPublishedFence })).toBeNull();
+    let reconciledFallback: CachedPublicMatches | null = null;
+    await synchronizePublishedManualMatchesSnapshot(repository, async (value) => {
+      reconciledFallback = value;
+    });
+    expect(selectRuntimeFallback(
+      reconciledFallback,
+      { revision: externallyPublishedFence },
+      externallyPublishedFence,
+    )?.revision).toBe(externallyPublishedFence);
+
+    const row = await repository.createManualMatch(published(submission("committed revision")), "admin-a");
+    manualMatchIds.push(row.id);
+    const created = await repository.getCurrentManualMatchRevision();
+    expect(created).toBeGreaterThan(externallyPublishedFence);
+    await repository.setManualMatchHidden(row.id, true, "admin-a", row.updatedAt);
+    const hidden = await repository.getCurrentManualMatchRevision();
+    expect(hidden).toBeGreaterThan(created);
+    await repository.markManualMatchCacheDelivered(hidden);
+    expect(await repository.getCurrentManualMatchRevision()).toBe(hidden);
+    const snapshot = await repository.readManualMatchCacheSnapshot();
+    expect(snapshot.revision).toBe(hidden);
+    expect(snapshot.rows.some(match => match.id === row.id)).toBe(false);
+  });
+
+  it("rebuilds a regional fence under the mutation lock before a newer write can commit", async () => {
+    const firstInput = submission(`regional fence seed ${randomUUID()}`);
+    const first = await repository.createManualMatch(published(firstInput), "admin-a");
+    manualMatchIds.push(first.id);
+
+    let announceFence!: () => void;
+    const fenceStarted = new Promise<void>((resolve) => { announceFence = resolve; });
+    let releaseFence!: () => void;
+    const fenceGate = new Promise<void>((resolve) => { releaseFence = resolve; });
+    let capturedFenceRevision = -1;
+    const snapshotPromise = repository.readManualMatchCacheSnapshot(async (revision) => {
+      capturedFenceRevision = revision;
+      announceFence();
+      await fenceGate;
+    });
+    await fenceStarted;
+
+    const nextInput = submission(`regional fence next ${randomUUID()}`);
+    let mutationFinished = false;
+    const mutationPromise = repository.createManualMatch(published(nextInput), "admin-a")
+      .then((row) => {
+        mutationFinished = true;
+        manualMatchIds.push(row.id);
+        return row;
+      });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(mutationFinished).toBe(false);
+    } finally {
+      releaseFence();
+    }
+
+    const snapshot = await snapshotPromise;
+    await mutationPromise;
+    expect(capturedFenceRevision).toBe(snapshot.revision);
+    expect(await repository.getCurrentManualMatchRevision()).toBeGreaterThan(snapshot.revision);
+  });
+
+  it("does not publish a Runtime Cache fence when the business write fails before revision allocation", async () => {
+    const before = await repository.getCurrentManualMatchRevision();
+    const input = published(submission(`failed insert ${randomUUID()}`));
+    input.homeScore = 32_768;
+    const fence = vi.fn<(revision: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await expect(repository.createManualMatch(input, "admin-a", fence)).rejects.toBeDefined();
+
+    expect(fence).not.toHaveBeenCalled();
+    expect(await repository.getCurrentManualMatchRevision()).toBe(before);
+    const snapshot = await repository.readManualMatchCacheSnapshot();
+    expect(snapshot.revision).toBe(before);
+    expect(snapshot.rows.some((match) => match.league === input.league)).toBe(false);
+  });
 
   function policy(overrides: Partial<PublicSubmissionPolicy> = {}): PublicSubmissionPolicy {
     const value: PublicSubmissionPolicy = {
@@ -519,4 +620,86 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       (value) => value.providerMatchId === `db-${match.id}`,
     )?.league).toBe(`${pending.input.league} edited`);
   });
+
+  it("rolls back a public mutation when its Runtime Cache fence cannot be written", async () => {
+    const input = submission(`fence-rollback-${randomUUID()}`);
+    const [before] = await cleanup`select count(*)::int as count from manual_match_cache_outbox`;
+    await expect(repository.createManualMatch(
+      published(input),
+      "admin-a",
+      async () => { throw new Error("cache unavailable"); },
+    )).rejects.toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+    const [matches] = await cleanup`
+      select count(*)::int as count from published_manual_matches where league = ${input.league}
+    `;
+    const [after] = await cleanup`select count(*)::int as count from manual_match_cache_outbox`;
+    expect(matches.count).toBe(0);
+    expect(after.count).toBe(before.count);
+  });
+
+  it("uses the same monotonic revision for the mutation fence, outbox, and Runtime snapshot", async () => {
+    const input = submission(`fence-revision-${randomUUID()}`);
+    const fence = vi.fn<(revision: number) => Promise<void>>().mockResolvedValue(undefined);
+    const match = await repository.createManualMatch(published(input), "admin-a", fence);
+    manualMatchIds.push(match.id);
+    expect(fence).toHaveBeenCalledOnce();
+    const revision = fence.mock.calls[0][0];
+    const [pending] = await cleanup`
+      select revision, delivered_at from manual_match_cache_outbox where revision = ${revision}
+    `;
+    expect(Number(pending.revision)).toBe(revision);
+    expect(pending.delivered_at).toBeNull();
+
+    const cached: { value: CachedPublicMatches | null } = { value: null };
+    const snapshot = await synchronizePublishedManualMatchesSnapshot(repository, async (value) => {
+      cached.value = value;
+    });
+    expect(snapshot.revision).toBe(revision);
+    expect(cached.value?.revision).toBe(revision);
+    const [delivered] = await cleanup`
+      select delivered_at from manual_match_cache_outbox where revision = ${revision}
+    `;
+    expect(delivered.delivered_at).toBeInstanceOf(Date);
+  });
+
+  it("makes manual match creation retries idempotent without allocating another revision", async () => {
+    const input = submission(`idempotent-create-${randomUUID()}`);
+    const operationKey = randomUUID();
+    const fence = vi.fn<(revision: number) => Promise<void>>().mockResolvedValue(undefined);
+    const first = await repository.createManualMatch(
+      published(input),
+      "admin-a",
+      fence,
+      operationKey,
+    );
+    manualMatchIds.push(first.id);
+    const second = await repository.createManualMatch(
+      { ...published(input), league: `${input.league} retry` },
+      "admin-a",
+      fence,
+      operationKey,
+    );
+    expect(second.id).toBe(first.id);
+    expect(second.league).toBe(first.league);
+    expect(fence).toHaveBeenCalledOnce();
+    const [matches] = await cleanup`
+      select count(*)::int as count from published_manual_matches where operation_key = ${operationKey}
+    `;
+    expect(matches.count).toBe(1);
+  });
+
+  it("bounds waiting when another transaction holds the manual cache revision lock", async () => {
+    await cleanup`select pg_advisory_lock(${MANUAL_MATCH_MUTATION_LOCK})`;
+    const startedAt = Date.now();
+    try {
+      await expect(repository.createManualMatch(
+        published(submission(`manual-lock-${randomUUID()}`)),
+        "admin-a",
+      )).rejects.toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+    } finally {
+      await cleanup`select pg_advisory_unlock(${MANUAL_MATCH_MUTATION_LOCK})`;
+    }
+  });
 });
+
