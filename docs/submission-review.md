@@ -13,8 +13,11 @@
 - `submission_rate_limits`：只保存来源摘要和当前限流窗口，不保存原始 IP；
 - `submission_rate_limit_windows`：固定 key 的全局请求、新来源数量和清理节流窗口；
 - `admin_audit_events`：编辑、批准、驳回、隐藏和恢复的审计记录。
+- `manual_match_cache_outbox`：与公开人工比赛写事务一同提交的单调缓存 revision 和待投递状态。
 
 `npm run db:generate` 生成迁移；`npm run db:migrate` 只应对明确选择的数据库执行。Preview 必须使用独立数据库或独立分支，禁止把验证脚本连接到 Production 数据库。`npm run db:check` 只检查连接和表是否存在，不打印连接字符串。
+
+包含 outbox/revision schema 的版本必须先在隔离 Preview 数据库应用 migration 并验证，再部署对应 Preview 代码。Production 上线前应先确认 additive migration 与旧代码兼容，再在旧版本仍在线时前置 migration，最后才允许合并触发 Production 部署。
 
 ## 管理员 OAuth
 
@@ -22,7 +25,13 @@
 
 审核通过使用单一数据库事务：锁定待审核行、创建公开比赛、更新提交状态并写审计事件。驳回不会创建公开比赛。待审核记录的保存、批准、驳回以及人工比赛的编辑、隐藏、恢复都会携带页面加载时的 `updatedAt`；事务在行锁内校验版本，并在不匹配时拒绝旧表单覆盖。更新时间保证单调递增，冲突页面会要求管理员重新加载。
 
-公开赛程按 PandaScore 快照 → 静态 JSON 补录/覆盖 → PostgreSQL 已发布比赛合并，并继续以 `provider + providerMatchId` 去重。Next Data Cache 使用 `published-manual-matches` 标签；Runtime Cache 的故障降级快照使用独立的 `published-manual-matches-fallback-v1` 标签。批准、创建、编辑、隐藏或恢复事务成功后会先从数据库重建 Runtime Cache 快照，再通过 `updateTag` 立即失效 Next Data Cache，避免旧快照在数据库故障时重新出现。数据库读超时或暂时失败时，公开赛程保留最近一次成功读取的已发布人工比赛缓存，不会删除 PandaScore 或静态人工数据，也不会进入演示模式。健康接口的 `database` 字段只返回连接状态、最近成功读取时间、缓存人工比赛数和聚合提交计数；不返回连接信息、SQL、原始错误或任何 Secret。
+改变公开人工赛程的事务会在统一 PostgreSQL advisory lock 内分配 `manual_match_cache_revision_seq` revision，并在业务写入前把同一 revision 写入 Runtime Cache fence。fence 写入失败会回滚事务；业务写入、审计和 outbox revision 一起提交。Runtime Cache 快照携带 revision，低于 fence 或本次请求已观察到的数据库 revision 的旧快照会 fail closed。投递失败保留为 outbox pending，并由后续成功数据库读取重建；健康接口公开 pending 数量但不公开内部错误。已投递 outbox 使用固定批量清理。人工新建表单使用 UUID operation key，重复提交返回第一次创建的记录，不会重复发布。
+
+每次读取公开人工比赛时，先使用 outbox 主键索引查询一个最新已提交 revision，再比较 Next Data Cache；区域缓存与 fence 即使一起停留在旧版本，也不能遮挡在线数据库的新版本。版本不同时重建快照；Runtime Cache 写失败仍返回当前数据库结果。此检查增加一次单行数据库查询，不会重新调用 PandaScore，也不扫描全部人工比赛。
+
+Runtime Cache `set` 没有 CAS 或取消能力，因此 mutation fence 在持有数据库串行事务锁期间必须完整等待，不能通过应用层超时遗留仍会继续执行的旧写入。fence 写入失败会回滚事务；竞争 mutation 仍受数据库 lock timeout 约束并返回 busy。数据库故障时，仅当 fallback snapshot revision 不低于保留的 fence 才继续提供数据库人工比赛；fence 缺失、损坏或更新时对数据库人工部分 fail closed，PandaScore 与静态补录数据仍保持可用。
+
+公开赛程按 PandaScore 快照 → 静态 JSON 补录/覆盖 → PostgreSQL 已发布比赛合并，并继续以 `provider + providerMatchId` 去重。Next Data Cache 使用 `published-manual-matches` 标签；Runtime Cache 的故障降级快照使用独立的 `published-manual-matches-fallback-v1` 标签。批准、创建、编辑、隐藏或恢复事务成功后会尝试从数据库重建 Runtime Cache 快照，再通过 `updateTag` 立即失效 Next Data Cache。数据库读超时或暂时失败时，公开赛程仅接受符合上述版本检查的已发布人工比赛缓存；不符合时人工数据库部分返回 unavailable，不会删除 PandaScore 或静态人工数据，也不会进入演示模式。健康接口的 `database` 字段只返回连接状态、最近成功读取时间、缓存人工比赛数和聚合提交计数；不返回连接信息、SQL、原始错误或任何 Secret。
 
 代码侧保护不依赖 Vercel Firewall。上线前仍建议由项目管理员在 Vercel Dashboard 为 `POST /api/submissions` 增加独立速率规则作为纵深防御；该配置不应替代 PostgreSQL 原子限流。
 
@@ -54,3 +63,4 @@ npm run verify:admin -- <isolated-preview-url>
 ```
 
 `verify:admin` 会拒绝生产 Alias，并且只有在显式标记隔离环境且提供已认证浏览器状态时才执行公开提交、批准、编辑、隐藏、恢复、驳回和审计验证。
+
