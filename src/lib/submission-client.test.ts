@@ -119,6 +119,18 @@ describe("public submission transport", () => {
     });
   });
 
+  it("rejects JSON-like media types that are not application/json", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(receipt, {
+      status: 201,
+      headers: { "Content-Type": "application/jsonp" },
+    }));
+
+    await expect(requestMatchSubmission(payload, fetcher)).resolves.toEqual({
+      ok: false,
+      message: SUBMISSION_REQUEST_ERROR,
+    });
+  });
+
   it("sanitizes network failures", async () => {
     const fetcher = vi.fn<typeof fetch>().mockRejectedValue(new Error("private network details"));
     await expect(requestMatchSubmission(payload, fetcher)).resolves.toEqual({

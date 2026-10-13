@@ -14,6 +14,14 @@ function isBoundedMessage(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 200;
 }
 
+function isJsonContentType(response: Response): boolean {
+  const mediaType = response.headers.get("content-type")
+    ?.split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  return mediaType === "application/json";
+}
+
 function isUuid(value: unknown): value is string {
   return typeof value === "string"
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -57,7 +65,7 @@ export async function requestMatchSubmission(
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
-    if (!response.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
+    if (!isJsonContentType(response)) {
       return { ok: false, message: SUBMISSION_REQUEST_ERROR };
     }
 
