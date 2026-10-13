@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   set: vi.fn(),
+  expireTag: vi.fn(),
   cached: vi.fn(),
   cacheStatus: vi.fn(),
   snapshot: vi.fn(),
@@ -12,7 +13,11 @@ const mocks = vi.hoisted(() => ({
   ping: vi.fn(),
 }));
 
-vi.mock("@vercel/functions", () => ({ getCache: () => ({ get: mocks.get, set: mocks.set }) }));
+vi.mock("@vercel/functions", () => ({ getCache: () => ({
+  get: mocks.get,
+  set: mocks.set,
+  expireTag: mocks.expireTag,
+}) }));
 vi.mock("next/cache", () => ({ unstable_cache: () => mocks.cached }));
 vi.mock("@/db", () => ({ isDatabaseConfigured: () => true }));
 vi.mock("./repository", () => ({ getReviewRepository: () => ({
@@ -28,6 +33,7 @@ let getPublishedDatabaseMatches: typeof import("./public-matches")["getPublished
 let getDatabaseHealth: typeof import("./public-matches")["getDatabaseHealth"];
 let writeManualMatchCacheFence: typeof import("./public-matches")["writeManualMatchCacheFence"];
 let synchronizePublishedManualMatchesSnapshot: typeof import("./public-matches")["synchronizePublishedManualMatchesSnapshot"];
+let selectRuntimeFallback: typeof import("./public-matches")["selectRuntimeFallback"];
 
 describe("manual match cache authoritative version checks", () => {
   beforeEach(async () => {
@@ -38,11 +44,13 @@ describe("manual match cache authoritative version checks", () => {
     getDatabaseHealth = publicMatches.getDatabaseHealth;
     writeManualMatchCacheFence = publicMatches.writeManualMatchCacheFence;
     synchronizePublishedManualMatchesSnapshot = publicMatches.synchronizePublishedManualMatchesSnapshot;
+    selectRuntimeFallback = publicMatches.selectRuntimeFallback;
     mocks.cached.mockResolvedValue({ matches: [], fetchedAt: new Date().toISOString(), revision: 4 });
     mocks.cacheStatus.mockResolvedValue({ revision: 5, pendingRevisions: 0 });
     mocks.snapshot.mockResolvedValue({ rows: [], revision: 5, pendingRevisions: 1 });
     mocks.get.mockResolvedValue({ revision: 4 });
     mocks.set.mockResolvedValue(undefined);
+    mocks.expireTag.mockResolvedValue(undefined);
     mocks.delivered.mockResolvedValue(undefined);
     mocks.failed.mockResolvedValue(undefined);
     mocks.counts.mockResolvedValue({ total: 0, pending: 0, approved: 0, rejected: 0 });
@@ -56,6 +64,28 @@ describe("manual match cache authoritative version checks", () => {
     const result = await getPublishedDatabaseMatches();
     expect(result.state.cacheRevision).toBe(5);
     expect(mocks.snapshot).toHaveBeenCalledOnce();
+  });
+
+  it("invalidates an untouched region's stale fallback before advancing the mutation fence", async () => {
+    const regionA = new Map<string, { revision: number; matches: [] }>();
+    const regionB = new Map<string, { revision: number; matches: [] }>();
+    regionB.set("published-manual-matches-fence-v1", { revision: 4, matches: [] });
+    regionB.set("published-manual-matches-v1:4", { revision: 4, matches: [] });
+    mocks.expireTag.mockImplementation(async () => {
+      regionA.clear();
+      regionB.clear();
+    });
+    mocks.set.mockImplementation(async (key: string, value: { revision: number }) => {
+      regionA.set(key, { revision: value.revision, matches: [] });
+    });
+
+    await writeManualMatchCacheFence(5);
+
+    expect(regionA.get("published-manual-matches-fence-v1")?.revision).toBe(5);
+    expect(regionB.has("published-manual-matches-v1:4")).toBe(false);
+    // Region-local stale snapshots were invalidated; with no old fence they
+    // cannot be accepted while that region is waiting to recover from Postgres.
+    expect(selectRuntimeFallback(regionB.get("published-manual-matches-v1:4"), null, 4)).toBeNull();
   });
 
   it("returns current database results even when repairing the stale cache fails", async () => {
@@ -183,7 +213,9 @@ describe("manual match cache authoritative version checks", () => {
     finishOldWrite();
     await pending;
     expect(fence.revision).toBe(4);
-    await writeManualMatchCacheFence(5);
+    const nextWrite = writeManualMatchCacheFence(5);
+    await vi.advanceTimersByTimeAsync(350);
+    await nextWrite;
     expect(fence.revision).toBe(5);
     const result = await getPublishedDatabaseMatches();
     expect(result.state.cacheRevision).toBe(5);

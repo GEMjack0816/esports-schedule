@@ -14,6 +14,7 @@ const FENCE_KEY = "published-manual-matches-fence-v1";
 const RUNTIME_FALLBACK_TAG = "published-manual-matches-fallback-v1";
 const CACHE_TTL_SECONDS = 30 * 24 * 60 * 60;
 const DB_TIMEOUT_MS = 2_500;
+const RUNTIME_CACHE_PROPAGATION_GUARD_MS = 350;
 
 export type CachedPublicMatches = {
   matches: EsportsMatch[];
@@ -130,15 +131,37 @@ export function selectRuntimeFallback(snapshot: unknown, fence: unknown, minimum
 }
 
 export async function writeManualMatchCacheFence(revision: number): Promise<void> {
-  // This write runs while the repository holds the serialized mutation lock.
-  // Do not wrap it in Promise.race: Runtime Cache writes cannot be cancelled,
-  // so abandoning an older write would let it complete after a newer revision
-  // and regress the fence. A rejected write rolls the database transaction back.
-  await publicCache().set(FENCE_KEY, { revision }, {
+  const cache = publicCache();
+  // Runtime Cache is isolated per region. Expire the tag globally and hold the
+  // database mutation lock through Vercel's documented propagation window;
+  // otherwise an untouched region could accept its old snapshot during the
+  // invalidation window if its database read fails. The lock prevents the DB
+  // mutation from committing until the regional fallback is no longer valid.
+  // Any failed invalidation/write aborts the mutation.
+  await cache.expireTag(RUNTIME_FALLBACK_TAG);
+  await new Promise((resolve) => setTimeout(resolve, RUNTIME_CACHE_PROPAGATION_GUARD_MS));
+  await writeLocalManualMatchCacheFence(cache, revision);
+}
+
+async function writeLocalManualMatchCacheFence(
+  cache: ReturnType<typeof publicCache>,
+  revision: number,
+): Promise<void> {
+  // Do not wrap a Runtime Cache write in Promise.race: these writes cannot be
+  // cancelled, so abandoning an older write could let it complete after a
+  // newer revision and regress the regional fence.
+  await cache.set(FENCE_KEY, { revision }, {
     name: "Published manual matches minimum cache revision",
     tags: [RUNTIME_FALLBACK_TAG],
     ttl: CACHE_TTL_SECONDS,
   });
+}
+
+export async function writeManualMatchCacheFenceFromSnapshot(revision: number): Promise<void> {
+  // Snapshot reads invoke this while holding the same PostgreSQL mutation lock.
+  // A region with an evicted fence can safely rebuild it from the locked DB
+  // high-water mark; mutations cannot race and lower it while this write runs.
+  await writeLocalManualMatchCacheFence(publicCache(), revision);
 }
 
 async function readLastSuccess(minimumRevision: number): Promise<CachedPublicMatches | null> {
@@ -182,7 +205,7 @@ export async function synchronizePublishedManualMatchesSnapshot(
   > = getReviewRepository(),
   write: (value: CachedPublicMatches) => Promise<void> = writeRuntimeFallback,
 ): Promise<CachedPublicMatches> {
-  const snapshot = await repository.readManualMatchCacheSnapshot();
+  const snapshot = await repository.readManualMatchCacheSnapshot(writeManualMatchCacheFenceFromSnapshot);
   const value = {
     matches: uniqueAndSort(snapshot.rows.map(publishedRowToMatch)),
     fetchedAt: new Date().toISOString(),

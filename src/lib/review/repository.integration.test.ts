@@ -157,6 +157,44 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect(snapshot.rows.some(match => match.id === row.id)).toBe(false);
   });
 
+  it("rebuilds a regional fence under the mutation lock before a newer write can commit", async () => {
+    const firstInput = submission(`regional fence seed ${randomUUID()}`);
+    const first = await repository.createManualMatch(published(firstInput), "admin-a");
+    manualMatchIds.push(first.id);
+
+    let announceFence!: () => void;
+    const fenceStarted = new Promise<void>((resolve) => { announceFence = resolve; });
+    let releaseFence!: () => void;
+    const fenceGate = new Promise<void>((resolve) => { releaseFence = resolve; });
+    let capturedFenceRevision = -1;
+    const snapshotPromise = repository.readManualMatchCacheSnapshot(async (revision) => {
+      capturedFenceRevision = revision;
+      announceFence();
+      await fenceGate;
+    });
+    await fenceStarted;
+
+    const nextInput = submission(`regional fence next ${randomUUID()}`);
+    let mutationFinished = false;
+    const mutationPromise = repository.createManualMatch(published(nextInput), "admin-a")
+      .then((row) => {
+        mutationFinished = true;
+        manualMatchIds.push(row.id);
+        return row;
+      });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(mutationFinished).toBe(false);
+    } finally {
+      releaseFence();
+    }
+
+    const snapshot = await snapshotPromise;
+    await mutationPromise;
+    expect(capturedFenceRevision).toBe(snapshot.revision);
+    expect(await repository.getCurrentManualMatchRevision()).toBeGreaterThan(snapshot.revision);
+  });
+
   it("does not publish a Runtime Cache fence when the business write fails before revision allocation", async () => {
     const before = await repository.getCurrentManualMatchRevision();
     const input = published(submission(`failed insert ${randomUUID()}`));

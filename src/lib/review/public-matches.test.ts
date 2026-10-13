@@ -1,11 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PublishedManualMatchRow } from "@/db/schema";
+const runtimeCacheMocks = vi.hoisted(() => ({
+  get: vi.fn(),
+  set: vi.fn().mockResolvedValue(undefined),
+  expireTag: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@vercel/functions", () => ({ getCache: () => runtimeCacheMocks }));
+
 import {
   preserveLastSuccessfulPublicMatches,
   publishedRowToMatch,
   selectRuntimeFallback,
   shouldRefreshCachedSnapshot,
   synchronizePublishedManualMatchesSnapshot,
+  writeManualMatchCacheFence,
 } from "./public-matches";
 
 function row(overrides: Partial<PublishedManualMatchRow> = {}): PublishedManualMatchRow {
@@ -106,6 +114,43 @@ describe("published database manual matches", () => {
       revision: 4,
     };
     expect(selectRuntimeFallback(cached, fence)).toBeNull();
+  });
+
+  it("expires region-local fallbacks globally before publishing a mutation fence", async () => {
+    const calls: string[] = [];
+    runtimeCacheMocks.expireTag.mockImplementation(async (tag: string) => {
+      calls.push(`expire:${tag}`);
+    });
+    runtimeCacheMocks.set.mockImplementation(async (key: string) => {
+      calls.push(`set:${key}`);
+    });
+
+    await writeManualMatchCacheFence(12);
+
+    expect(calls).toEqual([
+      "expire:published-manual-matches-fallback-v1",
+      "set:published-manual-matches-fence-v1",
+    ]);
+  });
+
+  it("rebuilds an evicted regional fence from the database revision while the repository lock is held", async () => {
+    const repository = {
+      readManualMatchCacheSnapshot: async (writeFence: (revision: number) => Promise<void>) => {
+        await writeFence(13);
+        return { rows: [row()], revision: 13, pendingRevisions: 0 };
+      },
+      markManualMatchCacheDelivered: async () => undefined,
+      markManualMatchCacheDeliveryFailed: async () => undefined,
+    };
+
+    const snapshot = await synchronizePublishedManualMatchesSnapshot(repository, async () => undefined);
+
+    expect(snapshot.revision).toBe(13);
+    expect(runtimeCacheMocks.set).toHaveBeenCalledWith(
+      "published-manual-matches-fence-v1",
+      { revision: 13 },
+      expect.objectContaining({ tags: ["published-manual-matches-fallback-v1"] }),
+    );
   });
 
   it("bypasses an old Next Data Cache value when the fence is newer, missing, or unreadable", () => {

@@ -666,7 +666,9 @@ export class DrizzleReviewRepository {
     }
   }
 
-  async readManualMatchCacheSnapshot(): Promise<{
+  async readManualMatchCacheSnapshot(
+    writeFence: ManualMatchCacheFence = noCacheFence,
+  ): Promise<{
     rows: PublishedManualMatchRow[];
     revision: number;
     pendingRevisions: number;
@@ -680,6 +682,10 @@ export class DrizzleReviewRepository {
         const revision = await readManualMatchSequenceRevision(tx);
         const pendingRows = await tx.select({ value: count() }).from(manualMatchCacheOutbox)
           .where(isNull(manualMatchCacheOutbox.deliveredAt));
+        // Rebuild this region's fence while the mutation lock is held so an
+        // evicted regional fence cannot remain unavailable or race a newer
+        // mutation's globally propagated invalidation.
+        await writeFence(revision);
         return {
           rows,
           revision,
