@@ -1,9 +1,10 @@
 export const SUBMISSION_REQUEST_TIMEOUT_MS = 15_000;
 export const SUBMISSION_REQUEST_ERROR = "提交失败，请稍后重试。";
 export const SUBMISSION_REQUEST_TIMEOUT_ERROR = "提交超时，请检查网络后重试。";
+export const SUBMISSION_ALREADY_LISTED_MESSAGE = "这场比赛已在待审核或公开赛程中，无需重复提交。";
 
 type SubmissionRequestResult =
-  | { ok: true; message: string }
+  | { ok: true; message: string; alreadyListed?: true }
   | { ok: false; message: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -77,6 +78,12 @@ export async function requestMatchSubmission(
     }
 
     if (!response.ok) {
+      if (response.status === 409
+        && isRecord(body)
+        && body.ok === false
+        && body.code === "DUPLICATE_SUBMISSION") {
+        return { ok: true, alreadyListed: true, message: SUBMISSION_ALREADY_LISTED_MESSAGE };
+      }
       return { ok: false, message: publicClientError(response, body) };
     }
     return isSubmissionReceipt(body)

@@ -5,7 +5,7 @@ import { useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { requestMatchSubmission } from "@/lib/submission-client";
 
-type SubmitState = { kind: "idle" | "success" | "error"; message: string };
+type SubmitState = { kind: "idle" | "success" | "info" | "error"; message: string };
 
 export function SubmitMatchForm() {
   const [submitting, setSubmitting] = useState(false);
@@ -36,6 +36,10 @@ export function SubmitMatchForm() {
       });
       if (!result.ok) {
         setState({ kind: "error", message: result.message });
+        return;
+      }
+      if (result.alreadyListed) {
+        setState({ kind: "info", message: result.message });
         return;
       }
       setState({ kind: "success", message: result.message });

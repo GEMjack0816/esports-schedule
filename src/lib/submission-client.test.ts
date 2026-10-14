@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   requestMatchSubmission,
+  SUBMISSION_ALREADY_LISTED_MESSAGE,
   SUBMISSION_REQUEST_ERROR,
   SUBMISSION_REQUEST_TIMEOUT_ERROR,
   SUBMISSION_REQUEST_TIMEOUT_MS,
@@ -34,7 +35,7 @@ describe("public submission transport", () => {
     });
   });
 
-  it.each([400, 409, 413, 415, 429])(
+  it.each([400, 413, 415, 429])(
     "shows a bounded public validation message for HTTP %i",
     async (status) => {
       const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
@@ -48,6 +49,32 @@ describe("public submission transport", () => {
       });
     },
   );
+
+  it("treats a duplicate response as an already-listed confirmation after an uncertain retry", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      ok: false,
+      code: "DUPLICATE_SUBMISSION",
+      error: "相同比赛已在待审核或已发布列表中。",
+    }, { status: 409 }));
+
+    await expect(requestMatchSubmission(payload, fetcher)).resolves.toEqual({
+      ok: true,
+      alreadyListed: true,
+      message: SUBMISSION_ALREADY_LISTED_MESSAGE,
+    });
+  });
+
+  it("does not treat an unrelated 409 response as an already-listed confirmation", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      ok: false,
+      error: "Conflict",
+    }, { status: 409 }));
+
+    await expect(requestMatchSubmission(payload, fetcher)).resolves.toEqual({
+      ok: false,
+      message: "Conflict",
+    });
+  });
 
   it("does not expose a server error response body", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({

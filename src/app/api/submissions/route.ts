@@ -88,7 +88,11 @@ export async function handleSubmissionPost(
       });
     }
     if (result.kind === "duplicate") {
-      return Response.json({ ok: false, error: "相同比赛已在待审核或已发布列表中。" }, {
+      return Response.json({
+        ok: false,
+        code: "DUPLICATE_SUBMISSION",
+        error: "相同比赛已在待审核或已发布列表中。",
+      }, {
         status: 409,
         headers: NO_STORE_HEADERS,
       });
@@ -106,7 +110,11 @@ export async function handleSubmissionPost(
       ? (error as { code?: unknown }).code
       : null;
     if (errorCode === "DUPLICATE_SUBMISSION" || error instanceof DuplicateSubmissionError) {
-      return Response.json({ ok: false, error: "相同比赛已在待审核或已发布列表中。" }, {
+      return Response.json({
+        ok: false,
+        code: "DUPLICATE_SUBMISSION",
+        error: "相同比赛已在待审核或已发布列表中。",
+      }, {
         status: 409,
         headers: NO_STORE_HEADERS,
       });

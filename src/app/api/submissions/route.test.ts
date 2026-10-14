@@ -54,6 +54,20 @@ describe("POST /api/submissions", () => {
     const createSubmission = async () => ({ kind: "duplicate" as const });
     const response = await handleSubmissionPost(request(valid), createSubmission);
     expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      ok: false,
+      code: "DUPLICATE_SUBMISSION",
+      error: "相同比赛已在待审核或已发布列表中。",
+    });
+  });
+
+  it("uses the same stable duplicate code for a database uniqueness conflict", async () => {
+    const createSubmission = async () => {
+      throw Object.assign(new Error("conflict"), { code: "DUPLICATE_SUBMISSION" });
+    };
+    const response = await handleSubmissionPost(request(valid), createSubmission);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ ok: false, code: "DUPLICATE_SUBMISSION" });
   });
 
   it("returns 429 with Retry-After when the source window is exhausted", async () => {
