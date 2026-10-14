@@ -50,7 +50,12 @@ npm start
 npm run verify:browser -- http://localhost:3000
 $env:ALLOW_ISOLATED_ADMIN_VERIFY = "1"
 $env:ADMIN_STORAGE_STATE = "<authenticated-playwright-storage-state>"
+$env:VERIFY_ADMIN_ALLOWED_PREVIEW_ORIGINS = "https://<exact-preview-origin>,https://<deployment-origin-from-api-version>"
+$env:VERIFY_ADMIN_EXPECTED_GIT_REF = "<expected-preview-branch>"
+$env:VERIFY_ADMIN_EXPECTED_GIT_SHA = "<expected-full-40-character-commit-sha>"
 npm run verify:admin -- <isolated-preview-url>
 ```
 
-`verify:admin` 会拒绝生产 Alias，并且只有在显式标记隔离环境且提供已认证浏览器状态时才执行公开提交、批准、编辑、隐藏、恢复、驳回和审计验证。
+`verify:admin` 在首次写入前请求 `/api/version`，并要求目标 URL 和部署 URL 都在精确 Preview origin 白名单中，且环境为 `preview`、分支和完整 SHA 与预期值一致。缺少任何元数据或请求被 Deployment Protection 拦截时都会 fail closed。不要把 Production 域名加入 allowlist。
+
+测试生成的数据使用唯一 run UUID 标记。无论审核流程成功还是中途失败，脚本都会在 `finally` 调用 `/api/admin/verify-cleanup` 清理该 run 的 submissions、关联人工比赛和审计事件，并同步公开比赛缓存。清理端点只在 Vercel Preview runtime 开放，且要求管理员会话和同源 Origin；Production runtime 固定返回 404。若清理返回非 2xx，验证整体失败并报告清理失败，不会宣称数据已清除。

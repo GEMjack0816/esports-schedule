@@ -8,6 +8,7 @@ import {
   eq,
   gte,
   ilike,
+  inArray,
   or,
   sql,
 } from "drizzle-orm";
@@ -625,6 +626,57 @@ export class DrizzleReviewRepository {
       const [row] = await getDatabase().select().from(publishedManualMatches)
         .where(eq(publishedManualMatches.id, id)).limit(1);
       return row ?? null;
+    } catch (error) {
+      translateDatabaseError(error);
+    }
+  }
+
+  async cleanupAdminVerificationRun(runId: string): Promise<{
+    submissions: number;
+    manualMatches: number;
+    auditEvents: number;
+  }> {
+    const runLeague = `Codex isolated review ${runId}`;
+    const runNote = `verify-admin:${runId}`;
+    try {
+      return await getDatabase().transaction(async (tx) => {
+        const submissions = await tx.select({ id: matchSubmissions.id }).from(matchSubmissions)
+          .where(or(eq(matchSubmissions.league, runLeague), eq(matchSubmissions.notes, runNote)));
+        const submissionIds = submissions.map((row) => row.id);
+        if (submissionIds.length === 0) {
+          return { submissions: 0, manualMatches: 0, auditEvents: 0 };
+        }
+
+        const manualMatches = await tx.select({ id: publishedManualMatches.id })
+          .from(publishedManualMatches)
+          .where(inArray(publishedManualMatches.sourceSubmissionId, submissionIds));
+        const manualMatchIds = manualMatches.map((row) => row.id);
+        if (manualMatchIds.length > 0) {
+          await tx.delete(publishedManualMatches)
+            .where(inArray(publishedManualMatches.id, manualMatchIds));
+        }
+        const auditEvents = await tx.delete(adminAuditEvents)
+          .where(or(
+            and(
+              eq(adminAuditEvents.entityType, "match_submission"),
+              inArray(adminAuditEvents.entityId, submissionIds),
+            ),
+            ...(manualMatchIds.length > 0
+              ? [and(
+                eq(adminAuditEvents.entityType, "published_manual_match"),
+                inArray(adminAuditEvents.entityId, manualMatchIds),
+              )]
+              : []),
+          ))
+          .returning({ id: adminAuditEvents.id });
+        await tx.delete(matchSubmissions).where(inArray(matchSubmissions.id, submissionIds));
+
+        return {
+          submissions: submissionIds.length,
+          manualMatches: manualMatchIds.length,
+          auditEvents: auditEvents.length,
+        };
+      });
     } catch (error) {
       translateDatabaseError(error);
     }

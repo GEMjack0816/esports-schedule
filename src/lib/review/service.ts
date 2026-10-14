@@ -254,3 +254,14 @@ export async function toggleManualMatchHidden(
   await synchronizeMutationCaches(repository, effects);
   return result;
 }
+
+export async function cleanupVerificationRun(
+  runId: string,
+  repository: DrizzleReviewRepository = getReviewRepository(),
+  effects: PublishedManualCacheEffects = defaultCacheEffects,
+) {
+  const result = await repository.cleanupAdminVerificationRun(runId);
+  // Always reconcile the runtime fallback, including idempotent retries after a committed delete.
+  await synchronizeMutationCaches(repository, effects);
+  return result;
+}

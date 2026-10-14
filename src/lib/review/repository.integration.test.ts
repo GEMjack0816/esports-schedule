@@ -519,4 +519,83 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       (value) => value.providerMatchId === `db-${match.id}`,
     )?.league).toBe(`${pending.input.league} edited`);
   });
+
+  it("removes only one verification run and its published matches and audit events atomically", async () => {
+    const runId = randomUUID();
+    const runLeague = `Codex isolated review ${runId}`;
+    const runNote = `verify-admin:${runId}`;
+    const approvedInput = { ...submission(`verify-approved-${runId}`), league: runLeague, notes: runNote };
+    const rejectedInput = { ...submission(`verify-rejected-${runId}`), league: runLeague, notes: runNote };
+    const unrelatedInput = submission(`verify-unrelated-${runId}`);
+    const approvedId = randomUUID();
+    const rejectedId = randomUUID();
+    const unrelated = await create(`verify-unrelated-${runId}`);
+    submissionIds.push(approvedId, rejectedId);
+
+    const approved = await repository.createSubmission(approvedInput, { id: approvedId });
+    const publishedMatch = await repository.approveSubmission(
+      approvedId,
+      { submission: approvedInput, published: published(approvedInput) },
+      "verify-admin-test",
+      approved.updatedAt,
+    );
+    manualMatchIds.push(publishedMatch.id);
+    const hidden = await repository.setManualMatchHidden(
+      publishedMatch.id,
+      true,
+      "verify-admin-test",
+      publishedMatch.updatedAt,
+    );
+    await repository.setManualMatchHidden(
+      publishedMatch.id,
+      false,
+      "verify-admin-test",
+      hidden.updatedAt,
+    );
+
+    const rejected = await repository.createSubmission(rejectedInput, { id: rejectedId });
+    await repository.rejectSubmission(rejectedId, "verification cleanup test", "verify-admin-test", rejected.updatedAt);
+    const unrelatedAuditId = randomUUID();
+    await cleanup`
+      insert into admin_audit_events (id, actor_id, action, entity_type, entity_id)
+      values (
+        ${unrelatedAuditId}::uuid,
+        'verification-test',
+        'legacy_import.completed',
+        'legacy_import',
+        ${approvedId}::uuid
+      )
+    `;
+    const expectedManualCleanup = await cleanup`
+      select id from published_manual_matches where source_submission_id = ${approvedId}::uuid
+    `;
+    const expectedAuditCleanup = await cleanup`
+      select id from admin_audit_events
+      where (entity_type = 'match_submission' and entity_id = any(${[approvedId, rejectedId]}::uuid[]))
+         or (entity_type = 'published_manual_match' and entity_id = ${publishedMatch.id}::uuid)
+    `;
+
+    const counts = await repository.cleanupAdminVerificationRun(runId);
+
+    expect(counts).toEqual({
+      submissions: 2,
+      manualMatches: 1,
+      auditEvents: expectedAuditCleanup.length,
+    });
+    expect(expectedManualCleanup).toHaveLength(1);
+    expect(await cleanup`select id from match_submissions where id = any(${[approvedId, rejectedId]}::uuid[])`)
+      .toHaveLength(0);
+    expect(await cleanup`select id from published_manual_matches where id = ${publishedMatch.id}::uuid`)
+      .toHaveLength(0);
+    expect(await cleanup`
+      select id from admin_audit_events
+      where (entity_type = 'match_submission' and entity_id = any(${[approvedId, rejectedId]}::uuid[]))
+         or (entity_type = 'published_manual_match' and entity_id = ${publishedMatch.id}::uuid)
+    `).toHaveLength(0);
+    expect(await cleanup`select id from admin_audit_events where id = ${unrelatedAuditId}::uuid`)
+      .toHaveLength(1);
+    expect(await cleanup`select id from match_submissions where id = ${unrelated.id}::uuid`)
+      .toHaveLength(1);
+    expect(unrelatedInput.league).not.toBe(runLeague);
+  });
 });
