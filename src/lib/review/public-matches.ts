@@ -361,10 +361,13 @@ export async function getDatabaseHealth(): Promise<DatabasePublicState & {
     };
     return { ...publicState, submissionCounts: counts };
   } catch {
+    const lastSuccessfulReadAt = getDatabasePublicState().lastSuccessfulReadAt;
     return {
       ...getDatabasePublicState(),
       configured: true,
-      status: getDatabasePublicState().cachedManualMatches > 0 ? "cached" : "unavailable",
+      // An empty snapshot is still a successful snapshot. Use its timestamp to
+      // distinguish "cached and empty" from "no usable cache has ever existed".
+      status: lastSuccessfulReadAt ? "cached" : "unavailable",
       submissionCounts: null,
     };
   }

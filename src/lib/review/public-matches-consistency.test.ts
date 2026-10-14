@@ -164,6 +164,20 @@ describe("manual match cache authoritative version checks", () => {
     expect(afterDatabaseFailure.matches).toEqual([]);
   });
 
+  it("reports a cached empty snapshot during a database outage", async () => {
+    const healthy = await getPublishedDatabaseMatches();
+    expect(healthy.matches).toEqual([]);
+    expect(healthy.state.status).toBe("connected");
+    expect(healthy.state.lastSuccessfulReadAt).not.toBeNull();
+
+    mocks.counts.mockRejectedValue(new Error("database unavailable"));
+    const health = await getDatabaseHealth();
+
+    expect(health.status).toBe("cached");
+    expect(health.cachedManualMatches).toBe(0);
+    expect(health.lastSuccessfulReadAt).not.toBeNull();
+  });
+
   it("does not abandon a pending fence write that could complete out of order", async () => {
     vi.useFakeTimers();
     let fence = { revision: 3 };
