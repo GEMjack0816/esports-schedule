@@ -4,16 +4,31 @@ import {
   generateKeyPair,
   SignJWT,
 } from "jose";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const authCookieStore = vi.hoisted(() => ({ get: vi.fn(), set: vi.fn() }));
+vi.mock("next/headers", () => ({ cookies: async () => authCookieStore }));
+
 import {
+  AuthForbiddenError,
   authCookieNames,
+  completeVercelAuthorization,
   isAuthorizedAdminSubject,
+  revokeAccessTokenWithRetry,
+  revokeRejectedAccessToken,
   trustedMutationOrigin,
   trustedRequestOrigin,
   usesSecureAuthCookies,
   verifyVercelIdentityToken,
 } from "./vercel";
 import { safeAdminReturnPath } from "./paths";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  authCookieStore.get.mockReset();
+  authCookieStore.set.mockReset();
+});
 
 async function identityToken(overrides: {
   nonce?: string;
@@ -105,4 +120,135 @@ describe("Vercel administrator identity validation", () => {
   ])("keeps administrator return paths internal: %s", (input, expected) => {
     expect(safeAdminReturnPath(input)).toBe(expected);
   });
+
+  it("revokes an exchanged access token when authorization is rejected", async () => {
+    const revoke = vi.fn(async () => undefined);
+    const failure = new AuthForbiddenError("rejected");
+
+    await expect(revokeRejectedAccessToken(
+      "access-token",
+      revoke,
+      async () => { throw failure; },
+    )).rejects.toBe(failure);
+    expect(revoke).toHaveBeenCalledExactlyOnceWith("access-token");
+  });
+
+  it("does not let a revocation failure mask the authorization failure", async () => {
+    const failure = new AuthForbiddenError("rejected");
+
+    await expect(revokeRejectedAccessToken(
+      "access-token",
+      async () => { throw new Error("revocation unavailable"); },
+      async () => { throw failure; },
+    )).rejects.toBe(failure);
+  });
+
+  it("logs a sanitized warning when rejected-token revocation fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const authorizationFailure = new AuthForbiddenError("rejected");
+
+    try {
+      await expect(revokeRejectedAccessToken(
+        "sensitive-access-token",
+        async () => { throw new Error("sensitive-revocation-error"); },
+        async () => { throw authorizationFailure; },
+      )).rejects.toBe(authorizationFailure);
+
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        "[auth] rejected OAuth access-token revocation failed after bounded retries.",
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("sensitive-access-token");
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("sensitive-revocation-error");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("retains an access token only after authorization succeeds", async () => {
+    const revoke = vi.fn(async () => undefined);
+
+    await expect(revokeRejectedAccessToken(
+      "access-token",
+      revoke,
+      async () => "/admin",
+    )).resolves.toBe("/admin");
+    expect(revoke).not.toHaveBeenCalled();
+  });
+
+  it("accepts a successful token revocation without retrying", async () => {
+    const request = vi.fn(async () => ({ ok: true, status: 204 }));
+    const wait = vi.fn(async () => undefined);
+
+    await expect(revokeAccessTokenWithRetry(request, wait)).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it.each([429, 503])("retries a transient token revocation failure: HTTP %s", async (status) => {
+    const request = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status })
+      .mockResolvedValueOnce({ ok: true, status: 204 });
+    const wait = vi.fn(async () => undefined);
+
+    await expect(revokeAccessTokenWithRetry(request, wait)).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenCalledExactlyOnceWith(100);
+  });
+
+  it("retries a network failure once", async () => {
+    const request = vi.fn()
+      .mockRejectedValueOnce(new Error("network unavailable"))
+      .mockResolvedValueOnce({ ok: true, status: 204 });
+    const wait = vi.fn(async () => undefined);
+
+    await expect(revokeAccessTokenWithRetry(request, wait)).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenCalledExactlyOnceWith(100);
+  });
+
+  it("fails closed without retrying a permanent revocation rejection", async () => {
+    const request = vi.fn(async () => ({ ok: false, status: 400 }));
+    const wait = vi.fn(async () => undefined);
+
+    await expect(revokeAccessTokenWithRetry(request, wait))
+      .rejects.toThrow("Vercel token revocation failed with HTTP 400.");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("rejects redirects on token exchange and revocation requests", async () => {
+    vi.stubEnv("VERCEL_ENV", "development");
+    vi.stubEnv("NEXT_PUBLIC_VERCEL_APP_CLIENT_ID", "client-test");
+    vi.stubEnv("VERCEL_APP_CLIENT_SECRET", "secret-test");
+    vi.stubEnv("ADMIN_VERCEL_USER_IDS", "admin-test");
+
+    const names = authCookieNames(false);
+    const cookieValues = new Map([
+      [names.state, "state-test"],
+      [names.nonce, "nonce-test"],
+      [names.verifier, "verifier-test"],
+    ]);
+    authCookieStore.get.mockImplementation((name: string) => {
+      const value = cookieValues.get(name);
+      return value === undefined ? undefined : { value };
+    });
+
+    const mockedFetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: "opaque-test-token" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", mockedFetch);
+
+    const callback = new Request(
+      "http://localhost:3000/api/auth/callback?code=authorization-code&state=state-test",
+    );
+    await expect(completeVercelAuthorization(callback)).rejects.toBeInstanceOf(AuthForbiddenError);
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(mockedFetch.mock.calls.map(([, init]) => (init as RequestInit).redirect))
+      .toEqual(["error", "error"]);
+  });
 });
+

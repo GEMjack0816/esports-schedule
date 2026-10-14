@@ -32,6 +32,8 @@ const COOKIE_SUFFIXES = {
 } as const;
 const TEMP_MAX_AGE_SECONDS = 10 * 60;
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
+const TOKEN_REVOCATION_MAX_ATTEMPTS = 2;
+const TOKEN_REVOCATION_RETRY_DELAY_MS = 100;
 
 type AuthConfig = {
   clientId: string;
@@ -217,8 +219,40 @@ type TokenResponse = {
   id_token?: string;
 };
 
+type RevocationResponse = Pick<Response, "ok" | "status">;
+
+function retryableRevocationStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+function pause(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+export async function revokeAccessTokenWithRetry(
+  request: () => Promise<RevocationResponse>,
+  wait: (milliseconds: number) => Promise<void> = pause,
+): Promise<void> {
+  for (let attempt = 1; attempt <= TOKEN_REVOCATION_MAX_ATTEMPTS; attempt += 1) {
+    let response: RevocationResponse;
+    try {
+      response = await request();
+    } catch (error) {
+      if (attempt === TOKEN_REVOCATION_MAX_ATTEMPTS) throw error;
+      await wait(TOKEN_REVOCATION_RETRY_DELAY_MS * attempt);
+      continue;
+    }
+
+    if (response.ok) return;
+    if (!retryableRevocationStatus(response.status) || attempt === TOKEN_REVOCATION_MAX_ATTEMPTS) {
+      throw new Error(`Vercel token revocation failed with HTTP ${response.status}.`);
+    }
+    await wait(TOKEN_REVOCATION_RETRY_DELAY_MS * attempt);
+  }
+}
+
 async function revokeVercelAccessToken(config: AuthConfig, accessToken: string): Promise<void> {
-  await fetch(REVOKE_ENDPOINT, {
+  await revokeAccessTokenWithRetry(() => fetch(REVOKE_ENDPOINT, {
     method: "POST",
     headers: {
       Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
@@ -226,8 +260,27 @@ async function revokeVercelAccessToken(config: AuthConfig, accessToken: string):
     },
     body: new URLSearchParams({ token: accessToken }),
     cache: "no-store",
+    redirect: "error",
     signal: AbortSignal.timeout(10_000),
-  });
+  }));
+}
+
+export async function revokeRejectedAccessToken<T>(
+  accessToken: string,
+  revoke: (token: string) => Promise<void>,
+  authorize: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await authorize();
+  } catch (error) {
+    try {
+      await revoke(accessToken);
+    } catch {
+      // Preserve the authorization failure even when upstream revocation is unavailable.
+      console.warn("[auth] rejected OAuth access-token revocation failed after bounded retries.");
+    }
+    throw error;
+  }
 }
 
 export async function completeVercelAuthorization(request: Request): Promise<string> {
@@ -265,33 +318,46 @@ export async function completeVercelAuthorization(request: Request): Promise<str
       redirect_uri: `${origin}/api/auth/callback`,
     }),
     cache: "no-store",
+    redirect: "error",
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) throw new AuthForbiddenError("Vercel 登录令牌交换失败。");
   const token = await response.json() as TokenResponse;
-  if (!token.id_token || !token.access_token) throw new AuthForbiddenError("Vercel 登录响应不完整。");
+  if (!token.access_token) throw new AuthForbiddenError("Vercel 登录响应不完整。");
 
-  const subject = await verifyVercelIdentityToken(token.id_token, nonce, config.clientId);
-  if (!config.adminIds.has(subject)) throw new AuthForbiddenError("此 Vercel 账户不在管理员白名单中。");
+  return revokeRejectedAccessToken(
+    token.access_token,
+    (accessToken) => revokeVercelAccessToken(config, accessToken),
+    async () => {
+      if (!token.id_token) throw new AuthForbiddenError("Vercel 登录响应不完整。");
 
-  const issuedAt = Math.floor(Date.now() / 1_000);
-  const session = await new SignJWT({ sub: subject, purpose: "admin-session" })
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuer("esports-schedule")
-    .setAudience("esports-schedule-admin")
-    .setIssuedAt(issuedAt)
-    .setExpirationTime(issuedAt + SESSION_MAX_AGE_SECONDS)
-    .sign(digestSecret(config.clientSecret, "session"));
-  const encryptedAccess = await new EncryptJWT({ token: token.access_token })
-    .setProtectedHeader({ alg: "dir", enc: "A256GCM" })
-    .setIssuer("esports-schedule")
-    .setAudience("vercel-token-revoke")
-    .setIssuedAt(issuedAt)
-    .setExpirationTime(issuedAt + SESSION_MAX_AGE_SECONDS)
-    .encrypt(digestSecret(config.clientSecret, "access-token"));
-  store.set(names.session, session, cookieOptions(SESSION_MAX_AGE_SECONDS));
-  store.set(names.access, encryptedAccess, cookieOptions(SESSION_MAX_AGE_SECONDS));
-  return returnTo;
+      const subject = await verifyVercelIdentityToken(token.id_token, nonce, config.clientId);
+      if (!config.adminIds.has(subject)) {
+        throw new AuthForbiddenError("此 Vercel 账户不在管理员白名单中。");
+      }
+
+      const issuedAt = Math.floor(Date.now() / 1_000);
+      const session = await new SignJWT({ sub: subject, purpose: "admin-session" })
+        .setProtectedHeader({ alg: "HS256" })
+        .setIssuer("esports-schedule")
+        .setAudience("esports-schedule-admin")
+        .setIssuedAt(issuedAt)
+        .setExpirationTime(issuedAt + SESSION_MAX_AGE_SECONDS)
+        .sign(digestSecret(config.clientSecret, "session"));
+      const encryptedAccess = await new EncryptJWT({ token: token.access_token })
+        .setProtectedHeader({ alg: "dir", enc: "A256GCM" })
+        .setIssuer("esports-schedule")
+        .setAudience("vercel-token-revoke")
+        .setIssuedAt(issuedAt)
+        .setExpirationTime(issuedAt + SESSION_MAX_AGE_SECONDS)
+        .encrypt(digestSecret(config.clientSecret, "access-token"));
+
+      // The session cookie is the authorization commit point and must be written last.
+      store.set(names.access, encryptedAccess, cookieOptions(SESSION_MAX_AGE_SECONDS));
+      store.set(names.session, session, cookieOptions(SESSION_MAX_AGE_SECONDS));
+      return returnTo;
+    },
+  );
 }
 
 export async function getAdminSession(): Promise<AdminSession | null> {
@@ -339,3 +405,4 @@ export async function revokeAndClearSession(): Promise<void> {
     }
   }
 }
+
