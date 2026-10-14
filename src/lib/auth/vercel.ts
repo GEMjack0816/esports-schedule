@@ -277,6 +277,7 @@ export async function revokeRejectedAccessToken<T>(
       await revoke(accessToken);
     } catch {
       // Preserve the authorization failure even when upstream revocation is unavailable.
+      console.warn("[auth] rejected OAuth access-token revocation failed after bounded retries.");
     }
     throw error;
   }
