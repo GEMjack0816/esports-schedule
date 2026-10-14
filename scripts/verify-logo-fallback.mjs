@@ -45,8 +45,8 @@ const template = {
   },
 };
 const transientLogo = "https://cdn.pandascore.co/images/team/image/test/transient.png";
-const persistentLogo = "https://cdn.pandascore.co/images/team/image/test/persistent.png";
-const hangingLogo = "https://cdn.pandascore.co/images/team/image/test/hanging.png";
+const persistentLogo = "https://cdn.pandascore.co/images/team/image/900002/persistent.png";
+const hangingLogo = "https://cdn.pandascore.co/images/team/image/900003/hanging.png";
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jvT8AAAAASUVORK5CYII=", "base64");
 const installedChrome = process.env.CHROME_PATH ?? [
   "C:/Program Files/Google/Chrome/Application/chrome.exe",
@@ -75,6 +75,7 @@ try {
     let transientAttempts = 0;
     let persistentAttempts = 0;
     let hangingAttempts = 0;
+    let optimizedLogoRequests = 0;
     const referrerHeaders = [];
     const page = await context.newPage();
     const errors = [];
@@ -85,6 +86,32 @@ try {
         if (url.pathname === "/api/matches") {
           return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
         }
+        if (url.pathname === "/_next/image") {
+          const source = url.searchParams.get("url");
+          referrerHeaders.push(route.request().headers().referer ?? null);
+          if (source === transientLogo) {
+            optimizedLogoRequests += 1;
+            transientAttempts += 1;
+            if (transientAttempts === 1) return route.abort("connectionreset");
+            return route.fulfill({ status: 200, contentType: "image/png", body: png });
+          }
+          if (source === persistentLogo) {
+            optimizedLogoRequests += 1;
+            persistentAttempts += 1;
+            return route.abort("connectionreset");
+          }
+          if (source === hangingLogo) {
+            optimizedLogoRequests += 1;
+            hangingAttempts += 1;
+            await new Promise(resolve => setTimeout(resolve, 6_000));
+            try {
+              await route.abort("timedout");
+            } catch {
+              // The component may already have abandoned this request after its bounded timeout.
+            }
+            return;
+          }
+        }
         return route.continue();
       }
       if (url.href === transientLogo) {
@@ -92,22 +119,6 @@ try {
         referrerHeaders.push(route.request().headers().referer ?? null);
         if (transientAttempts === 1) return route.abort("connectionreset");
         return route.fulfill({ status: 200, contentType: "image/png", body: png });
-      }
-      if (url.href === persistentLogo) {
-        persistentAttempts += 1;
-        referrerHeaders.push(route.request().headers().referer ?? null);
-        return route.abort("connectionreset");
-      }
-      if (url.href === hangingLogo) {
-        hangingAttempts += 1;
-        referrerHeaders.push(route.request().headers().referer ?? null);
-        await new Promise(resolve => setTimeout(resolve, 6_000));
-        try {
-          await route.abort("timedout");
-        } catch {
-          // The component may already have abandoned this request after its bounded timeout.
-        }
-        return;
       }
       if (url.pathname.match(/\.(?:png|jpe?g|webp|gif|svg)$/i)) {
         return route.fulfill({ status: 200, contentType: "image/png", body: png });
@@ -117,6 +128,7 @@ try {
     await page.goto(base.href);
     await page.locator(".refresh-button").click();
     await page.getByRole("tab", { name: /全部收录/ }).click();
+    await page.locator(".team-mark").first().scrollIntoViewIfNeeded();
     await page.waitForFunction(url => {
       const image = document.querySelector(".team-mark img");
       return image?.currentSrc === url && image.complete && image.naturalWidth > 0;
@@ -150,6 +162,7 @@ try {
     assert.equal(await persistentMark.locator("img").count(), 0);
     assert.ok(await persistentMark.locator(".team-logo-text").isVisible());
     assert.ok((await persistentMark.innerText()).trim());
+    assert.ok(optimizedLogoRequests >= 3, "canonical CDN faults should exercise Next's optimized-image route");
     assert.ok(referrerHeaders.every(header => header === null), "logo requests must not include a referrer");
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     assert.deepEqual(errors, []);
@@ -159,3 +172,4 @@ try {
 } finally {
   await browser.close();
 }
+
