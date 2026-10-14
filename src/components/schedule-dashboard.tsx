@@ -10,6 +10,7 @@ import {
   isSchedulePageForCurrentFilters,
   schedulePageRequestKey,
 } from "@/lib/schedule/client-page-request";
+import { groupScheduleMatches } from "@/lib/schedule/client-grouping";
 import { dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type Theme = "dark" | "light";
@@ -78,10 +79,6 @@ function formatDateTime(value: string | null, timeZone: string): string {
 function initials(name: string): string {
   const asciiInitials = name.split(/\s+/).map((part) => part[0]).join("").slice(0, 3);
   return asciiInitials || name.slice(0, 2);
-}
-
-function matchDateKey(match: EsportsMatch, timeZone: string): string {
-  return match.startTimeUtc ? dateKeyInTimeZone(match.startTimeUtc, timeZone) : "unscheduled";
 }
 
 function MatchStatusBadge({ status }: { status: MatchStatus }) {
@@ -273,16 +270,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
   const leagues = payload.leagues;
 
   const grouped = useMemo(() => {
-    const groups = new Map<string, EsportsMatch[]>();
-    for (const match of filtered) {
-      const key = matchDateKey(match, timeZone);
-      groups.set(key, [...(groups.get(key) ?? []), match]);
-    }
-    return [...groups.entries()].sort(([a], [b]) => {
-      if (a === "unscheduled") return 1;
-      if (b === "unscheduled") return -1;
-      return range === "history" ? b.localeCompare(a) : a.localeCompare(b);
-    });
+    return groupScheduleMatches(filtered, timeZone, range);
   }, [filtered, range, timeZone]);
 
   const liveCount = payload.liveCount;
