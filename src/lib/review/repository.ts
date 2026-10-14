@@ -744,14 +744,19 @@ export class DrizzleReviewRepository {
   async getManualMatchCacheStatus(): Promise<{ revision: number; pendingRevisions: number }> {
     try {
       const db = getDatabase();
-      const [revision, pendingRows] = await Promise.all([
-        readManualMatchSequenceRevision(db),
-        db.select({ value: count() }).from(manualMatchCacheOutbox)
-          .where(isNull(manualMatchCacheOutbox.deliveredAt)),
-      ]);
+      // This status is checked on every public schedule read. Keep it to one
+      // database round trip instead of two independent requests, while reading
+      // the pending outbox count and revision watermark in one statement.
+      const [row] = await db.execute(sql`
+        select
+          (select case when is_called then last_value else 0 end
+            from public.manual_match_cache_revision_seq) as revision,
+          (select count(*) from public.manual_match_cache_outbox
+            where delivered_at is null) as pending_revisions
+      `);
       return {
-        revision,
-        pendingRevisions: Number(pendingRows[0]?.value ?? 0),
+        revision: Number(row?.revision ?? 0),
+        pendingRevisions: Number(row?.pending_revisions ?? 0),
       };
     } catch (error) {
       translateDatabaseError(error);

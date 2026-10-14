@@ -624,6 +624,22 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect(delivered.delivered_at).toBeInstanceOf(Date);
   });
 
+  it("reads the current revision and pending outbox count together", async () => {
+    const input = submission(`cache-status-${randomUUID()}`);
+    const fence = vi.fn<(revision: number) => Promise<void>>().mockResolvedValue(undefined);
+    const [before] = await cleanup`
+      select count(*)::int as count from manual_match_cache_outbox where delivered_at is null
+    `;
+    const match = await repository.createManualMatch(published(input), "admin-a", fence);
+    manualMatchIds.push(match.id);
+    const revision = fence.mock.calls[0][0];
+
+    const status = await repository.getManualMatchCacheStatus();
+
+    expect(status.revision).toBe(revision);
+    expect(status.pendingRevisions).toBe(before.count + 1);
+  });
+
   it("makes manual match creation retries idempotent without allocating another revision", async () => {
     const input = submission(`idempotent-create-${randomUUID()}`);
     const operationKey = randomUUID();
