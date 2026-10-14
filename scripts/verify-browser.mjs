@@ -35,7 +35,7 @@ for (const profile of [
   const criticalRequestFailures = [];
   const optionalResourceFailures = [];
   const browserResourceWarnings = [];
-  const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage"];
+  const criticalPaths = ["/api/matches", "/api/matches/page", "/api/version", "/api/health/data-coverage"];
   const auditUrl = new URL(baseUrl);
   auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
   page.on("console", (message) => {
@@ -83,19 +83,33 @@ for (const profile of [
 
   const gameFilterCounts = {};
   const statusFilterCounts = {};
+  async function selectFilterAndWait(select, filterName, filterValue) {
+    const responsePromise = page.waitForResponse((candidate) => {
+      const candidateUrl = new URL(candidate.url());
+      return candidateUrl.origin === auditUrl.origin
+        && candidateUrl.pathname === "/api/matches/page"
+        && candidateUrl.searchParams.get(filterName) === filterValue;
+    });
+    await select.selectOption(filterValue);
+    const filterResponse = await responsePromise;
+    if (!filterResponse.ok()) {
+      criticalRequestFailures.push(`GET /api/matches/page HTTP ${filterResponse.status()}`);
+    }
+    await page.waitForFunction(() => document.querySelector(".match-list")?.getAttribute("aria-busy") === "false");
+  }
   await page.getByRole("tab", { name: /全部收录/ }).click();
   const gameSelect = page.locator(".filter-panel select").nth(0);
   for (const game of ["lol", "valorant", "honor-of-kings", "cs2", "dota2"]) {
-    await gameSelect.selectOption(game);
+    await selectFilterAndWait(gameSelect, "game", game);
     gameFilterCounts[game] = await page.locator(".match-card").count();
   }
-  await gameSelect.selectOption("all");
+  await selectFilterAndWait(gameSelect, "game", "all");
   const statusSelect = page.locator(".filter-panel select").nth(2);
   for (const status of ["running", "finished", "scheduled"]) {
-    await statusSelect.selectOption(status);
+    await selectFilterAndWait(statusSelect, "status", status);
     statusFilterCounts[status] = await page.locator(".match-card").count();
   }
-  await statusSelect.selectOption("all");
+  await selectFilterAndWait(statusSelect, "status", "all");
   await page.getByRole("tab", { name: /^今日/ }).click();
 
   const apiResponsePromise = page.waitForResponse(
