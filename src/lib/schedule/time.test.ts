@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { dateKeyInTimeZone, getDateKeyFormatter } from "./time";
 
 describe("schedule date keys", () => {
@@ -13,6 +13,21 @@ describe("schedule date keys", () => {
 
   it("reuses date-key formatter instances for the same timezone", () => {
     expect(getDateKeyFormatter("UTC")).toBe(getDateKeyFormatter("UTC"));
+  });
+
+  it("reuses a local-date result for the same instant and timezone", () => {
+    const formatToParts = vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts");
+    const instant = "2099-07-08T12:34:56.000Z";
+
+    try {
+      const fromString = dateKeyInTimeZone(instant, "Pacific/Chatham");
+      const fromDate = dateKeyInTimeZone(new Date(instant), "Pacific/Chatham");
+
+      expect(fromDate).toBe(fromString);
+      expect(formatToParts).toHaveBeenCalledTimes(1);
+    } finally {
+      formatToParts.mockRestore();
+    }
   });
 
   it("bounds formatter memory and evicts the least recently used timezone", () => {
@@ -34,5 +49,22 @@ describe("schedule date keys", () => {
     expect(getDateKeyFormatter(timeZones[0])).not.toBe(first);
     const recentlyUsed = getDateKeyFormatter(timeZones.at(-1)!);
     expect(getDateKeyFormatter(timeZones.at(-1)!)).toBe(recentlyUsed);
+  });
+
+  it("bounds date-result memory and evicts the least recently used key", () => {
+    const formatToParts = vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts");
+    const first = new Date(Date.UTC(2070, 0, 1));
+
+    try {
+      const firstKey = dateKeyInTimeZone(first, "UTC");
+      for (let day = 1; day <= 8_192; day += 1) {
+        dateKeyInTimeZone(new Date(first.getTime() + day * 86_400_000), "UTC");
+      }
+
+      expect(dateKeyInTimeZone(first, "UTC")).toBe(firstKey);
+      expect(formatToParts).toHaveBeenCalledTimes(8_194);
+    } finally {
+      formatToParts.mockRestore();
+    }
   });
 });
