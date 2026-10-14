@@ -5,7 +5,11 @@ import Link from "next/link";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus } from "@/lib/schedule";
 import type { SchedulePageData, SchedulePageQuery, ScheduleRangeKey } from "@/lib/schedule/page-types";
-import { isCurrentSchedulePageRequest } from "@/lib/schedule/client-page-request";
+import {
+  isCurrentSchedulePageRequest,
+  isSchedulePageForCurrentFilters,
+  schedulePageRequestKey,
+} from "@/lib/schedule/client-page-request";
 import { dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type Theme = "dark" | "light";
@@ -200,15 +204,18 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
     cursor: null,
     limit: payload.page.limit,
   }), [game, league, payload.page.limit, query, range, selectedDate, status, timeZone]);
-  const requestKey = JSON.stringify([
-    requestQuery.range,
-    requestQuery.timeZone,
-    requestQuery.game,
-    requestQuery.league,
-    requestQuery.status,
-    requestQuery.query.trim(),
-    requestQuery.selectedDate,
-  ]);
+  const requestKey = schedulePageRequestKey(requestQuery);
+  const initialPayloadKey = schedulePageRequestKey({
+    range: "today",
+    timeZone: initialData.timeZone,
+    game: "all",
+    league: "all",
+    status: "all",
+    query: "",
+    selectedDate: null,
+  });
+  const [loadedRequestKey, setLoadedRequestKey] = useState(initialPayloadKey);
+  const payloadMatchesFilters = isSchedulePageForCurrentFilters(loadedRequestKey, requestKey);
   const currentRequestKey = useRef(requestKey);
   useLayoutEffect(() => {
     currentRequestKey.current = requestKey;
@@ -242,6 +249,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
         const next = await response.json() as SchedulePageData;
         if (isCurrentSchedulePageRequest(serial, requestSerial.current, requestKey, currentRequestKey.current)) {
           setPayload(next);
+          setLoadedRequestKey(requestKey);
         }
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")
@@ -294,6 +302,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
       const next = await response.json() as SchedulePageData;
       if (serial === requestSerial.current && requestKey === currentRequestKey.current) {
         setPayload(next);
+        setLoadedRequestKey(requestKey);
         setPaginationRestartedFor(null);
       }
     } catch (error) {
@@ -331,6 +340,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
         const restarted = await restartedResponse.json() as SchedulePageData;
         if (serial === requestSerial.current && requestKey === currentRequestKey.current) {
           setPayload(restarted);
+          setLoadedRequestKey(requestKey);
           setPaginationRestartedFor(requestKey);
           setRequestError(false);
         }
@@ -343,6 +353,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
           ...next,
           matches: [...current.matches, ...next.matches.filter((match) => !current.matches.some((loaded) => loaded.id === match.id))],
         }));
+        setLoadedRequestKey(requestKey);
       }
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")
@@ -453,9 +464,14 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
           </div>
 
           <div className="match-list" aria-live="polite" aria-busy={loading || loadingMore}>
-            {requestError && <div className="data-notice" role="alert">赛程筛选暂时失败，已保留当前结果，请重试。</div>}
+            {!payloadMatchesFilters && <div className="data-notice" role={requestError ? "alert" : "status"}>
+              {requestError
+                ? "当前筛选加载失败，下面显示的是上一组筛选结果；请重试。"
+                : "筛选更新中，下面暂时保留上一组筛选结果。"}
+            </div>}
+            {requestError && payloadMatchesFilters && <div className="data-notice" role="alert">赛程筛选暂时失败，已保留当前结果，请重试。</div>}
             {paginationRestartedFor === requestKey && <div className="data-notice" role="status">赛程在浏览期间更新，已从最新结果重新载入。</div>}
-            {loading && <div className="results-meta" role="status">正在更新筛选结果…</div>}
+            {loading && <div className="results-meta" role="status">{payloadMatchesFilters ? "正在更新筛选结果…" : "正在更新筛选结果，列表暂为上一组结果…"}</div>}
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
               <section className="date-group" key={key}>
                 <div className="date-divider"><span>{formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
@@ -466,8 +482,8 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
             )}
           </div>
           <div className="match-page-footer">
-            <span className="results-meta">已载入 {payload.matches.length} / {payload.page.total} 场</span>
-            {payload.page.nextCursor && <button className="load-more-button" type="button" onClick={loadMoreMatches} disabled={loadingMore || loading}>
+            <span className="results-meta">{payloadMatchesFilters ? "已载入" : "上一组筛选结果：已载入"} {payload.matches.length} / {payload.page.total} 场</span>
+            {payloadMatchesFilters && payload.page.nextCursor && <button className="load-more-button" type="button" onClick={loadMoreMatches} disabled={loadingMore || loading}>
               {loadingMore ? "加载中…" : `加载更多（${Math.min(payload.page.limit, payload.page.total - payload.matches.length)} 场）`}
             </button>}
           </div>

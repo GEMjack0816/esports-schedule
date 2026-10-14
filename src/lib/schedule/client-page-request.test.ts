@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isCurrentSchedulePageRequest } from "./client-page-request";
+import {
+  isCurrentSchedulePageRequest,
+  isSchedulePageForCurrentFilters,
+  schedulePageRequestKey,
+} from "./client-page-request";
 
 describe("schedule page request identity", () => {
   it("accepts the latest request for the active filters", () => {
@@ -14,5 +18,29 @@ describe("schedule page request identity", () => {
 
   it("rejects an older request after a newer request has started", () => {
     expect(isCurrentSchedulePageRequest(4, 5, "game=lol", "game=lol")).toBe(false);
+  });
+});
+
+describe("displayed schedule page identity", () => {
+  const filters = {
+    range: "all" as const,
+    timeZone: "Asia/Shanghai",
+    game: "all" as const,
+    league: "all",
+    status: "all" as const,
+    query: "  T1  ",
+    selectedDate: null,
+  };
+
+  it("normalizes the search term into a stable page identity", () => {
+    expect(schedulePageRequestKey(filters)).toBe(schedulePageRequestKey({ ...filters, query: "T1" }));
+  });
+
+  it("does not treat a previous filter result as the active page", () => {
+    const previous = schedulePageRequestKey(filters);
+    const active = schedulePageRequestKey({ ...filters, game: "cs2" });
+
+    expect(isSchedulePageForCurrentFilters(previous, active)).toBe(false);
+    expect(isSchedulePageForCurrentFilters(active, active)).toBe(true);
   });
 });

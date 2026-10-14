@@ -45,6 +45,9 @@ for (const profile of [
   const optionalResourceFailures = [];
   const browserResourceWarnings = [];
   let expectScheduleChanged = false;
+  let failNextCs2Filter = false;
+  let expectedFilterFailureResponse = false;
+  let expectedFilterFailureConsole = false;
   const criticalPaths = ["/api/matches", "/api/matches/page", "/api/version", "/api/health/data-coverage"];
   const auditUrl = new URL(baseUrl);
   auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
@@ -52,6 +55,10 @@ for (const profile of [
     if (message.type() !== "error") return;
     const text = message.text();
     if (expectScheduleChanged && /status of 409 \(Conflict\)/i.test(text)) return;
+    if (expectedFilterFailureConsole && /status of 503/i.test(text)) {
+      expectedFilterFailureConsole = false;
+      return;
+    }
     if (/^Failed to load resource: net::ERR_/.test(text)) {
       browserResourceWarnings.push(text);
       return;
@@ -78,8 +85,12 @@ for (const profile of [
       && criticalPaths.includes(candidateUrl.pathname)
       && candidate.status() >= 400
       && !(candidateUrl.pathname === "/api/matches/page" && candidate.status() === 409 && expectScheduleChanged)
+      && !(candidateUrl.pathname === "/api/matches/page" && candidate.status() === 503 && expectedFilterFailureResponse)
     ) {
       criticalRequestFailures.push(`${candidate.request().method()} ${candidateUrl.pathname} HTTP ${candidate.status()}`);
+    }
+    if (candidateUrl.pathname === "/api/matches/page" && candidate.status() === 503 && expectedFilterFailureResponse) {
+      expectedFilterFailureResponse = false;
     }
   });
 
@@ -200,8 +211,19 @@ for (const profile of [
     };
   }
   let paginationRestartWorked = false;
+  let failedFilterRetainedResultsSafely = false;
   await page.route("**/api/matches/page?*", async (route) => {
     const url = new URL(route.request().url());
+    if (failNextCs2Filter && url.searchParams.get("game") === "cs2") {
+      failNextCs2Filter = false;
+      expectedFilterFailureResponse = true;
+      expectedFilterFailureConsole = true;
+      return route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "TEMPORARILY_UNAVAILABLE" }),
+      });
+    }
     const regressionQuery = url.searchParams.get("range") === "all"
       && url.searchParams.get("game") === "all"
       && url.searchParams.get("league") === "all"
@@ -229,10 +251,10 @@ for (const profile of [
       matches,
       page: {
         limit: Number(url.searchParams.get("limit")) || 50,
-        total: restarted ? 1 : 2,
-        nextCursor: restarted ? null : "fixture-stale-cursor",
+        total: 2,
+        nextCursor: restarted ? "fixture-current-cursor" : "fixture-stale-cursor",
       },
-      rangeCounts: { today: 1, tomorrow: 0, seven: 1, history: 0, all: restarted ? 1 : 2 },
+      rangeCounts: { today: 1, tomorrow: 0, seven: 1, history: 0, all: 2 },
       liveCount: 0,
       upcomingCount: 1,
       leagues: ["LCK"],
@@ -258,6 +280,17 @@ for (const profile of [
     && afterRestartText.includes("Fresh Snapshot Team")
     && !afterRestartText.includes("Old Snapshot Team");
   expectScheduleChanged = false;
+
+  failNextCs2Filter = true;
+  const failedFilterResponse = page.waitForResponse((candidate) => {
+    const url = new URL(candidate.url());
+    return url.pathname === "/api/matches/page" && url.searchParams.get("game") === "cs2";
+  });
+  await gameSelect.selectOption("cs2");
+  await failedFilterResponse;
+  await page.locator('.data-notice[role="alert"]').filter({ hasText: "上一组筛选结果" }).waitFor();
+  failedFilterRetainedResultsSafely = await page.getByRole("button", { name: /加载更多/ }).count() === 0
+    && (await page.locator(".match-card").allTextContents()).join(" ").includes("Fresh Snapshot Team");
 
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
@@ -321,6 +354,7 @@ for (const profile of [
       adminBody.includes("最近操作") || adminBody.includes("待审核提交"),
     anonymousAdminApiStatus: adminLegacyResponse.status(),
     paginationRestartWorked,
+    failedFilterRetainedResultsSafely,
     errors,
     screenshot,
   });
@@ -356,6 +390,7 @@ for (const result of results) {
   if (result.anonymousAdminContainsPrivateData) failures.push(`${prefix}: anonymous admin page exposed private data`);
   if (result.anonymousAdminApiStatus !== 401) failures.push(`${prefix}: anonymous admin API HTTP ${result.anonymousAdminApiStatus}`);
   if (!result.paginationRestartWorked) failures.push(`${prefix}: stale pagination did not restart from the latest result set`);
+  if (!result.failedFilterRetainedResultsSafely) failures.push(`${prefix}: failed filter exposed a stale pagination cursor or ambiguous previous results`);
   failures.push(...result.errors.map((error) => `${prefix}: ${error}`));
   failures.push(...result.criticalRequestFailures.map((error) => `${prefix}: ${error}`));
 }
