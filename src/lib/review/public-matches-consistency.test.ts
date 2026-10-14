@@ -34,7 +34,7 @@ let synchronizePublishedManualMatchesSnapshot: typeof import("./public-matches")
 describe("manual match cache authoritative version checks", () => {
   beforeEach(async () => {
     vi.resetModules();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     const publicMatches = await import("./public-matches");
     getPublishedDatabaseMatches = publicMatches.getPublishedDatabaseMatches;
     getDatabaseHealth = publicMatches.getDatabaseHealth;
@@ -66,6 +66,48 @@ describe("manual match cache authoritative version checks", () => {
     expect(result.state.cacheRevision).toBe(5);
     expect(result.state.status).toBe("connected");
     expect(mocks.failed).toHaveBeenCalledWith(5);
+  });
+
+  it("restores an evicted Runtime Cache fence so a recovered snapshot survives a later database outage", async () => {
+    const runtimeCache = new Map<string, unknown>();
+    mocks.get.mockImplementation(async (key: string) => runtimeCache.get(key) ?? null);
+    mocks.set.mockImplementation(async (key: string, value: unknown) => {
+      runtimeCache.set(key, value);
+    });
+    mocks.cacheStatus
+      .mockResolvedValueOnce({ revision: 5, pendingRevisions: 0 })
+      .mockRejectedValueOnce(new Error("database unavailable"));
+    mocks.snapshot.mockImplementation(async (fence?: (revision: number) => Promise<void>) => {
+      await fence?.(5);
+      return { rows: [], revision: 5, pendingRevisions: 0, fenceWritten: true };
+    });
+    mocks.cached
+      .mockResolvedValueOnce({ matches: [], fetchedAt: "old Next Data Cache", revision: 4 })
+      .mockRejectedValueOnce(new Error("database unavailable"));
+
+    const recovered = await getPublishedDatabaseMatches();
+    expect(recovered.state.status).toBe("connected");
+    expect(runtimeCache.get("published-manual-matches-fence-v1")).toEqual({ revision: 5 });
+    expect(runtimeCache.get("published-manual-matches-v1:5")).toMatchObject({ revision: 5 });
+
+    const duringOutage = await getPublishedDatabaseMatches();
+    expect(duringOutage.state.status).toBe("cached");
+    expect(duringOutage.state.cacheRevision).toBe(5);
+  });
+
+  it("does not acknowledge snapshot delivery when a missing fence cannot be restored", async () => {
+    mocks.snapshot.mockResolvedValue({
+      rows: [],
+      revision: 5,
+      pendingRevisions: 1,
+      fenceWritten: false,
+    });
+
+    const result = await getPublishedDatabaseMatches();
+
+    expect(result.state.status).toBe("connected");
+    expect(mocks.failed).toHaveBeenCalledWith(5);
+    expect(mocks.delivered).not.toHaveBeenCalled();
   });
 
   it("retries Runtime Cache delivery when the outbox is pending despite matching cached revisions", async () => {

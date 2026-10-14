@@ -666,10 +666,11 @@ export class DrizzleReviewRepository {
     }
   }
 
-  async readManualMatchCacheSnapshot(): Promise<{
+  async readManualMatchCacheSnapshot(fence?: ManualMatchCacheFence): Promise<{
     rows: PublishedManualMatchRow[];
     revision: number;
     pendingRevisions: number;
+    fenceWritten?: boolean;
   }> {
     try {
       return await getDatabase().transaction(async (tx) => {
@@ -680,10 +681,26 @@ export class DrizzleReviewRepository {
         const revision = await readManualMatchSequenceRevision(tx);
         const pendingRows = await tx.select({ value: count() }).from(manualMatchCacheOutbox)
           .where(isNull(manualMatchCacheOutbox.deliveredAt));
+        let fenceWritten: boolean | undefined;
+        if (fence) {
+          // Rebuild an evicted fence while holding the same advisory lock as
+          // mutations. A fence write after releasing this lock could move the
+          // regional watermark backwards if a newer mutation wins the race.
+          try {
+            await fence(revision);
+            fenceWritten = true;
+          } catch {
+            // Cache repair is best effort. The database snapshot is still
+            // authoritative for this request, but must not be acknowledged as
+            // a recoverable Runtime Cache delivery without its fence.
+            fenceWritten = false;
+          }
+        }
         return {
           rows,
           revision,
           pendingRevisions: Number(pendingRows[0]?.value ?? 0),
+          ...(fenceWritten === undefined ? {} : { fenceWritten }),
         };
       });
     } catch (error) {

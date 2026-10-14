@@ -172,6 +172,30 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect(snapshot.rows.some((match) => match.league === input.league)).toBe(false);
   });
 
+  it("restores an evicted cache fence from the database revision while holding the mutation lock", async () => {
+    let fencedRevision = -1;
+    let competingLockAcquired: boolean | undefined;
+    const snapshot = await repository.readManualMatchCacheSnapshot(async (revision) => {
+      fencedRevision = revision;
+      const [row] = await cleanup`select pg_try_advisory_xact_lock(${MANUAL_MATCH_MUTATION_LOCK}) as acquired`;
+      competingLockAcquired = row.acquired;
+    });
+
+    expect(snapshot.fenceWritten).toBe(true);
+    expect(fencedRevision).toBe(snapshot.revision);
+    expect(competingLockAcquired).toBe(false);
+  });
+
+  it("keeps the database snapshot readable when best-effort fence restoration fails", async () => {
+    const snapshot = await repository.readManualMatchCacheSnapshot(async () => {
+      throw new Error("runtime cache unavailable");
+    });
+
+    expect(snapshot.fenceWritten).toBe(false);
+    expect(snapshot.revision).toBeGreaterThanOrEqual(0);
+    expect(Array.isArray(snapshot.rows)).toBe(true);
+  });
+
   function policy(overrides: Partial<PublicSubmissionPolicy> = {}): PublicSubmissionPolicy {
     const value: PublicSubmissionPolicy = {
       maxPerSource: 5,

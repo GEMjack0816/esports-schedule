@@ -7,6 +7,7 @@ import type { EsportsMatch } from "@/lib/schedule/types";
 import { uniqueAndSort } from "@/lib/schedule/utils";
 import { isDatabaseConfigured } from "@/db";
 import { getReviewRepository } from "./repository";
+import type { ManualMatchCacheFence } from "./repository";
 import type { SubmissionCounts } from "./types";
 
 const CACHE_KEY = "published-manual-matches-v1";
@@ -176,18 +177,26 @@ export async function synchronizePublishedManualMatchesSnapshot(
     "readManualMatchCacheSnapshot" | "markManualMatchCacheDelivered" | "markManualMatchCacheDeliveryFailed"
   > = getReviewRepository(),
   write: (value: CachedPublicMatches) => Promise<void> = writeRuntimeFallback,
+  writeFence: ManualMatchCacheFence = async () => undefined,
 ): Promise<CachedPublicMatches> {
-  const snapshot = await repository.readManualMatchCacheSnapshot();
+  // Fence restoration must happen while the repository still holds its
+  // serialized mutation lock; writing it after this read returns can regress a
+  // newer mutation's fence.
+  const snapshot = await repository.readManualMatchCacheSnapshot(writeFence);
   const value = {
     matches: uniqueAndSort(snapshot.rows.map(publishedRowToMatch)),
     fetchedAt: new Date().toISOString(),
     revision: snapshot.revision,
   };
+  let delivered = snapshot.fenceWritten !== false;
   try {
     await write(value);
   } catch {
+    delivered = false;
+    console.warn("[review-db] public manual match fallback snapshot could not be written");
+  }
+  if (!delivered) {
     await repository.markManualMatchCacheDeliveryFailed(snapshot.revision);
-    console.warn("[review-db] public manual match fallback cache could not be written");
     return value;
   }
   try {
@@ -234,7 +243,11 @@ export async function preserveLastSuccessfulPublicMatches(
 
 const readPublishedMatchesCached = unstable_cache(
   async (): Promise<CachedPublicMatches> => {
-    return synchronizePublishedManualMatchesSnapshot(getReviewRepository());
+    return synchronizePublishedManualMatchesSnapshot(
+      getReviewRepository(),
+      writeRuntimeFallback,
+      writeManualMatchCacheFence,
+    );
   },
   ["published-manual-matches-v1"],
   {
@@ -258,7 +271,11 @@ async function readCurrentPublishedMatches(observeRevision: (revision: number) =
   if (cacheStatus.pendingRevisions > 0
     || cached.revision !== revision
     || shouldRefreshCachedSnapshot(cached.revision, fence)) {
-    const refreshed = await synchronizePublishedManualMatchesSnapshot(repository);
+    const refreshed = await synchronizePublishedManualMatchesSnapshot(
+      repository,
+      writeRuntimeFallback,
+      writeManualMatchCacheFence,
+    );
     observeRevision(refreshed.revision);
     if (refreshed.revision < publicState.cacheRevision) {
       throw new Error("manual match cache revision regressed");
