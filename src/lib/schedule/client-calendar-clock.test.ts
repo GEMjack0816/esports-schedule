@@ -3,6 +3,7 @@ import {
   calendarClockSnapshot,
   millisecondsUntilNextMinute,
   parseCalendarClockSnapshot,
+  serverCalendarClockSnapshot,
   subscribeCalendarClock,
 } from "./client-calendar-clock";
 
@@ -23,6 +24,27 @@ describe("client calendar clock", () => {
       timeZone: "America/Los_Angeles",
       now: 2_520_000,
     });
+  });
+
+  it("keeps the server and hydration snapshot stable across a minute boundary", () => {
+    vi.useFakeTimers();
+    const generatedAt = "2026-09-27T23:59:59.999Z";
+    vi.setSystemTime(new Date(generatedAt));
+    const serverSnapshot = serverCalendarClockSnapshot(generatedAt);
+
+    vi.setSystemTime(new Date("2026-09-28T00:00:00.001Z"));
+    expect(serverCalendarClockSnapshot(generatedAt)).toBe(serverSnapshot);
+    expect(serverSnapshot).toBe(`UTC|${Math.floor(Date.parse(generatedAt) / 60_000)}`);
+  });
+
+  it("uses a deterministic valid snapshot if serialized generation time is invalid", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-27T23:59:59.999Z"));
+    const first = serverCalendarClockSnapshot("not-a-timestamp");
+
+    vi.setSystemTime(new Date("2026-09-28T00:00:00.001Z"));
+    expect(serverCalendarClockSnapshot("not-a-timestamp")).toBe(first);
+    expect(first).toBe("UTC|0");
   });
 
   it("schedules just after the next minute boundary", () => {

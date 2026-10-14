@@ -6,6 +6,12 @@ export function calendarClockSnapshot(timeZone: string, now = Date.now()): strin
   return `${timeZone}${SNAPSHOT_SEPARATOR}${Math.floor(now / MINUTE_MS)}`;
 }
 
+export function serverCalendarClockSnapshot(generatedAt: string): string {
+  const timestamp = Date.parse(generatedAt);
+  const stableNow = Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : 0;
+  return calendarClockSnapshot("UTC", stableNow);
+}
+
 export function parseCalendarClockSnapshot(snapshot: string): { timeZone: string; now: number } {
   const separator = snapshot.lastIndexOf(SNAPSHOT_SEPARATOR);
   const timeZone = separator > 0 ? snapshot.slice(0, separator) : "UTC";

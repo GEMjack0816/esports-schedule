@@ -7,6 +7,7 @@ import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/
 import {
   calendarClockSnapshot,
   parseCalendarClockSnapshot,
+  serverCalendarClockSnapshot,
   subscribeCalendarClock,
 } from "@/lib/schedule/client-calendar-clock";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
@@ -16,7 +17,6 @@ type Theme = "dark" | "light";
 
 const getBrowserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 const getBrowserCalendarClock = () => calendarClockSnapshot(getBrowserTimeZone());
-const getServerCalendarClock = () => calendarClockSnapshot("UTC");
 const subscribeToTheme = (callback: () => void) => {
   window.addEventListener("schedule-theme-change", callback);
   return () => window.removeEventListener("schedule-theme-change", callback);
@@ -163,10 +163,11 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [query, setQuery] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const hydrationCalendarClock = serverCalendarClockSnapshot(initialData.generatedAt);
   const calendarClock = useSyncExternalStore(
     subscribeCalendarClock,
     getBrowserCalendarClock,
-    getServerCalendarClock,
+    () => hydrationCalendarClock,
   );
   const { timeZone, now } = parseCalendarClockSnapshot(calendarClock);
   const theme = useSyncExternalStore(subscribeToTheme, getBrowserTheme, getServerTheme);
