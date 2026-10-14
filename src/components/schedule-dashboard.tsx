@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import {
   MATCH_RENDER_BATCH_SIZE,
@@ -11,8 +11,7 @@ import {
   visibleMatchLimit,
   windowMatches,
 } from "@/lib/schedule/client-list-window";
-import { addDaysKey } from "@/lib/schedule/time";
-import { groupMatchesByDate, matchDateKey } from "@/lib/schedule/group-matches";
+import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -83,6 +82,10 @@ function initials(name: string): string {
   return asciiInitials || name.slice(0, 2);
 }
 
+function matchDateKey(match: EsportsMatch, timeZone: string): string {
+  return match.startTimeUtc ? dateKeyInTimeZone(match.startTimeUtc, timeZone) : "unscheduled";
+}
+
 function MatchStatusBadge({ status }: { status: MatchStatus }) {
   const meta = statusMeta[status];
   return (
@@ -117,7 +120,8 @@ function TeamRow({ team, score, winning }: {
   );
 }
 
-function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string }) {
+// Parent UI state changes should not re-render unchanged cards in a large schedule.
+const MatchCard = memo(function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string }) {
   const game = games[match.game];
   const scoreA = match.homeScore;
   const scoreB = match.awayScore;
@@ -151,7 +155,7 @@ function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string 
       </div>
     </article>
   );
-}
+});
 
 export function ScheduleDashboard({ initialData }: { initialData: SchedulePayload }) {
   const [payload, setPayload] = useState(initialData);
@@ -233,7 +237,16 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   }, [filtered.length, visibleMatches.length]);
 
   const grouped = useMemo(() => {
-    return groupMatchesByDate(visibleMatches, timeZone, range === "history");
+    const groups = new Map<string, EsportsMatch[]>();
+    for (const match of visibleMatches) {
+      const key = matchDateKey(match, timeZone);
+      groups.set(key, [...(groups.get(key) ?? []), match]);
+    }
+    return [...groups.entries()].sort(([a], [b]) => {
+      if (a === "unscheduled") return 1;
+      if (b === "unscheduled") return -1;
+      return range === "history" ? b.localeCompare(a) : a.localeCompare(b);
+    });
   }, [range, timeZone, visibleMatches]);
 
   const liveCount = payload.matches.filter((match) => match.status === "running").length;
