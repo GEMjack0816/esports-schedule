@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus } from "@/lib/schedule";
 import type { SchedulePageData, SchedulePageQuery, ScheduleRangeKey } from "@/lib/schedule/page-types";
+import { isCurrentSchedulePageRequest } from "@/lib/schedule/client-page-request";
 import { dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type Theme = "dark" | "light";
@@ -239,13 +240,18 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
         const response = await fetch(pageUrl(requestQuery), { cache: "no-store", signal: controller.signal });
         if (!response.ok) throw new Error("schedule page request failed");
         const next = await response.json() as SchedulePageData;
-        if (serial === requestSerial.current) setPayload(next);
+        if (isCurrentSchedulePageRequest(serial, requestSerial.current, requestKey, currentRequestKey.current)) {
+          setPayload(next);
+        }
       } catch (error) {
-        if (!(error instanceof DOMException && error.name === "AbortError") && serial === requestSerial.current) {
+        if (!(error instanceof DOMException && error.name === "AbortError")
+          && isCurrentSchedulePageRequest(serial, requestSerial.current, requestKey, currentRequestKey.current)) {
           setRequestError(true);
         }
       } finally {
-        if (serial === requestSerial.current) setLoading(false);
+        if (isCurrentSchedulePageRequest(serial, requestSerial.current, requestKey, currentRequestKey.current)) {
+          setLoading(false);
+        }
       }
     }, delay);
     return () => {
