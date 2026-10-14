@@ -50,6 +50,9 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+
       - name: Apply schema to the isolated PostgreSQL service
         run: npm run db:migrate
 
