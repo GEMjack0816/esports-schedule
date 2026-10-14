@@ -2,8 +2,9 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
+import { isPandaScoreTeamLogoUrl } from "@/lib/schedule/team-logo";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -18,6 +19,7 @@ const subscribeToTheme = (callback: () => void) => {
 };
 const getBrowserTheme = (): Theme => document.documentElement.dataset.theme === "light" ? "light" : "dark";
 const getServerTheme = (): Theme => "dark";
+const TEAM_LOGO_REQUEST_TIMEOUT_MS = 5_000;
 
 const games: Record<GameKey, { label: string; short: string; color: string }> = {
   lol: { label: "英雄联盟", short: "LOL", color: "#45d6ff" },
@@ -109,27 +111,94 @@ function TeamRow({ team, score, winning }: {
 function TeamLogo({ src, label }: { src: string; label: string }) {
   const [failure, setFailure] = useState<"none" | "remote" | "all">("none");
   const [remoteRetries, setRemoteRetries] = useState(0);
+  const [nearViewport, setNearViewport] = useState(false);
+  const wrapperRef = useRef<HTMLSpanElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const activeAttemptRef = useRef<{ key: string; settled: boolean; timer: number } | null>(null);
+  const current = failure === "remote" || failure === "all" ? "/team-placeholder.svg" : src;
+  const attemptKey = `${current}:${failure}:${remoteRetries}`;
+
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    if (typeof IntersectionObserver === "undefined") {
+      const fallbackTimer = window.setTimeout(() => setNearViewport(true), 0);
+      return () => window.clearTimeout(fallbackTimer);
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setNearViewport(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: "200px" });
+    observer.observe(wrapper);
+    return () => observer.disconnect();
+  }, []);
+
+  const failCurrentAttempt = useCallback((timedOut = false) => {
+    if (current === "/team-placeholder.svg") {
+      setFailure("all");
+    } else if (timedOut) {
+      setFailure("remote");
+    } else if (remoteRetries === 0) {
+      setRemoteRetries(1);
+    } else {
+      setFailure("remote");
+    }
+  }, [current, remoteRetries]);
+
+  const settleAttempt = (key: string, failed: boolean) => {
+    const activeAttempt = activeAttemptRef.current;
+    if (activeAttempt && activeAttempt.key !== key) return;
+    if (activeAttempt?.settled) return;
+    if (activeAttempt) {
+      activeAttempt.settled = true;
+      window.clearTimeout(activeAttempt.timer);
+      activeAttemptRef.current = null;
+    }
+    if (failed) failCurrentAttempt();
+  };
+
+  useEffect(() => {
+    if (!nearViewport || failure === "all" || imageRef.current?.complete) return;
+
+    const attempt = { key: attemptKey, settled: false, timer: 0 };
+    attempt.timer = window.setTimeout(() => {
+      if (activeAttemptRef.current !== attempt || attempt.settled) return;
+      attempt.settled = true;
+      activeAttemptRef.current = null;
+      failCurrentAttempt(true);
+    }, TEAM_LOGO_REQUEST_TIMEOUT_MS);
+    activeAttemptRef.current = attempt;
+
+    return () => {
+      window.clearTimeout(attempt.timer);
+      if (activeAttemptRef.current === attempt) {
+        attempt.settled = true;
+        activeAttemptRef.current = null;
+      }
+    };
+  }, [attemptKey, current, failure, failCurrentAttempt, nearViewport, remoteRetries]);
+
   if (failure === "all") return <span className="team-logo-text">{label}</span>;
-  const current = failure === "remote" ? "/team-placeholder.svg" : src;
+
   return (
-    <Image
-      key={`${current}:${remoteRetries}`}
-      src={current}
-      alt=""
-      width={28}
-      height={28}
-      unoptimized
-      referrerPolicy="no-referrer"
-      onError={() => {
-        if (current === "/team-placeholder.svg") {
-          setFailure("all");
-        } else if (remoteRetries === 0) {
-          setRemoteRetries(1);
-        } else {
-          setFailure("remote");
-        }
-      }}
-    />
+    <span className="team-logo-frame" ref={wrapperRef}>
+      <Image
+        key={`${current}:${remoteRetries}`}
+        ref={imageRef}
+        src={current}
+        alt=""
+        width={28}
+        height={28}
+        sizes="28px"
+        unoptimized={!isPandaScoreTeamLogoUrl(current)}
+        referrerPolicy="no-referrer"
+        onLoad={() => settleAttempt(attemptKey, false)}
+        onError={() => settleAttempt(attemptKey, true)}
+      />
+    </span>
   );
 }
 

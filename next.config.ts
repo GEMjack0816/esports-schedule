@@ -19,6 +19,20 @@ const buildGitCommitRef = process.env.VERCEL_GIT_COMMIT_REF?.trim()
   || gitMetadata("branch", "--show-current");
 
 const nextConfig: NextConfig = {
+  images: {
+    // PandaScore team logos are stable by URL; keep their optimized copies warm
+    // for 24 hours to ride through short CDN outages without caching forever.
+    minimumCacheTTL: 86_400,
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "cdn.pandascore.co",
+        port: "",
+        pathname: "/images/team/image/**",
+        search: "",
+      },
+    ],
+  },
   env: {
     ESPORTS_BUILD_TIMESTAMP: buildTimestamp,
     ESPORTS_BUILD_GIT_COMMIT_SHA: buildGitCommitSha,
