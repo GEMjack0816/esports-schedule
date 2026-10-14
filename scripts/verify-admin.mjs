@@ -5,6 +5,7 @@ import {
   assertAdminVerifyDeployment,
   buildVerificationRunMarkers,
   parseAdminVerifyConfiguration,
+  summarizeAdminVerifyFailure,
 } from "./verify-admin-safety.mjs";
 
 function requiredEnvironment(name) {
@@ -186,13 +187,13 @@ async function runVerification() {
     const dashboardText = await page.locator("body").innerText();
     if (!dashboardText.includes("最近操作")) throw new Error("admin audit summary is missing");
   } catch (error) {
-    testError = error instanceof Error ? error.message : "Admin verification failed.";
+    testError = summarizeAdminVerifyFailure(error, "verification");
   } finally {
     if (verifiedDeployment && context) {
       try {
         cleanupCounts = await cleanupRun(context, target.origin, runId);
       } catch (error) {
-        cleanupError = error instanceof Error ? error.message : "Preview verification-data cleanup failed.";
+        cleanupError = summarizeAdminVerifyFailure(error, "cleanup");
       }
     }
     try {

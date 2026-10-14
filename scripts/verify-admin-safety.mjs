@@ -13,6 +13,13 @@ export function buildVerificationRunMarkers(runId, fixtureLabel) {
   };
 }
 
+export function summarizeAdminVerifyFailure(error, phase) {
+  const message = error instanceof Error ? error.message : "";
+  const status = /\bHTTP\s+(\d{3})\b/.exec(message)?.[1] ?? null;
+  const label = phase === "cleanup" ? "Preview verification-data cleanup" : "Admin verification";
+  return `${label} failed${status ? ` (HTTP ${status})` : ""}; details redacted.`;
+}
+
 function parseHttpsOrigin(value, label) {
   let url;
   try {

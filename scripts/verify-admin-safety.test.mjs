@@ -3,6 +3,7 @@ import {
   assertAdminVerifyDeployment,
   buildVerificationRunMarkers,
   parseAdminVerifyConfiguration,
+  summarizeAdminVerifyFailure,
 } from "./verify-admin-safety.mjs";
 
 const origin = "https://esports-schedule-preview.vercel.app";
@@ -23,6 +24,20 @@ const deployment = {
 };
 
 describe("verify:admin target safety", () => {
+  it("redacts arbitrary verifier exception details while preserving a safe HTTP status", () => {
+    const error = new Error("HTTP 503 access_token=do-not-log nonce=do-not-log https://preview.invalid/?secret=do-not-log");
+
+    expect(summarizeAdminVerifyFailure(error, "verification"))
+      .toBe("Admin verification failed (HTTP 503); details redacted.");
+    expect(summarizeAdminVerifyFailure(error, "cleanup"))
+      .toBe("Preview verification-data cleanup failed (HTTP 503); details redacted.");
+  });
+
+  it("does not echo non-Error rejection values", () => {
+    expect(summarizeAdminVerifyFailure("client_secret=do-not-log", "verification"))
+      .toBe("Admin verification failed; details redacted.");
+  });
+
   it("keeps the cleanup UUID out of fields visible in the public schedule", () => {
     const runId = "eac53db6-16b4-4bd0-877a-e3ed5f4fe2b1";
     const fixtureLabel = "a461a971-dc11-4681-a290-c0bd058d3322";
