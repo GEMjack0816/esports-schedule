@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -237,5 +239,15 @@ describe("manual match cache authoritative version checks", () => {
 
     expect(runtimeSnapshots.get("published-manual-matches-v1:5")?.revision).toBe(5);
     expect(runtimeSnapshots.get("published-manual-matches-v1:4")?.revision).toBe(4);
+  });
+});
+
+describe("manual match cache deployment topology", () => {
+  it("keeps Runtime Cache fencing single-region until cross-region revisions are shared", () => {
+    const config = JSON.parse(readFileSync(resolve(process.cwd(), "vercel.json"), "utf8")) as {
+      regions?: string[];
+    };
+
+    expect(config.regions).toHaveLength(1);
   });
 });
