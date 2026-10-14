@@ -80,6 +80,33 @@ describe("server-paginated schedule pages", () => {
     expect(third.page.nextCursor).toBeNull();
   });
 
+  it("serves consecutive pages from a large tournament snapshot without duplicates", () => {
+    const count = 3_329;
+    const schedule = payload(Array.from({ length: count }, (_, index) => match(
+      `match-${String(index).padStart(4, "0")}`,
+      new Date(Date.UTC(2026, 0, 1, index)).toISOString(),
+    )));
+    const seen: string[] = [];
+    const now = new Date("2026-01-01T00:00:00.000Z");
+    let cursor: string | null = null;
+
+    for (let index = 0; index < 3; index += 1) {
+      const page = createSchedulePage(schedule, query({
+        range: "all",
+        limit: "100",
+        ...(cursor ? { cursor } : {}),
+      }), now);
+      expect(page.page.total).toBe(count);
+      seen.push(...page.matches.map((item) => item.id));
+      cursor = page.page.nextCursor;
+    }
+
+    expect(seen).toHaveLength(300);
+    expect(new Set(seen).size).toBe(300);
+    expect(seen).toEqual(schedule.matches.slice(0, 300).map((item) => item.id));
+    expect(cursor).toBeTruthy();
+  });
+
   it("rejects a continuation cursor when the filtered match snapshot changed", () => {
     const original = payload(Array.from({ length: 4 }, (_, index) => match(
       `m${index}`,
