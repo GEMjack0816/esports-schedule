@@ -78,4 +78,26 @@ describe("verification run cleanup service", () => {
 
     expect(effects.invalidate).toHaveBeenCalledOnce();
   });
+
+  it("does not report verification cleanup success when the Runtime Cache delivery is pending", async () => {
+    const repository = {
+      cleanupAdminVerificationRun: vi.fn().mockResolvedValue({
+        submissions: 1,
+        manualMatches: 1,
+        auditEvents: 2,
+      }),
+    } as unknown as DrizzleReviewRepository;
+    const effects = {
+      synchronize: vi.fn().mockResolvedValue({ cacheSynchronized: false }),
+      invalidate: vi.fn(),
+    };
+
+    await expect(cleanupVerificationRun(
+      "eac53db6-16b4-4bd0-877a-e3ed5f4fe2b1",
+      repository,
+      effects,
+    )).rejects.toThrow("Runtime Cache did not confirm the verification cleanup snapshot.");
+
+    expect(effects.invalidate).toHaveBeenCalledOnce();
+  });
 });

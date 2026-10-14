@@ -42,10 +42,18 @@ const defaultCacheEffects: PublishedManualCacheEffects = {
 async function synchronizeMutationCaches(
   repository: DrizzleReviewRepository,
   effects: PublishedManualCacheEffects,
+  requireConfirmedDelivery = false,
 ): Promise<void> {
   let synchronizationError: unknown;
   try {
-    await effects.synchronize(repository);
+    const result = await effects.synchronize(repository);
+    if (requireConfirmedDelivery
+      && result !== null
+      && typeof result === "object"
+      && "cacheSynchronized" in result
+      && result.cacheSynchronized === false) {
+      synchronizationError = new Error("Runtime Cache did not confirm the verification cleanup snapshot.");
+    }
   } catch (error) {
     synchronizationError = error;
   } finally {
@@ -262,6 +270,6 @@ export async function cleanupVerificationRun(
 ) {
   const result = await repository.cleanupAdminVerificationRun(runId);
   // Always reconcile the runtime fallback, including idempotent retries after a committed delete.
-  await synchronizeMutationCaches(repository, effects);
+  await synchronizeMutationCaches(repository, effects, true);
   return result;
 }
