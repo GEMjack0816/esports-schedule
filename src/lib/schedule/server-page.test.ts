@@ -133,17 +133,37 @@ describe("server-paginated schedule pages", () => {
       match("latest", "2026-03-08T12:00:00.000Z"),
     ]);
     const firstPage = createSchedulePage(schedule, query({ range: "all", limit: "1" }), new Date("2026-03-08T00:00:00.000Z"));
-    const firstCursor = JSON.parse(Buffer.from(firstPage.page.nextCursor ?? "", "base64url").toString("utf8")) as Record<string, unknown>;
-    const cursor = Buffer.from(JSON.stringify({
-      ...firstCursor,
-      dateKey: "2026-03-09",
-      time: Date.parse("2026-03-09T12:00:00.000Z"),
-      id: "after-latest",
-    })).toString("base64url");
+    const firstCursor = JSON.parse(Buffer.from(firstPage.page.nextCursor ?? "", "base64url").toString("utf8")) as [number, string, string];
+    firstCursor[0] = 99;
+    const cursor = Buffer.from(JSON.stringify(firstCursor)).toString("base64url");
     const page = createSchedulePage(schedule, query({ range: "all", cursor }), new Date("2026-03-08T00:00:00.000Z"));
 
     expect(page.matches).toEqual([]);
     expect(page.page.nextCursor).toBeNull();
+  });
+
+  it("accepts an unchanged legacy cursor during rolling deployment", () => {
+    const schedule = payload([
+      match("early", "2026-03-08T10:00:00.000Z"),
+      match("latest", "2026-03-08T12:00:00.000Z"),
+    ]);
+    const firstPage = createSchedulePage(schedule, query({ range: "all", limit: "1" }), new Date("2026-03-08T00:00:00.000Z"));
+    const currentCursor = JSON.parse(Buffer.from(firstPage.page.nextCursor ?? "", "base64url").toString("utf8")) as [number, string, string];
+    const legacyCursor = Buffer.from(JSON.stringify({
+      dateKey: "2026-03-08",
+      time: Date.parse("2026-03-08T10:00:00.000Z"),
+      id: "early",
+      signature: JSON.stringify(["all", "UTC", "all", "all", "all", "", null]),
+      resultSetHash: currentCursor[2],
+    })).toString("base64url");
+
+    const next = createSchedulePage(
+      schedule,
+      query({ range: "all", limit: "1", cursor: legacyCursor }),
+      new Date("2026-03-08T00:00:00.000Z"),
+    );
+
+    expect(next.matches.map((item) => item.id)).toEqual(["latest"]);
   });
 
   it("serializes only the requested slice for a large schedule", () => {
@@ -191,5 +211,32 @@ describe("server-paginated schedule pages", () => {
     expect(() => query({ q: "x".repeat(121) })).toThrow(SchedulePageQueryError);
     expect(() => query({ date: "2026-02-30" })).toThrow(SchedulePageQueryError);
     expect(() => query({ timeZone: "Not/A_Timezone" })).toThrow(SchedulePageQueryError);
+  });
+
+  it("keeps cursors within the request limit for maximum valid search filters", () => {
+    const search = "x".repeat(120);
+    const league = "L".repeat(160);
+    const schedule = payload([
+      match("long-filter-1", "2026-03-08T12:00:00.000Z", {
+        league,
+        homeTeam: { name: search, logo: "" },
+      }),
+      match("long-filter-2", "2026-03-08T13:00:00.000Z", {
+        league,
+        homeTeam: { name: search, logo: "" },
+      }),
+    ]);
+    const filters = { range: "all", limit: "1", q: search, league, timeZone: "UTC" };
+    const first = createSchedulePage(schedule, query(filters), new Date("2026-03-08T00:00:00.000Z"));
+    const cursor = first.page.nextCursor;
+
+    expect(cursor).toBeTruthy();
+    expect(cursor!.length).toBeLessThanOrEqual(512);
+    const next = createSchedulePage(
+      schedule,
+      parseSchedulePageQuery(new URLSearchParams({ ...filters, cursor: cursor! })),
+      new Date("2026-03-08T00:00:00.000Z"),
+    );
+    expect(next.matches.map((item) => item.id)).toEqual(["long-filter-2"]);
   });
 });

@@ -22,13 +22,20 @@ const statuses = new Set<MatchStatus>([
   "scheduled", "running", "finished", "postponed", "cancelled", "forfeit", "unknown",
 ]);
 
-type Cursor = {
+type MatchOrderKey = {
   dateKey: string;
   time: number | null;
   id: string;
+};
+
+type LegacyCursor = MatchOrderKey & {
   signature: string;
   resultSetHash: string;
 };
+
+type DecodedCursor =
+  | { kind: "offset"; offset: number }
+  | { kind: "legacy"; key: MatchOrderKey };
 
 export class SchedulePageQueryError extends Error {
   constructor(readonly code: string) {
@@ -106,6 +113,10 @@ function normalizedQuery(filters: SchedulePageQueryFilters): string {
   ]);
 }
 
+function querySignature(filters: SchedulePageQueryFilters): string {
+  return createHash("sha256").update(normalizedQuery(filters)).digest("base64url");
+}
+
 function dateKeys(now: Date, timeZone: string) {
   const today = dateKeyInTimeZone(now, timeZone);
   // Use calendar arithmetic rather than adding 24-hour durations so DST days
@@ -141,8 +152,8 @@ function searchText(match: EsportsMatch): string {
 }
 
 function compareMatchKeys(
-  first: Pick<Cursor, "dateKey" | "time" | "id">,
-  second: Pick<Cursor, "dateKey" | "time" | "id">,
+  first: MatchOrderKey,
+  second: MatchOrderKey,
   range: ScheduleRangeKey,
 ): number {
   if (first.dateKey !== second.dateKey) {
@@ -159,46 +170,61 @@ function compareMatchKeys(
 function toCursor(
   match: EsportsMatch,
   timeZone: string,
-  signature: string,
-  resultSetHash: string,
   dateKey = matchDateKey(match, timeZone),
-): Cursor {
+): MatchOrderKey {
   const parsed = match.startTimeUtc ? Date.parse(match.startTimeUtc) : Number.NaN;
   return {
     dateKey,
     time: Number.isNaN(parsed) ? null : parsed,
     id: match.id,
-    signature,
-    resultSetHash,
   };
 }
 
-function encodeCursor(cursor: Cursor): string {
-  return Buffer.from(JSON.stringify(cursor)).toString("base64url");
+function encodeCursor(offset: number, signature: string, resultSetHash: string): string {
+  return Buffer.from(JSON.stringify([offset, signature, resultSetHash])).toString("base64url");
 }
 
-function decodeCursor(value: string, signature: string, resultSetHash: string): Cursor {
-  let parsed: Partial<Cursor>;
+function decodeCursor(
+  value: string,
+  signature: string,
+  legacySignature: string,
+  resultSetHash: string,
+): DecodedCursor {
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Partial<Cursor>;
-    if (typeof parsed.dateKey !== "string"
-      || (parsed.dateKey !== "unscheduled" && !validDateKey(parsed.dateKey))
-      || (parsed.time !== null && (typeof parsed.time !== "number" || !Number.isFinite(parsed.time)))
-      || typeof parsed.id !== "string"
-      || parsed.id.length > 240
-      || typeof parsed.resultSetHash !== "string"
-      || !/^[A-Za-z0-9_-]{43}$/.test(parsed.resultSetHash)
-      || parsed.signature !== signature) {
-      throw new Error("invalid cursor");
+    parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
+    if (Array.isArray(parsed)) {
+      if (parsed.length !== 3
+        || !Number.isSafeInteger(parsed[0])
+        || (parsed[0] as number) < 0
+        || parsed[1] !== signature
+        || typeof parsed[2] !== "string"
+        || !/^[A-Za-z0-9_-]{43}$/.test(parsed[2])) {
+        throw new Error("invalid cursor");
+      }
+      if (parsed[2] !== resultSetHash) throw new SchedulePageQueryError("SCHEDULE_CHANGED");
+      return { kind: "offset", offset: parsed[0] as number };
     }
-  } catch {
+
+    if (!parsed || typeof parsed !== "object") throw new Error("invalid cursor");
+    const legacy = parsed as Partial<LegacyCursor>;
+    if (typeof legacy.dateKey !== "string"
+      || (legacy.dateKey !== "unscheduled" && !validDateKey(legacy.dateKey))
+      || (legacy.time !== null && (typeof legacy.time !== "number" || !Number.isFinite(legacy.time)))
+      || typeof legacy.id !== "string"
+      || legacy.id.length > 240
+      || typeof legacy.resultSetHash !== "string"
+      || !/^[A-Za-z0-9_-]{43}$/.test(legacy.resultSetHash)
+      || legacy.signature !== legacySignature) throw new Error("invalid cursor");
+    if (legacy.resultSetHash !== resultSetHash) throw new SchedulePageQueryError("SCHEDULE_CHANGED");
+    return {
+      kind: "legacy",
+      key: { dateKey: legacy.dateKey, time: legacy.time ?? null, id: legacy.id },
+    };
+  } catch (error) {
+    if (error instanceof SchedulePageQueryError) throw error;
     throw new SchedulePageQueryError("INVALID_CURSOR");
   }
-
-  if (parsed.resultSetHash !== resultSetHash) {
-    throw new SchedulePageQueryError("SCHEDULE_CHANGED");
-  }
-  return parsed as Cursor;
 }
 
 export function createSchedulePage(
@@ -222,8 +248,9 @@ export function createSchedulePage(
   let liveCount = 0;
   let upcomingCount = 0;
 
-  const matchingEntries: Array<{ match: EsportsMatch; cursor: Cursor }> = [];
-  const signature = normalizedQuery(filters);
+  const matchingEntries: Array<{ match: EsportsMatch; cursor: MatchOrderKey }> = [];
+  const legacySignature = normalizedQuery(filters);
+  const signature = querySignature(filters);
   for (const match of payload.matches) {
     const key = matchDateKey(match, query.timeZone);
     if (key === dates.today) rangeCounts.today += 1;
@@ -241,7 +268,7 @@ export function createSchedulePage(
     if (matchesFilters) {
       matchingEntries.push({
         match,
-        cursor: toCursor(match, query.timeZone, signature, "", key),
+        cursor: toCursor(match, query.timeZone, key),
       });
     }
   }
@@ -251,23 +278,26 @@ export function createSchedulePage(
     .update(JSON.stringify(matchingEntries.map((entry) => entry.match)))
     .digest("base64url");
 
-  const cursor = query.cursor ? decodeCursor(query.cursor, signature, resultSetHash) : null;
-  const cursorIndex = cursor
-    ? matchingEntries.findIndex((entry) => compareMatchKeys(entry.cursor, cursor, query.range) > 0)
-    : 0;
+  const cursor = query.cursor
+    ? decodeCursor(query.cursor, signature, legacySignature, resultSetHash)
+    : null;
+  const cursorIndex = !cursor
+    ? 0
+    : cursor.kind === "offset"
+      ? cursor.offset
+      : matchingEntries.findIndex((entry) => compareMatchKeys(entry.cursor, cursor.key, query.range) > 0);
   const startIndex = cursorIndex < 0 ? matchingEntries.length : cursorIndex;
   const selected = matchingEntries.slice(startIndex, startIndex + query.limit);
   const matches = selected.map((entry) => entry.match);
   const hasMore = startIndex + selected.length < matchingEntries.length;
-  const last = selected.at(-1);
 
   return {
     ...payload,
     matches,
     page: {
       limit: query.limit,
-      nextCursor: hasMore && last
-        ? encodeCursor({ ...last.cursor, resultSetHash })
+      nextCursor: hasMore
+        ? encodeCursor(startIndex + selected.length, signature, resultSetHash)
         : null,
       total: matchingEntries.length,
     },
