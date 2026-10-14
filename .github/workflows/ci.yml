@@ -68,5 +68,35 @@ jobs:
       - name: Build the production bundle
         run: npm run build
 
+      - name: Install Chromium for range-control browser regression
+        run: npx playwright-core install --with-deps chromium
+
+      - name: Verify range controls in a fresh desktop and mobile browser
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: |
+          node node_modules/next/dist/bin/next start --hostname 127.0.0.1 > /dev/null 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:3000/ -o /dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Next.js server did not become ready for the range-control regression."
+            exit 1
+          fi
+
+          npm run verify:range-controls -- http://127.0.0.1:3000
+
       - name: Scan client assets for server credentials
         run: npm run test:client-bundle

@@ -12,7 +12,15 @@ if (
 }
 
 let browser;
-for (const executablePath of [
+try {
+  // CI installs the Playwright-managed Chromium; use it on Linux/macOS and
+  // prefer it locally whenever it is available.
+  browser = await chromium.launch({ headless: true });
+} catch {
+  // playwright-core does not download a browser automatically. On Windows,
+  // reuse an installed browser without ever attaching to a user profile.
+}
+for (const executablePath of browser ? [] : [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
 ]) {
