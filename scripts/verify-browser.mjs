@@ -4,13 +4,22 @@ import { chromium } from "playwright-core";
 
 const baseUrl = process.argv[2] || "http://localhost:3000";
 const executableCandidates = [
+  process.env.CHROME_PATH,
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-];
+].filter(Boolean);
 
 let browser;
 let launchError;
+if (!process.env.CHROME_PATH) {
+  try {
+    browser = await chromium.launch({ headless: true });
+  } catch (error) {
+    launchError = error;
+  }
+}
 for (const executablePath of executableCandidates) {
+  if (browser) break;
   try {
     browser = await chromium.launch({ executablePath, headless: true });
     break;
@@ -35,12 +44,14 @@ for (const profile of [
   const criticalRequestFailures = [];
   const optionalResourceFailures = [];
   const browserResourceWarnings = [];
+  let expectScheduleChanged = false;
   const criticalPaths = ["/api/matches", "/api/matches/page", "/api/version", "/api/health/data-coverage"];
   const auditUrl = new URL(baseUrl);
   auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const text = message.text();
+    if (expectScheduleChanged && /status of 409 \(Conflict\)/i.test(text)) return;
     if (/^Failed to load resource: net::ERR_/.test(text)) {
       browserResourceWarnings.push(text);
       return;
@@ -66,6 +77,7 @@ for (const profile of [
       candidateUrl.origin === auditUrl.origin
       && criticalPaths.includes(candidateUrl.pathname)
       && candidate.status() >= 400
+      && !(candidateUrl.pathname === "/api/matches/page" && candidate.status() === 409 && expectScheduleChanged)
     ) {
       criticalRequestFailures.push(`${candidate.request().method()} ${candidateUrl.pathname} HTTP ${candidate.status()}`);
     }
@@ -166,6 +178,87 @@ for (const profile of [
   } catch (error) {
     errors.push(`version-health:${error instanceof Error ? error.message : "request failed"}`);
   }
+
+  function cursorRegressionMatch(id, teamName) {
+    return {
+      id,
+      provider: "pandascore",
+      providerMatchId: id,
+      game: "lol",
+      tournament: "Cursor consistency test",
+      league: "LCK",
+      stage: null,
+      homeTeam: { name: teamName, logo: "/team-placeholder.svg" },
+      awayTeam: { name: `${teamName} opponent`, logo: "/team-placeholder.svg" },
+      homeScore: null,
+      awayScore: null,
+      bestOf: 3,
+      status: "scheduled",
+      startTimeUtc: "2026-10-14T12:00:00.000Z",
+      streams: [],
+      lastUpdatedAt: "2026-10-14T12:00:00.000Z",
+    };
+  }
+  let paginationRestartWorked = false;
+  await page.route("**/api/matches/page?*", async (route) => {
+    const url = new URL(route.request().url());
+    const regressionQuery = url.searchParams.get("range") === "all"
+      && url.searchParams.get("game") === "all"
+      && url.searchParams.get("league") === "all"
+      && url.searchParams.get("status") === "all"
+      && !url.searchParams.get("q")
+      && !url.searchParams.has("date");
+    if (!regressionQuery) return route.continue();
+
+    if (url.searchParams.has("cursor")) {
+      expectScheduleChanged = true;
+      return route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "SCHEDULE_CHANGED" }),
+      });
+    }
+
+    const restarted = expectScheduleChanged;
+    const matches = [cursorRegressionMatch(
+      restarted ? "fresh-match" : "old-match",
+      restarted ? "Fresh Snapshot Team" : "Old Snapshot Team",
+    )];
+    const body = {
+      ...apiBody,
+      matches,
+      page: {
+        limit: Number(url.searchParams.get("limit")) || 50,
+        total: restarted ? 1 : 2,
+        nextCursor: restarted ? null : "fixture-stale-cursor",
+      },
+      rangeCounts: { today: 1, tomorrow: 0, seven: 1, history: 0, all: restarted ? 1 : 2 },
+      liveCount: 0,
+      upcomingCount: 1,
+      leagues: ["LCK"],
+      timeZone: url.searchParams.get("timeZone") || "UTC",
+    };
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  });
+  await page.getByRole("tab", { name: /全部收录/ }).click();
+  await page.waitForFunction(() => document.querySelector(".match-list")?.getAttribute("aria-busy") === "false");
+  await page.getByText("Old Snapshot Team", { exact: true }).waitFor();
+  const conflictResponse = page.waitForResponse((candidate) => {
+    const url = new URL(candidate.url());
+    return url.pathname === "/api/matches/page" && url.searchParams.has("cursor") && candidate.status() === 409;
+  });
+  await page.getByRole("button", { name: /加载更多/ }).click();
+  await conflictResponse;
+  await page.getByText("Fresh Snapshot Team", { exact: true }).waitFor();
+  const paginationNotice = page.locator('.data-notice[role="status"]').filter({ hasText: "已从最新结果重新载入" });
+  await paginationNotice.waitFor();
+  const paginationNoticeText = await paginationNotice.innerText();
+  const afterRestartText = (await page.locator(".match-card").allTextContents()).join(" ");
+  paginationRestartWorked = paginationNoticeText.includes("已从最新结果重新载入")
+    && afterRestartText.includes("Fresh Snapshot Team")
+    && !afterRestartText.includes("Old Snapshot Team");
+  expectScheduleChanged = false;
+
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
   const adminResponse = await page.goto(`${baseUrl}/admin`, {
@@ -227,6 +320,7 @@ for (const profile of [
     anonymousAdminContainsPrivateData:
       adminBody.includes("最近操作") || adminBody.includes("待审核提交"),
     anonymousAdminApiStatus: adminLegacyResponse.status(),
+    paginationRestartWorked,
     errors,
     screenshot,
   });
@@ -261,6 +355,7 @@ for (const result of results) {
   if (!result.anonymousAdminAtLogin) failures.push(`${prefix}: anonymous admin page was not redirected to login`);
   if (result.anonymousAdminContainsPrivateData) failures.push(`${prefix}: anonymous admin page exposed private data`);
   if (result.anonymousAdminApiStatus !== 401) failures.push(`${prefix}: anonymous admin API HTTP ${result.anonymousAdminApiStatus}`);
+  if (!result.paginationRestartWorked) failures.push(`${prefix}: stale pagination did not restart from the latest result set`);
   failures.push(...result.errors.map((error) => `${prefix}: ${error}`));
   failures.push(...result.criticalRequestFailures.map((error) => `${prefix}: ${error}`));
 }

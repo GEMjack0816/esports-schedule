@@ -1,5 +1,6 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
 import { addDaysKey, dateKeyInTimeZone } from "./time";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "./types";
 import type {
@@ -21,7 +22,13 @@ const statuses = new Set<MatchStatus>([
   "scheduled", "running", "finished", "postponed", "cancelled", "forfeit", "unknown",
 ]);
 
-type Cursor = { dateKey: string; time: number | null; id: string; signature: string };
+type Cursor = {
+  dateKey: string;
+  time: number | null;
+  id: string;
+  signature: string;
+  resultSetHash: string;
+};
 
 export class SchedulePageQueryError extends Error {
   constructor(readonly code: string) {
@@ -149,13 +156,20 @@ function compareMatchKeys(
   return timeOrder || first.id.localeCompare(second.id);
 }
 
-function toCursor(match: EsportsMatch, timeZone: string, signature: string, dateKey = matchDateKey(match, timeZone)): Cursor {
+function toCursor(
+  match: EsportsMatch,
+  timeZone: string,
+  signature: string,
+  resultSetHash: string,
+  dateKey = matchDateKey(match, timeZone),
+): Cursor {
   const parsed = match.startTimeUtc ? Date.parse(match.startTimeUtc) : Number.NaN;
   return {
     dateKey,
     time: Number.isNaN(parsed) ? null : parsed,
     id: match.id,
     signature,
+    resultSetHash,
   };
 }
 
@@ -163,21 +177,28 @@ function encodeCursor(cursor: Cursor): string {
   return Buffer.from(JSON.stringify(cursor)).toString("base64url");
 }
 
-function decodeCursor(value: string, signature: string): Cursor {
+function decodeCursor(value: string, signature: string, resultSetHash: string): Cursor {
+  let parsed: Partial<Cursor>;
   try {
-    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Partial<Cursor>;
+    parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Partial<Cursor>;
     if (typeof parsed.dateKey !== "string"
       || (parsed.dateKey !== "unscheduled" && !validDateKey(parsed.dateKey))
       || (parsed.time !== null && (typeof parsed.time !== "number" || !Number.isFinite(parsed.time)))
       || typeof parsed.id !== "string"
       || parsed.id.length > 240
+      || typeof parsed.resultSetHash !== "string"
+      || !/^[A-Za-z0-9_-]{43}$/.test(parsed.resultSetHash)
       || parsed.signature !== signature) {
       throw new Error("invalid cursor");
     }
-    return parsed as Cursor;
   } catch {
     throw new SchedulePageQueryError("INVALID_CURSOR");
   }
+
+  if (parsed.resultSetHash !== resultSetHash) {
+    throw new SchedulePageQueryError("SCHEDULE_CHANGED");
+  }
+  return parsed as Cursor;
 }
 
 export function createSchedulePage(
@@ -201,11 +222,10 @@ export function createSchedulePage(
   let liveCount = 0;
   let upcomingCount = 0;
 
-  const matchingEntries: Array<{ match: EsportsMatch; cursor: Cursor }> = [];
+  const matchingEntries: EsportsMatch[] = [];
   const signature = normalizedQuery(filters);
   for (const match of payload.matches) {
     const key = matchDateKey(match, query.timeZone);
-    const cursor = toCursor(match, query.timeZone, signature, key);
     if (key === dates.today) rangeCounts.today += 1;
     if (key === dates.tomorrow) rangeCounts.tomorrow += 1;
     if (key >= dates.today && key <= dates.sevenDaysOut) rangeCounts.seven += 1;
@@ -218,18 +238,29 @@ export function createSchedulePage(
       && (filters.league === "all" || match.league === filters.league)
       && (filters.status === "all" || match.status === filters.status)
       && (!filters.query.trim() || searchText(match).includes(filters.query.trim().toLocaleLowerCase("zh-CN")));
-    if (matchesFilters) matchingEntries.push({ match, cursor });
+    if (matchesFilters) matchingEntries.push(match);
   }
 
-  matchingEntries.sort((a, b) => compareMatchKeys(a.cursor, b.cursor, query.range));
+  matchingEntries.sort((a, b) => compareMatchKeys(
+    toCursor(a, query.timeZone, signature, ""),
+    toCursor(b, query.timeZone, signature, ""),
+    query.range,
+  ));
+  const resultSetHash = createHash("sha256")
+    .update(JSON.stringify(matchingEntries))
+    .digest("base64url");
 
-  const cursor = query.cursor ? decodeCursor(query.cursor, signature) : null;
+  const cursor = query.cursor ? decodeCursor(query.cursor, signature, resultSetHash) : null;
   const cursorIndex = cursor
-    ? matchingEntries.findIndex((entry) => compareMatchKeys(entry.cursor, cursor, query.range) > 0)
+    ? matchingEntries.findIndex((match) => compareMatchKeys(
+      toCursor(match, query.timeZone, signature, resultSetHash),
+      cursor,
+      query.range,
+    ) > 0)
     : 0;
   const startIndex = cursorIndex < 0 ? matchingEntries.length : cursorIndex;
   const selected = matchingEntries.slice(startIndex, startIndex + query.limit);
-  const matches = selected.map((entry) => entry.match);
+  const matches = selected;
   const hasMore = startIndex + selected.length < matchingEntries.length;
   const last = selected.at(-1);
 
@@ -238,7 +269,9 @@ export function createSchedulePage(
     matches,
     page: {
       limit: query.limit,
-      nextCursor: hasMore && last ? encodeCursor(last.cursor) : null,
+      nextCursor: hasMore && last
+        ? encodeCursor(toCursor(last, query.timeZone, signature, resultSetHash))
+        : null,
       total: matchingEntries.length,
     },
     rangeCounts,

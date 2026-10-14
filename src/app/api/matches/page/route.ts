@@ -24,7 +24,17 @@ export async function GET(request: Request) {
     });
   }
 
-  const page = createSchedulePage(payload, query);
+  let page: ReturnType<typeof createSchedulePage>;
+  try {
+    page = createSchedulePage(payload, query);
+  } catch (error) {
+    if (error instanceof SchedulePageQueryError) {
+      const status = error.code === "SCHEDULE_CHANGED" ? 409 : 400;
+      return Response.json({ error: error.code }, { status, headers: { "Cache-Control": "no-store" } });
+    }
+    throw error;
+  }
+
   return Response.json(page, {
     headers: {
       "Cache-Control": "private, no-cache, no-store, max-age=0, must-revalidate",

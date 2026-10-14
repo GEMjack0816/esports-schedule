@@ -80,14 +80,38 @@ describe("server-paginated schedule pages", () => {
     expect(third.page.nextCursor).toBeNull();
   });
 
+  it("rejects a continuation cursor when the filtered match snapshot changed", () => {
+    const original = payload(Array.from({ length: 4 }, (_, index) => match(
+      `m${index}`,
+      `2026-03-${String(index + 8).padStart(2, "0")}T12:00:00.000Z`,
+    )));
+    const first = createSchedulePage(original, query({ range: "all", limit: "2" }), new Date("2026-03-08T00:00:00.000Z"));
+    const updated = payload([
+      match("inserted-before-cursor", "2026-03-08T10:00:00.000Z"),
+      ...original.matches,
+    ]);
+
+    try {
+      createSchedulePage(updated, query({ range: "all", limit: "2", cursor: first.page.nextCursor ?? "" }), new Date("2026-03-08T00:00:00.000Z"));
+      expect.fail("a cursor from the previous match set must be rejected");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SchedulePageQueryError);
+      expect((error as SchedulePageQueryError).code).toBe("SCHEDULE_CHANGED");
+    }
+  });
+
   it("returns an empty final page instead of restarting when a cursor is beyond the last row", () => {
-    const schedule = payload([match("latest", "2026-03-08T12:00:00.000Z")]);
-    const signature = JSON.stringify(["all", "UTC", "all", "all", "all", "", null]);
+    const schedule = payload([
+      match("early", "2026-03-08T10:00:00.000Z"),
+      match("latest", "2026-03-08T12:00:00.000Z"),
+    ]);
+    const firstPage = createSchedulePage(schedule, query({ range: "all", limit: "1" }), new Date("2026-03-08T00:00:00.000Z"));
+    const firstCursor = JSON.parse(Buffer.from(firstPage.page.nextCursor ?? "", "base64url").toString("utf8")) as Record<string, unknown>;
     const cursor = Buffer.from(JSON.stringify({
+      ...firstCursor,
       dateKey: "2026-03-09",
       time: Date.parse("2026-03-09T12:00:00.000Z"),
       id: "after-latest",
-      signature,
     })).toString("base64url");
     const page = createSchedulePage(schedule, query({ range: "all", cursor }), new Date("2026-03-08T00:00:00.000Z"));
 

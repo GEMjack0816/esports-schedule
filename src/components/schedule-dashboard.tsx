@@ -176,6 +176,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [requestError, setRequestError] = useState(false);
+  const [paginationRestartedFor, setPaginationRestartedFor] = useState<string | null>(null);
   const activeController = useRef<AbortController | null>(null);
   const requestSerial = useRef(0);
   const initialRequestSkipped = useRef(false);
@@ -285,7 +286,10 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
       const response = await fetch(pageUrl(requestQuery), { cache: "no-store", signal: controller.signal });
       if (!response.ok) throw new Error("schedule page request failed");
       const next = await response.json() as SchedulePageData;
-      if (serial === requestSerial.current && requestKey === currentRequestKey.current) setPayload(next);
+      if (serial === requestSerial.current && requestKey === currentRequestKey.current) {
+        setPayload(next);
+        setPaginationRestartedFor(null);
+      }
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")
         && serial === requestSerial.current && requestKey === currentRequestKey.current) setRequestError(true);
@@ -308,6 +312,24 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
     setRequestError(false);
     try {
       const response = await fetch(pageUrl({ ...requestQuery, cursor }), { cache: "no-store", signal: controller.signal });
+      if (response.status === 409) {
+        const body = await response.json() as { error?: string };
+        if (body.error !== "SCHEDULE_CHANGED") throw new Error("schedule page changed unexpectedly");
+        if (serial !== requestSerial.current || requestKey !== currentRequestKey.current) return;
+
+        const restartedResponse = await fetch(pageUrl({ ...requestQuery, cursor: null }), {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!restartedResponse.ok) throw new Error("schedule page restart failed");
+        const restarted = await restartedResponse.json() as SchedulePageData;
+        if (serial === requestSerial.current && requestKey === currentRequestKey.current) {
+          setPayload(restarted);
+          setPaginationRestartedFor(requestKey);
+          setRequestError(false);
+        }
+        return;
+      }
       if (!response.ok) throw new Error("schedule page request failed");
       const next = await response.json() as SchedulePageData;
       if (serial === requestSerial.current && requestKey === currentRequestKey.current) {
@@ -426,6 +448,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
 
           <div className="match-list" aria-live="polite" aria-busy={loading || loadingMore}>
             {requestError && <div className="data-notice" role="alert">赛程筛选暂时失败，已保留当前结果，请重试。</div>}
+            {paginationRestartedFor === requestKey && <div className="data-notice" role="status">赛程在浏览期间更新，已从最新结果重新载入。</div>}
             {loading && <div className="results-meta" role="status">正在更新筛选结果…</div>}
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
               <section className="date-group" key={key}>
