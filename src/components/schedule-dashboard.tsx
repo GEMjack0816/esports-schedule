@@ -119,6 +119,7 @@ function TeamLogo({ src, label }: { src: string; label: string }) {
   const attemptKey = `${current}:${failure}:${remoteRetries}`;
 
   useEffect(() => {
+    if (failure === "all") return;
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
     if (typeof IntersectionObserver === "undefined") {
@@ -134,7 +135,7 @@ function TeamLogo({ src, label }: { src: string; label: string }) {
     }, { rootMargin: "200px" });
     observer.observe(wrapper);
     return () => observer.disconnect();
-  }, []);
+  }, [failure]);
 
   const failCurrentAttempt = useCallback((timedOut = false) => {
     if (current === "/team-placeholder.svg") {
