@@ -636,12 +636,11 @@ export class DrizzleReviewRepository {
     manualMatches: number;
     auditEvents: number;
   }> {
-    const runLeague = `Codex isolated review ${runId}`;
     const runNote = `verify-admin:${runId}`;
     try {
       return await getDatabase().transaction(async (tx) => {
         const submissions = await tx.select({ id: matchSubmissions.id }).from(matchSubmissions)
-          .where(or(eq(matchSubmissions.league, runLeague), eq(matchSubmissions.notes, runNote)));
+          .where(eq(matchSubmissions.notes, runNote));
         const submissionIds = submissions.map((row) => row.id);
         if (submissionIds.length === 0) {
           return { submissions: 0, manualMatches: 0, auditEvents: 0 };

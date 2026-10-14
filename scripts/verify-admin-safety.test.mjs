@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertAdminVerifyDeployment,
+  buildVerificationRunMarkers,
   parseAdminVerifyConfiguration,
 } from "./verify-admin-safety.mjs";
 
@@ -22,6 +23,20 @@ const deployment = {
 };
 
 describe("verify:admin target safety", () => {
+  it("keeps the cleanup UUID out of fields visible in the public schedule", () => {
+    const runId = "eac53db6-16b4-4bd0-877a-e3ed5f4fe2b1";
+    const fixtureLabel = "a461a971-dc11-4681-a290-c0bd058d3322";
+    const markers = buildVerificationRunMarkers(runId, fixtureLabel);
+
+    expect(markers.notes).toBe(`verify-admin:${runId}`);
+    expect([
+      markers.league,
+      ...markers.approvedTeams,
+      ...markers.rejectedTeams,
+    ].join(" ")).not.toContain(runId);
+    expect(() => buildVerificationRunMarkers(runId, runId)).toThrow(/distinct UUIDs/);
+  });
+
   it("requires an exact HTTPS Preview origin allowlist", () => {
     expect(expected.origin).toBe(origin);
     expect(() => parseAdminVerifyConfiguration({

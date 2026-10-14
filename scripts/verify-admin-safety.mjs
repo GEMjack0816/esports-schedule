@@ -1,4 +1,17 @@
 const SHA_PATTERN = /^[a-f0-9]{40}$/i;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function buildVerificationRunMarkers(runId, fixtureLabel) {
+  if (!UUID_PATTERN.test(runId) || !UUID_PATTERN.test(fixtureLabel) || runId === fixtureLabel) {
+    throw new Error("Verification run and public fixture markers must be distinct UUIDs.");
+  }
+  return {
+    league: `Codex isolated review ${fixtureLabel}`,
+    notes: `verify-admin:${runId}`,
+    approvedTeams: [`Approval A ${fixtureLabel}`, `Approval B ${fixtureLabel}`],
+    rejectedTeams: [`Reject A ${fixtureLabel}`, `Reject B ${fixtureLabel}`],
+  };
+}
 
 function parseHttpsOrigin(value, label) {
   let url;

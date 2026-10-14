@@ -522,15 +522,19 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
 
   it("removes only one verification run and its published matches and audit events atomically", async () => {
     const runId = randomUUID();
-    const runLeague = `Codex isolated review ${runId}`;
+    const fixtureLabel = randomUUID();
+    const runLeague = `Codex isolated review ${fixtureLabel}`;
     const runNote = `verify-admin:${runId}`;
     const approvedInput = { ...submission(`verify-approved-${runId}`), league: runLeague, notes: runNote };
     const rejectedInput = { ...submission(`verify-rejected-${runId}`), league: runLeague, notes: runNote };
+    const sameLeagueInput = { ...submission(`verify-same-league-${randomUUID()}`), league: runLeague };
     const unrelatedInput = submission(`verify-unrelated-${runId}`);
     const approvedId = randomUUID();
     const rejectedId = randomUUID();
+    const sameLeagueId = randomUUID();
     const unrelated = await create(`verify-unrelated-${runId}`);
-    submissionIds.push(approvedId, rejectedId);
+    submissionIds.push(approvedId, rejectedId, sameLeagueId);
+    await repository.createSubmission(sameLeagueInput, { id: sameLeagueId });
 
     const approved = await repository.createSubmission(approvedInput, { id: approvedId });
     const publishedMatch = await repository.approveSubmission(
@@ -585,6 +589,8 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect(expectedManualCleanup).toHaveLength(1);
     expect(await cleanup`select id from match_submissions where id = any(${[approvedId, rejectedId]}::uuid[])`)
       .toHaveLength(0);
+    expect(await cleanup`select id from match_submissions where id = ${sameLeagueId}::uuid`)
+      .toHaveLength(1);
     expect(await cleanup`select id from published_manual_matches where id = ${publishedMatch.id}::uuid`)
       .toHaveLength(0);
     expect(await cleanup`

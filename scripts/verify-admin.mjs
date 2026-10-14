@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { chromium } from "playwright-core";
 import {
   assertAdminVerifyDeployment,
+  buildVerificationRunMarkers,
   parseAdminVerifyConfiguration,
 } from "./verify-admin-safety.mjs";
 
@@ -101,10 +102,9 @@ async function runVerification() {
   }
 
   const runId = randomUUID();
-  const league = `Codex isolated review ${runId}`;
-  const notes = `verify-admin:${runId}`;
-  const approvedTeams = [`Approval A ${runId}`, `Approval B ${runId}`];
-  const rejectedTeams = [`Reject A ${runId}`, `Reject B ${runId}`];
+  // Keep the cleanup capability out of fields shown in the public schedule.
+  const fixtureLabel = randomUUID();
+  const { league, notes, approvedTeams, rejectedTeams } = buildVerificationRunMarkers(runId, fixtureLabel);
   const startTime = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   let browser;
   let context;
