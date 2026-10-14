@@ -222,7 +222,7 @@ export function createSchedulePage(
   let liveCount = 0;
   let upcomingCount = 0;
 
-  const matchingEntries: EsportsMatch[] = [];
+  const matchingEntries: Array<{ match: EsportsMatch; cursor: Cursor }> = [];
   const signature = normalizedQuery(filters);
   for (const match of payload.matches) {
     const key = matchDateKey(match, query.timeZone);
@@ -238,29 +238,26 @@ export function createSchedulePage(
       && (filters.league === "all" || match.league === filters.league)
       && (filters.status === "all" || match.status === filters.status)
       && (!filters.query.trim() || searchText(match).includes(filters.query.trim().toLocaleLowerCase("zh-CN")));
-    if (matchesFilters) matchingEntries.push(match);
+    if (matchesFilters) {
+      matchingEntries.push({
+        match,
+        cursor: toCursor(match, query.timeZone, signature, "", key),
+      });
+    }
   }
 
-  matchingEntries.sort((a, b) => compareMatchKeys(
-    toCursor(a, query.timeZone, signature, ""),
-    toCursor(b, query.timeZone, signature, ""),
-    query.range,
-  ));
+  matchingEntries.sort((first, second) => compareMatchKeys(first.cursor, second.cursor, query.range));
   const resultSetHash = createHash("sha256")
-    .update(JSON.stringify(matchingEntries))
+    .update(JSON.stringify(matchingEntries.map((entry) => entry.match)))
     .digest("base64url");
 
   const cursor = query.cursor ? decodeCursor(query.cursor, signature, resultSetHash) : null;
   const cursorIndex = cursor
-    ? matchingEntries.findIndex((match) => compareMatchKeys(
-      toCursor(match, query.timeZone, signature, resultSetHash),
-      cursor,
-      query.range,
-    ) > 0)
+    ? matchingEntries.findIndex((entry) => compareMatchKeys(entry.cursor, cursor, query.range) > 0)
     : 0;
   const startIndex = cursorIndex < 0 ? matchingEntries.length : cursorIndex;
   const selected = matchingEntries.slice(startIndex, startIndex + query.limit);
-  const matches = selected;
+  const matches = selected.map((entry) => entry.match);
   const hasMore = startIndex + selected.length < matchingEntries.length;
   const last = selected.at(-1);
 
@@ -270,7 +267,7 @@ export function createSchedulePage(
     page: {
       limit: query.limit,
       nextCursor: hasMore && last
-        ? encodeCursor(toCursor(last, query.timeZone, signature, resultSetHash))
+        ? encodeCursor({ ...last.cursor, resultSetHash })
         : null,
       total: matchingEntries.length,
     },
