@@ -1,14 +1,16 @@
 import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright-core";
+import { safeRequestPath, summarizeBrowserDiagnostic, summarizeRequestFailure } from "./verification-diagnostics.mjs";
 
+let browser;
+try {
 const baseUrl = process.argv[2] || "http://localhost:3000";
 const executableCandidates = [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
 ];
 
-let browser;
 let launchError;
 for (const executablePath of executableCandidates) {
   try {
@@ -42,23 +44,23 @@ for (const profile of [
     if (message.type() !== "error") return;
     const text = message.text();
     if (/^Failed to load resource: net::ERR_/.test(text)) {
-      browserResourceWarnings.push(text);
+      browserResourceWarnings.push(summarizeBrowserDiagnostic("resource"));
       return;
     }
-    errors.push(`console:${text}`);
+    errors.push(summarizeBrowserDiagnostic("console"));
   });
-  page.on("pageerror", (error) => errors.push(`page:${error.message}`));
+  page.on("pageerror", () => errors.push(summarizeBrowserDiagnostic("page")));
   page.on("requestfailed", (request) => {
     const failedUrl = new URL(request.url());
     if (request.failure()?.errorText === "net::ERR_ABORTED") {
-      optionalResourceFailures.push(`${request.method()} ${failedUrl.pathname} aborted`);
+      optionalResourceFailures.push(`${request.method()} ${safeRequestPath(request.url())} aborted`);
       return;
     }
     if (failedUrl.origin !== auditUrl.origin && request.resourceType() === "image") {
-      optionalResourceFailures.push(`${request.method()} ${failedUrl.origin}${failedUrl.pathname}`);
+      optionalResourceFailures.push("external image request failed");
       return;
     }
-    errors.push(`request:${request.method()} ${request.url()}`);
+    errors.push(`request:${summarizeRequestFailure(request.method(), request.url(), request.failure()?.errorText)}`);
   });
   page.on("response", (candidate) => {
     const candidateUrl = new URL(candidate.url());
@@ -149,8 +151,8 @@ for (const profile of [
         { status: healthResponse.status, body: await healthResponse.json() },
       ];
     });
-  } catch (error) {
-    errors.push(`version-health:${error instanceof Error ? error.message : "request failed"}`);
+  } catch {
+    errors.push(summarizeBrowserDiagnostic("version-health"));
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
@@ -185,7 +187,7 @@ for (const profile of [
     gameFilterCounts,
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
-    refreshedApiUrl: apiResponse.url(),
+    refreshedApiPath: safeRequestPath(apiResponse.url()),
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
     refreshedApiStale: apiBody.stale,
@@ -256,3 +258,12 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log("Browser verification passed.");
+} catch {
+  try {
+    await browser?.close();
+  } catch {
+    // Keep cleanup failures out of verifier output too.
+  }
+  console.error("Browser verification failed; details redacted.");
+  process.exitCode = 1;
+}
