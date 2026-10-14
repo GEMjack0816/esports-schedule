@@ -291,6 +291,11 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
   async function refreshSchedule() {
     setRefreshing(true);
     setLoading(true);
+    // A refresh supersedes any in-flight pagination request. Its finally block
+    // is intentionally guarded by the request serial, so release the pagination
+    // state here rather than leaving the Load More control stuck as busy.
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
     const serial = ++requestSerial.current;
     const controller = new AbortController();
     activeController.current?.abort();

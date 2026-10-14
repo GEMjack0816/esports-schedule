@@ -46,6 +46,10 @@ for (const profile of [
   const browserResourceWarnings = [];
   let expectScheduleChanged = false;
   let failNextCs2Filter = false;
+  let delayNextPaginationResponse = false;
+  let delayedPaginationRequestStarted = false;
+  let serveRefreshAfterPagination = false;
+  let returnNextPageAfterRefresh = false;
   let expectedFilterFailureResponse = false;
   let expectedFilterFailureConsole = false;
   const criticalPaths = ["/api/matches", "/api/matches/page", "/api/version", "/api/health/data-coverage"];
@@ -211,6 +215,7 @@ for (const profile of [
     };
   }
   let paginationRestartWorked = false;
+  let refreshRestoredPagination = false;
   let failedFilterRetainedResultsSafely = false;
   await page.route("**/api/matches/page?*", async (route) => {
     const url = new URL(route.request().url());
@@ -222,6 +227,54 @@ for (const profile of [
         status: 503,
         contentType: "application/json",
         body: JSON.stringify({ error: "TEMPORARILY_UNAVAILABLE" }),
+      });
+    }
+    if (url.searchParams.has("cursor") && delayNextPaginationResponse && !delayedPaginationRequestStarted) {
+      delayedPaginationRequestStarted = true;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      try {
+        return await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ...apiBody, matches: [], page: { limit: 50, total: 2, nextCursor: "unused-cursor" } }),
+        });
+      } catch {
+        // The browser should abort this request when Refresh supersedes it.
+        return;
+      }
+    }
+    if (url.searchParams.has("cursor") && returnNextPageAfterRefresh) {
+      returnNextPageAfterRefresh = false;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...apiBody,
+          matches: [cursorRegressionMatch("recovered-page-match", "Recovered Page Team")],
+          page: { limit: 50, total: 2, nextCursor: null },
+          rangeCounts: { today: 1, tomorrow: 0, seven: 1, history: 0, all: 2 },
+          liveCount: 0,
+          upcomingCount: 1,
+          leagues: ["LCK"],
+          timeZone: url.searchParams.get("timeZone") || "UTC",
+        }),
+      });
+    }
+    if (!url.searchParams.has("cursor") && serveRefreshAfterPagination) {
+      serveRefreshAfterPagination = false;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...apiBody,
+          matches: [cursorRegressionMatch("refreshed-match", "Refreshed Snapshot Team")],
+          page: { limit: 50, total: 2, nextCursor: "fixture-after-refresh" },
+          rangeCounts: { today: 1, tomorrow: 0, seven: 1, history: 0, all: 2 },
+          liveCount: 0,
+          upcomingCount: 1,
+          leagues: ["LCK"],
+          timeZone: url.searchParams.get("timeZone") || "UTC",
+        }),
       });
     }
     const regressionQuery = url.searchParams.get("range") === "all"
@@ -281,6 +334,37 @@ for (const profile of [
     && !afterRestartText.includes("Old Snapshot Team");
   expectScheduleChanged = false;
 
+  // A manual refresh cancels an in-flight Load More request. Verify the
+  // canceled request cannot leave pagination permanently marked as busy.
+  await page.waitForFunction(() => document.querySelector(".match-list")?.getAttribute("aria-busy") === "false");
+  await page.getByText("Fresh Snapshot Team", { exact: true }).waitFor();
+  delayNextPaginationResponse = true;
+  const delayedPageRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/matches/page" && url.searchParams.has("cursor");
+  });
+  await page.getByRole("button", { name: /加载更多/ }).click();
+  await delayedPageRequest;
+  const refreshButton = page.locator(".refresh-button");
+  await page.waitForFunction(() => {
+    const button = document.querySelector(".refresh-button");
+    return button instanceof HTMLButtonElement && !button.disabled;
+  });
+  serveRefreshAfterPagination = true;
+  await refreshButton.click();
+  await page.waitForFunction(() =>
+    document.querySelector(".refresh-button span")?.textContent === "刷新"
+      && document.querySelector(".match-list")?.getAttribute("aria-busy") === "false",
+  );
+  const loadMoreAfterRefresh = page.getByRole("button", { name: /加载更多/ });
+  const paginationUnlocked = await loadMoreAfterRefresh.isEnabled();
+  if (paginationUnlocked) {
+    returnNextPageAfterRefresh = true;
+    await loadMoreAfterRefresh.click();
+    await page.getByText("Recovered Page Team", { exact: true }).waitFor();
+    refreshRestoredPagination = await page.getByText("Recovered Page Team", { exact: true }).count() === 1;
+  }
+
   failNextCs2Filter = true;
   const failedFilterResponse = page.waitForResponse((candidate) => {
     const url = new URL(candidate.url());
@@ -290,7 +374,7 @@ for (const profile of [
   await failedFilterResponse;
   await page.locator('.data-notice[role="alert"]').filter({ hasText: "上一组筛选结果" }).waitFor();
   failedFilterRetainedResultsSafely = await page.getByRole("button", { name: /加载更多/ }).count() === 0
-    && (await page.locator(".match-card").allTextContents()).join(" ").includes("Fresh Snapshot Team");
+    && (await page.locator(".match-card").allTextContents()).join(" ").includes("Recovered Page Team");
 
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
@@ -354,6 +438,7 @@ for (const profile of [
       adminBody.includes("最近操作") || adminBody.includes("待审核提交"),
     anonymousAdminApiStatus: adminLegacyResponse.status(),
     paginationRestartWorked,
+    refreshRestoredPagination,
     failedFilterRetainedResultsSafely,
     errors,
     screenshot,
@@ -390,6 +475,7 @@ for (const result of results) {
   if (result.anonymousAdminContainsPrivateData) failures.push(`${prefix}: anonymous admin page exposed private data`);
   if (result.anonymousAdminApiStatus !== 401) failures.push(`${prefix}: anonymous admin API HTTP ${result.anonymousAdminApiStatus}`);
   if (!result.paginationRestartWorked) failures.push(`${prefix}: stale pagination did not restart from the latest result set`);
+  if (!result.refreshRestoredPagination) failures.push(`${prefix}: refresh during pagination left Load More unavailable`);
   if (!result.failedFilterRetainedResultsSafely) failures.push(`${prefix}: failed filter exposed a stale pagination cursor or ambiguous previous results`);
   failures.push(...result.errors.map((error) => `${prefix}: ${error}`));
   failures.push(...result.criticalRequestFailures.map((error) => `${prefix}: ${error}`));
