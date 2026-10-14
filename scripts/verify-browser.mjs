@@ -250,7 +250,11 @@ for (const profile of [
         contentType: "application/json",
         body: JSON.stringify({
           ...apiBody,
-          matches: [cursorRegressionMatch("recovered-page-match", "Recovered Page Team")],
+          matches: [
+            cursorRegressionMatch("refreshed-match", "Duplicate Refreshed Snapshot Copy"),
+            cursorRegressionMatch("recovered-page-match", "Recovered Page Team"),
+            cursorRegressionMatch("recovered-page-match", "Duplicate Recovered Page Copy"),
+          ],
           page: { limit: 50, total: 2, nextCursor: null },
           rangeCounts: { today: 1, tomorrow: 0, seven: 1, history: 0, all: 2 },
           liveCount: 0,
@@ -362,7 +366,10 @@ for (const profile of [
     returnNextPageAfterRefresh = true;
     await loadMoreAfterRefresh.click();
     await page.getByText("Recovered Page Team", { exact: true }).waitFor();
-    refreshRestoredPagination = await page.getByText("Recovered Page Team", { exact: true }).count() === 1;
+    refreshRestoredPagination = await page.getByText("Recovered Page Team", { exact: true }).count() === 1
+      && await page.getByText("Refreshed Snapshot Team", { exact: true }).count() === 1
+      && await page.getByText("Duplicate Refreshed Snapshot Copy", { exact: true }).count() === 0
+      && await page.getByText("Duplicate Recovered Page Copy", { exact: true }).count() === 0;
   }
 
   failNextCs2Filter = true;

@@ -354,10 +354,15 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
       if (!response.ok) throw new Error("schedule page request failed");
       const next = await response.json() as SchedulePageData;
       if (serial === requestSerial.current && requestKey === currentRequestKey.current) {
-        setPayload((current) => ({
-          ...next,
-          matches: [...current.matches, ...next.matches.filter((match) => !current.matches.some((loaded) => loaded.id === match.id))],
-        }));
+        setPayload((current) => {
+          const knownIds = new Set(current.matches.map((match) => match.id));
+          const newMatches = next.matches.filter((match) => {
+            if (knownIds.has(match.id)) return false;
+            knownIds.add(match.id);
+            return true;
+          });
+          return { ...next, matches: [...current.matches, ...newMatches] };
+        });
         setLoadedRequestKey(requestKey);
       }
     } catch (error) {
