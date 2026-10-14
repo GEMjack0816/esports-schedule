@@ -178,7 +178,7 @@ export async function synchronizePublishedManualMatchesSnapshot(
   > = getReviewRepository(),
   write: (value: CachedPublicMatches) => Promise<void> = writeRuntimeFallback,
   writeFence: ManualMatchCacheFence = async () => undefined,
-): Promise<CachedPublicMatches> {
+): Promise<CachedPublicMatches & { cacheSynchronized: boolean }> {
   // Fence restoration must happen while the repository still holds its
   // serialized mutation lock; writing it after this read returns can regress a
   // newer mutation's fence.
@@ -197,14 +197,14 @@ export async function synchronizePublishedManualMatchesSnapshot(
   }
   if (!delivered) {
     await repository.markManualMatchCacheDeliveryFailed(snapshot.revision);
-    return value;
+    return { ...value, cacheSynchronized: false };
   }
   try {
     await repository.markManualMatchCacheDelivered(snapshot.revision);
   } catch {
     console.warn("[review-db] manual match cache delivery acknowledgement failed");
   }
-  return value;
+  return { ...value, cacheSynchronized: true };
 }
 
 async function readCurrentFence(): Promise<{ available: boolean; revision: number }> {
