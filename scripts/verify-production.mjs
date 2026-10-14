@@ -39,8 +39,8 @@ async function request(pathname, type) {
       headers: { Accept: type === "json" ? "application/json" : "text/html" },
       signal: AbortSignal.timeout(60_000),
     });
-  } catch (error) {
-    throw new Error(`${pathname} request failed: ${error instanceof Error ? error.name : "network error"}`);
+  } catch {
+    throw new Error(`${pathname} request failed.`);
   }
 
   let body;
@@ -122,8 +122,8 @@ try {
   for (const phrase of ["源快照时间", "提交遗漏比赛", "PandaScore 聚合数据"]) {
     check(`homepage includes “${phrase}”`, homeHtml.includes(phrase));
   }
-} catch (error) {
-  console.error(`FAIL verification request — ${error instanceof Error ? error.message : "unknown error"}`);
+} catch {
+  console.error("FAIL verification request — details redacted.");
   failures.push("verification request");
 }
 
