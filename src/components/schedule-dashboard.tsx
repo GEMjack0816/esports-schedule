@@ -11,7 +11,8 @@ import {
   visibleMatchLimit,
   windowMatches,
 } from "@/lib/schedule/client-list-window";
-import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { addDaysKey } from "@/lib/schedule/time";
+import { groupMatchesByDate, matchDateKey } from "@/lib/schedule/group-matches";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -80,10 +81,6 @@ function formatDateTime(value: string | null, timeZone: string): string {
 function initials(name: string): string {
   const asciiInitials = name.split(/\s+/).map((part) => part[0]).join("").slice(0, 3);
   return asciiInitials || name.slice(0, 2);
-}
-
-function matchDateKey(match: EsportsMatch, timeZone: string): string {
-  return match.startTimeUtc ? dateKeyInTimeZone(match.startTimeUtc, timeZone) : "unscheduled";
 }
 
 function MatchStatusBadge({ status }: { status: MatchStatus }) {
@@ -236,16 +233,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   }, [filtered.length, visibleMatches.length]);
 
   const grouped = useMemo(() => {
-    const groups = new Map<string, EsportsMatch[]>();
-    for (const match of visibleMatches) {
-      const key = matchDateKey(match, timeZone);
-      groups.set(key, [...(groups.get(key) ?? []), match]);
-    }
-    return [...groups.entries()].sort(([a], [b]) => {
-      if (a === "unscheduled") return 1;
-      if (b === "unscheduled") return -1;
-      return range === "history" ? b.localeCompare(a) : a.localeCompare(b);
-    });
+    return groupMatchesByDate(visibleMatches, timeZone, range === "history");
   }, [range, timeZone, visibleMatches]);
 
   const liveCount = payload.matches.filter((match) => match.status === "running").length;
