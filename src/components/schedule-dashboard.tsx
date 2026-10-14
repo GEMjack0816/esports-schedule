@@ -4,6 +4,9 @@ import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
+import { getScheduleFormatters } from "@/lib/schedule/formatters";
+import { groupBy } from "@/lib/schedule/group-by";
+import { countLiveAndUpcoming } from "@/lib/schedule/status-counts";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -39,35 +42,17 @@ const statusMeta: Record<MatchStatus, { label: string; className: string }> = {
 
 function formatTime(value: string | null, timeZone: string): string {
   if (!value) return "待定";
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(value));
+  return getScheduleFormatters(timeZone).time.format(new Date(value));
 }
 
 function formatDate(value: string | null, timeZone: string): string {
   if (!value) return "时间待定";
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone,
-    month: "long",
-    day: "numeric",
-    weekday: "short",
-  }).format(new Date(value));
+  return getScheduleFormatters(timeZone).date.format(new Date(value));
 }
 
 function formatDateTime(value: string | null, timeZone: string): string {
   if (!value) return "暂无";
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(value));
+  return getScheduleFormatters(timeZone).dateTime.format(new Date(value));
 }
 
 function initials(name: string): string {
@@ -213,11 +198,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   }, [game, league, payload.matches, query, range, selectedDate, sevenDaysOut, status, timeZone, today, tomorrow]);
 
   const grouped = useMemo(() => {
-    const groups = new Map<string, EsportsMatch[]>();
-    for (const match of filtered) {
-      const key = matchDateKey(match, timeZone);
-      groups.set(key, [...(groups.get(key) ?? []), match]);
-    }
+    const groups = groupBy(filtered, (match) => matchDateKey(match, timeZone));
     return [...groups.entries()].sort(([a], [b]) => {
       if (a === "unscheduled") return 1;
       if (b === "unscheduled") return -1;
@@ -225,8 +206,10 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     });
   }, [filtered, range, timeZone]);
 
-  const liveCount = payload.matches.filter((match) => match.status === "running").length;
-  const upcomingCount = payload.matches.filter((match) => match.status === "scheduled").length;
+  const { live: liveCount, upcoming: upcomingCount } = useMemo(
+    () => countLiveAndUpcoming(payload.matches),
+    [payload.matches],
+  );
 
   async function refreshSchedule() {
     setRefreshing(true);
