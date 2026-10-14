@@ -143,6 +143,27 @@ describe("Vercel administrator identity validation", () => {
     )).rejects.toBe(failure);
   });
 
+  it("logs a sanitized warning when rejected-token revocation fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const authorizationFailure = new AuthForbiddenError("rejected");
+
+    try {
+      await expect(revokeRejectedAccessToken(
+        "sensitive-access-token",
+        async () => { throw new Error("sensitive-revocation-error"); },
+        async () => { throw authorizationFailure; },
+      )).rejects.toBe(authorizationFailure);
+
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        "[auth] rejected OAuth access-token revocation failed after bounded retries.",
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("sensitive-access-token");
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("sensitive-revocation-error");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("retains an access token only after authorization succeeds", async () => {
     const revoke = vi.fn(async () => undefined);
 
