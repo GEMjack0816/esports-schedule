@@ -1,9 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { safeRequestPath, summarizeBrowserDiagnostic, summarizeRequestFailure } from "./verification-diagnostics.mjs";
+import {
+  normalizeVerifierBaseUrl,
+  safeRequestPath,
+  summarizeBrowserDiagnostic,
+  summarizeRequestFailure,
+} from "./verification-diagnostics.mjs";
 
 const sensitiveValue = "access_token=hidden-token&client_secret=hidden-secret";
 
 describe("verification diagnostic redaction", () => {
+  it("accepts a plain HTTPS origin and local HTTP only when enabled", () => {
+    expect(normalizeVerifierBaseUrl("https://preview.invalid/")).toBe("https://preview.invalid");
+    expect(normalizeVerifierBaseUrl("http://localhost:3000")).toBeNull();
+    expect(normalizeVerifierBaseUrl("http://localhost:3000", { allowLocalHttp: true })).toBe("http://localhost:3000");
+    expect(normalizeVerifierBaseUrl("http://127.0.0.1:3000", { allowLocalHttp: true })).toBe("http://127.0.0.1:3000");
+  });
+
+  it.each([
+    `https://user:${sensitiveValue}@preview.invalid/`,
+    `https://preview.invalid/?${sensitiveValue}`,
+    `https://preview.invalid/#${sensitiveValue}`,
+    `https://preview.invalid/private/${sensitiveValue}`,
+    "http://remote.invalid/",
+    "javascript:alert(1)",
+  ])("rejects verifier target URLs that are not safe origins", (value) => {
+    expect(normalizeVerifierBaseUrl(value, { allowLocalHttp: true })).toBeNull();
+  });
+
   it("keeps only an allowlisted request path and drops credentials and query data", () => {
     const path = safeRequestPath(`https://user:${sensitiveValue}@preview.invalid/api/matches?${sensitiveValue}#${sensitiveValue}`);
 

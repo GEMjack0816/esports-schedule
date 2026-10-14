@@ -33,7 +33,32 @@ function runVerifierWithFailure(mode) {
   });
 }
 
+function runVerifierWithBaseUrl(baseUrl) {
+  const harness = `
+    import { pathToFileURL } from "node:url";
+    globalThis.fetch = async () => { throw new Error("FETCH_SHOULD_NOT_RUN"); };
+    process.argv = [process.execPath, ${JSON.stringify(verifierPath)}, ${JSON.stringify(baseUrl)}, "abc123"];
+    await import(pathToFileURL(${JSON.stringify(verifierPath)}).href);
+  `;
+
+  return spawnSync(process.execPath, ["--input-type=module", "-e", harness], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+}
+
 describe("production verifier error redaction", () => {
+  it("rejects credential-bearing URLs before making a request or echoing them", () => {
+    const unsafeUrl = `https://user:${sentinel}@preview.invalid/?${sentinel}`;
+    const result = runVerifierWithBaseUrl(unsafeUrl);
+    const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+
+    expect(result.status).toBe(1);
+    expect(output).toContain("FAIL base URL: expected a safe HTTPS origin");
+    expect(output).not.toContain("FETCH_SHOULD_NOT_RUN");
+    expect(output).not.toContain(sentinel);
+  });
+
   it.each(["fetch", "response"])("does not print sensitive error details from %s failures", (mode) => {
     const result = runVerifierWithFailure(mode);
     const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;

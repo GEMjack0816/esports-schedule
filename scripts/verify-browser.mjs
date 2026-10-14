@@ -1,11 +1,21 @@
 import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright-core";
-import { safeRequestPath, summarizeBrowserDiagnostic, summarizeRequestFailure } from "./verification-diagnostics.mjs";
+import {
+  normalizeVerifierBaseUrl,
+  safeRequestPath,
+  summarizeBrowserDiagnostic,
+  summarizeRequestFailure,
+} from "./verification-diagnostics.mjs";
 
 let browser;
 try {
-const baseUrl = process.argv[2] || "http://localhost:3000";
+const baseUrlInput = process.argv[2] || "http://localhost:3000";
+const normalizedBaseUrl = normalizeVerifierBaseUrl(baseUrlInput, { allowLocalHttp: true });
+if (!normalizedBaseUrl) {
+  throw new Error("Browser verifier requires a safe origin URL without credentials, path, query, or fragment.");
+}
+const baseUrl = normalizedBaseUrl;
 const executableCandidates = [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",

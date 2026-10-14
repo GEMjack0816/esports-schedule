@@ -7,6 +7,40 @@ const SAFE_REQUEST_PATHS = new Set([
   "/admin",
 ]);
 
+const LOCAL_HTTP_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * Accept only an origin so verifier credentials/query parameters can never be
+ * copied into browser/API requests. Plain HTTP is limited to local development.
+ */
+export function normalizeVerifierBaseUrl(value, { allowLocalHttp = false } = {}) {
+  if (typeof value !== "string") return null;
+
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+
+  const secure = url.protocol === "https:";
+  const localHttp = allowLocalHttp
+    && url.protocol === "http:"
+    && LOCAL_HTTP_HOSTS.has(url.hostname.toLowerCase());
+  if (
+    (!secure && !localHttp)
+    || url.username
+    || url.password
+    || url.pathname !== "/"
+    || url.search
+    || url.hash
+  ) {
+    return null;
+  }
+
+  return url.origin;
+}
+
 export function safeRequestPath(requestUrl) {
   try {
     const pathname = new URL(requestUrl).pathname;

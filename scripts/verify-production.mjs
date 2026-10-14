@@ -1,3 +1,5 @@
+import { normalizeVerifierBaseUrl } from "./verification-diagnostics.mjs";
+
 const baseUrlInput = process.argv[2];
 const expectedSha = process.argv[3] || process.env.EXPECTED_GIT_COMMIT_SHA;
 
@@ -10,14 +12,12 @@ if (!expectedSha) {
   process.exit(1);
 }
 
-let baseUrl;
-try {
-  baseUrl = new URL(baseUrlInput);
-  if (!["http:", "https:"].includes(baseUrl.protocol)) throw new Error("unsupported protocol");
-} catch {
-  console.error("FAIL base URL: expected an absolute HTTP(S) URL.");
+const normalizedBaseUrl = normalizeVerifierBaseUrl(baseUrlInput);
+if (!normalizedBaseUrl) {
+  console.error("FAIL base URL: expected a safe HTTPS origin without credentials, path, query, or fragment.");
   process.exit(1);
 }
+const baseUrl = new URL(normalizedBaseUrl);
 
 const failures = [];
 function check(label, condition, detail = "") {
