@@ -608,6 +608,18 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
   });
 
   it("rolls back a public mutation when its Runtime Cache fence cannot be written", async () => {
+    const pendingInput = submission(`fence-rollback-pending-${randomUUID()}`);
+    const pendingMatch = await repository.createManualMatch(
+      published(pendingInput),
+      "admin-a",
+      async () => undefined,
+    );
+    manualMatchIds.push(pendingMatch.id);
+    const [pendingBefore] = await cleanup`
+      select revision from manual_match_cache_outbox
+      where delivered_at is null order by revision desc limit 1
+    `;
+
     const input = submission(`fence-rollback-${randomUUID()}`);
     const [before] = await cleanup`select count(*)::int as count from manual_match_cache_outbox`;
     await expect(repository.createManualMatch(
@@ -619,8 +631,13 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       select count(*)::int as count from published_manual_matches where league = ${input.league}
     `;
     const [after] = await cleanup`select count(*)::int as count from manual_match_cache_outbox`;
+    const [pendingAfter] = await cleanup`
+      select revision from manual_match_cache_outbox
+      where delivered_at is null order by revision desc limit 1
+    `;
     expect(matches.count).toBe(0);
     expect(after.count).toBe(before.count);
+    expect(Number(pendingAfter.revision)).toBe(Number(pendingBefore.revision));
   });
 
   it("uses the same monotonic revision for the mutation fence, outbox, and Runtime snapshot", async () => {
@@ -648,12 +665,9 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect(delivered.delivered_at).toBeInstanceOf(Date);
   });
 
-  it("reads the current revision and pending outbox count together", async () => {
+  it("reports the current revision and bounded pending outbox count together", async () => {
     const input = submission(`cache-status-${randomUUID()}`);
     const fence = vi.fn<(revision: number) => Promise<void>>().mockResolvedValue(undefined);
-    const [before] = await cleanup`
-      select count(*)::int as count from manual_match_cache_outbox where delivered_at is null
-    `;
     const match = await repository.createManualMatch(published(input), "admin-a", fence);
     manualMatchIds.push(match.id);
     const revision = fence.mock.calls[0][0];
@@ -661,7 +675,28 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     const status = await repository.getManualMatchCacheStatus();
 
     expect(status.revision).toBe(revision);
-    expect(status.pendingRevisions).toBe(before.count + 1);
+    expect(status.pendingRevisions).toBe(1);
+  });
+
+  it("coalesces repeated undelivered snapshots so cache failures cannot grow pending rows", async () => {
+    const fence = vi.fn<(revision: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    for (let index = 0; index < 24; index += 1) {
+      const input = submission(`cache-outbox-failure-${index}-${randomUUID()}`);
+      const match = await repository.createManualMatch(published(input), "admin-a", fence);
+      manualMatchIds.push(match.id);
+      const revision = fence.mock.calls.at(-1)?.[0];
+      expect(revision).toBeDefined();
+
+      await repository.markManualMatchCacheDeliveryFailed(revision!);
+      const [pending] = await cleanup`
+        select count(*)::int as count from manual_match_cache_outbox where delivered_at is null
+      `;
+      expect(pending.count).toBe(1);
+    }
+
+    const status = await repository.getManualMatchCacheStatus();
+    expect(status.pendingRevisions).toBe(1);
   });
 
   it("makes manual match creation retries idempotent without allocating another revision", async () => {

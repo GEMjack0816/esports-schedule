@@ -13,7 +13,7 @@
 - `submission_rate_limits`：只保存来源摘要和当前限流窗口，不保存原始 IP；
 - `submission_rate_limit_windows`：固定 key 的全局请求、新来源数量和清理节流窗口；
 - `admin_audit_events`：编辑、批准、驳回、隐藏和恢复的审计记录。
-- `manual_match_cache_outbox`：与公开人工比赛写事务一同提交的单调缓存 revision 和待投递状态。
+- `manual_match_cache_outbox`：与公开人工比赛写事务一同提交的单调缓存 revision 和待投递状态。快照是完整视图，因此写入新 revision 时会在事务内合并更旧的 pending intent，避免缓存故障期间 outbox 无界增长；业务事务或 fence 失败会回滚合并。
 
 `npm run db:generate` 生成迁移；`npm run db:migrate` 只应对明确选择的数据库执行。Preview 必须使用独立数据库或独立分支，禁止把验证脚本连接到 Production 数据库。`npm run db:check` 只检查连接和表是否存在，不打印连接字符串。
 

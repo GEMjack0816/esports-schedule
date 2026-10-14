@@ -92,6 +92,15 @@ async function createManualMatchCacheRevision(
   const [event] = await tx.insert(manualMatchCacheOutbox).values({}).returning({
     revision: manualMatchCacheOutbox.revision,
   });
+  // Each delivered snapshot is a complete view, not a per-mutation event log.
+  // The newest pending revision therefore subsumes older undelivered intents.
+  // Coalesce them inside the same transaction so repeated cache write failures
+  // cannot grow the outbox without bound. If fencing or the business write
+  // fails, PostgreSQL rolls this deletion back with the rest of the mutation.
+  await tx.delete(manualMatchCacheOutbox).where(and(
+    isNull(manualMatchCacheOutbox.deliveredAt),
+    sql`${manualMatchCacheOutbox.revision} < ${event.revision}`,
+  ));
   await fence(event.revision);
   return event.revision;
 }
