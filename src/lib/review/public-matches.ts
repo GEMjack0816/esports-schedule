@@ -261,7 +261,10 @@ const readPublishedMatchesCached = unstable_cache(
   },
 );
 
-async function readCurrentPublishedMatches(observeRevision: (revision: number) => void): Promise<
+async function readCurrentPublishedMatches(
+  observeRevision: (revision: number) => void,
+  initialCacheStatus?: { revision: number; pendingRevisions: number },
+): Promise<
   CachedPublicMatches & { pendingCacheRevisions: number }
 > {
   // Runtime Cache is regional and set() has no CAS or cancellation support.
@@ -270,7 +273,7 @@ async function readCurrentPublishedMatches(observeRevision: (revision: number) =
   // A matching Next Data Cache entry is not proof that the Runtime Cache
   // delivery succeeded: the outbox may still contain a pending revision.
   const repository = getReviewRepository();
-  const cacheStatus = await repository.getManualMatchCacheStatus();
+  const cacheStatus = initialCacheStatus ?? await repository.getManualMatchCacheStatus();
   const revision = cacheStatus.revision;
   observeRevision(revision);
   const cached = await readPublishedMatchesCached();
@@ -325,19 +328,69 @@ export async function getPublishedDatabaseMatches(): Promise<{
     return { matches: [], state: publicState };
   }
 
-  // A snapshot at the Runtime Cache fence with no pending outbox delivery is
-  // already a verified last-known-good view. Serve it without making every
-  // public schedule request wait on PostgreSQL; mutations advance the fence
-  // before commit, so a newer committed view cannot be hidden by this key.
+  const repository = getReviewRepository();
   const runtimeSnapshot = await readLastSuccess(publicState.cacheRevision);
-  if (runtimeSnapshot?.pendingCacheRevisions === 0) {
-    observeManualMatchRevision(runtimeSnapshot.revision);
+  let cacheStatus: { revision: number; pendingRevisions: number };
+  try {
+    // Runtime Cache is isolated per region. Read PostgreSQL's monotonic
+    // watermark before trusting a regional snapshot, so a mutation in another
+    // region cannot leave this fast path serving an older version until TTL.
+    cacheStatus = await withTimeout(repository.getManualMatchCacheStatus());
+  } catch {
+    if (runtimeSnapshot && runtimeSnapshot.revision >= publicState.cacheRevision) {
+      observeManualMatchRevision(runtimeSnapshot.revision);
+      publicState = {
+        configured: true,
+        status: "cached",
+        lastSuccessfulReadAt: runtimeSnapshot.fetchedAt,
+        cachedManualMatches: runtimeSnapshot.matches.length,
+        cacheRevision: runtimeSnapshot.revision,
+        pendingCacheRevisions: runtimeSnapshot.pendingCacheRevisions ?? publicState.pendingCacheRevisions,
+      };
+      console.warn("[review-db] revision check unavailable; serving last successful public manual matches");
+      return { matches: runtimeSnapshot.matches, state: publicState };
+    }
+    publicState = {
+      ...publicState,
+      configured: true,
+      status: "unavailable",
+      cachedManualMatches: 0,
+    };
+    console.warn("[review-db] database revision check unavailable; no safe Runtime Cache snapshot");
+    return { matches: [], state: publicState };
+  }
+
+  if (cacheStatus.revision < publicState.cacheRevision) {
+    if (runtimeSnapshot && runtimeSnapshot.revision >= publicState.cacheRevision) {
+      observeManualMatchRevision(runtimeSnapshot.revision);
+      publicState = {
+        configured: true,
+        status: "cached",
+        lastSuccessfulReadAt: runtimeSnapshot.fetchedAt,
+        cachedManualMatches: runtimeSnapshot.matches.length,
+        cacheRevision: runtimeSnapshot.revision,
+        pendingCacheRevisions: runtimeSnapshot.pendingCacheRevisions ?? cacheStatus.pendingRevisions,
+      };
+      console.warn("[review-db] database revision regressed; preserving newer Runtime Cache snapshot");
+      return { matches: runtimeSnapshot.matches, state: publicState };
+    }
+    publicState = { ...publicState, configured: true, status: "unavailable", cachedManualMatches: 0 };
+    console.warn("[review-db] database revision regressed and no safe Runtime Cache snapshot exists");
+    return { matches: [], state: publicState };
+  }
+
+  observeManualMatchRevision(cacheStatus.revision);
+
+  if (runtimeSnapshot
+    && runtimeSnapshot.revision >= cacheStatus.revision
+    && cacheStatus.pendingRevisions === 0) {
+    const matchesCurrentDatabase = runtimeSnapshot.revision === cacheStatus.revision;
     publicState = {
       configured: true,
-      status: "cached",
+      status: matchesCurrentDatabase ? "connected" : "cached",
       lastSuccessfulReadAt: runtimeSnapshot.fetchedAt,
       cachedManualMatches: runtimeSnapshot.matches.length,
-      cacheRevision: runtimeSnapshot.revision,
+      cacheRevision: Math.max(publicState.cacheRevision, runtimeSnapshot.revision),
       pendingCacheRevisions: 0,
     };
     return { matches: runtimeSnapshot.matches, state: publicState };
@@ -346,7 +399,7 @@ export async function getPublishedDatabaseMatches(): Promise<{
   // A warm function instance may already have served a newer generation than
   // the local Runtime Cache region currently holds. Never accept fallback data
   // below that observed high-water mark when a later database read fails.
-  let observedRevision = publicState.cacheRevision;
+  let observedRevision = Math.max(publicState.cacheRevision, cacheStatus.revision);
   const result = await preserveLastSuccessfulPublicMatches(
     () => withTimeout(readCurrentPublishedMatches((revision) => {
       if (revision < publicState.cacheRevision) {
@@ -354,7 +407,7 @@ export async function getPublishedDatabaseMatches(): Promise<{
       }
       observedRevision = Math.max(observedRevision, revision);
       observeManualMatchRevision(revision);
-    })),
+    }, cacheStatus)),
     // If the full read fails after the committed watermark was observed,
     // never let a regressed regional fence authorize an older snapshot.
     () => readLastSuccess(observedRevision),

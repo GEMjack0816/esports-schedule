@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { PublishedManualMatchRow } from "@/db/schema";
 import type { EsportsMatch } from "@/lib/schedule/types";
 
 const mocks = vi.hoisted(() => ({
@@ -175,6 +176,7 @@ describe("manual match cache authoritative version checks", () => {
   });
 
   it("retains fallback if it satisfies the revision already observed from PostgreSQL", async () => {
+    mocks.cacheStatus.mockResolvedValue({ revision: 5, pendingRevisions: 1 });
     mocks.snapshot.mockRejectedValue(new Error("database unavailable"));
     mocks.get.mockImplementation(async (key: string) => key.includes("fence")
       ? { revision: 4 }
@@ -223,7 +225,7 @@ describe("manual match cache authoritative version checks", () => {
     expect(result.state.pendingCacheRevisions).toBe(2);
   });
 
-  it("serves a verified current Runtime Cache snapshot without waiting on PostgreSQL", async () => {
+  it("compares a regional Runtime Cache hit with PostgreSQL before using the fast path", async () => {
     const cachedMatch: EsportsMatch = {
       id: "manual:honor-of-kings:db-cached-match",
       provider: "manual",
@@ -251,16 +253,77 @@ describe("manual match cache authoritative version checks", () => {
     mocks.get.mockImplementation(async (key: string) => key === "published-manual-matches-fence-v1"
       ? { revision: 4 }
       : snapshot);
-    mocks.cacheStatus.mockRejectedValue(new Error("database should not be queried on a verified hit"));
+    mocks.cacheStatus.mockResolvedValue({ revision: 4, pendingRevisions: 0 });
 
     const result = await getPublishedDatabaseMatches();
 
-    expect(result.state.status).toBe("cached");
+    expect(result.state.status).toBe("connected");
     expect(result.matches).toEqual([cachedMatch]);
     expect(result.state.cacheRevision).toBe(4);
     expect(result.state.lastSuccessfulReadAt).toBe("verified-cache-hit");
-    expect(mocks.cacheStatus).not.toHaveBeenCalled();
+    expect(mocks.cacheStatus).toHaveBeenCalledOnce();
     expect(mocks.snapshot).not.toHaveBeenCalled();
+  });
+
+  it("refreshes an older regional Runtime Cache hit from the newer PostgreSQL revision", async () => {
+    const cachedMatch: EsportsMatch = {
+      id: "manual:honor-of-kings:db-cached-match",
+      provider: "manual",
+      providerMatchId: "db-cached-match",
+      game: "honor-of-kings",
+      tournament: "Old tournament",
+      league: "KPL",
+      stage: null,
+      homeTeam: { name: "Alpha", logo: "/team-placeholder.svg" },
+      awayTeam: { name: "Beta", logo: "/team-placeholder.svg" },
+      homeScore: null,
+      awayScore: null,
+      bestOf: 5,
+      status: "scheduled",
+      startTimeUtc: "2026-10-15T12:00:00.000Z",
+      streams: [],
+      lastUpdatedAt: "2026-10-15T11:00:00.000Z",
+    };
+    const staleSnapshot = {
+      matches: [cachedMatch],
+      fetchedAt: "regional-revision-4",
+      revision: 4,
+      pendingCacheRevisions: 0,
+    };
+    const databaseRow = {
+      id: "11111111-1111-4111-8111-111111111111",
+      game: "honor-of-kings",
+      league: "KPL",
+      tournament: "New tournament",
+      stage: null,
+      homeTeamName: "Alpha",
+      homeTeamAcronym: null,
+      homeTeamLogo: null,
+      awayTeamName: "Beta",
+      awayTeamAcronym: null,
+      awayTeamLogo: null,
+      startTimeUtc: new Date("2026-10-15T12:00:00.000Z"),
+      bestOf: 5,
+      status: "scheduled",
+      homeScore: null,
+      awayScore: null,
+      streamUrl: null,
+      sourceUrl: null,
+      updatedAt: new Date("2026-10-15T11:00:00.000Z"),
+    } as PublishedManualMatchRow;
+    mocks.get.mockImplementation(async (key: string) => key === "published-manual-matches-fence-v1"
+      ? { revision: 4 }
+      : staleSnapshot);
+    mocks.cacheStatus.mockResolvedValue({ revision: 5, pendingRevisions: 0 });
+    mocks.cached.mockResolvedValue({ matches: [cachedMatch], fetchedAt: "Next Data Cache revision 4", revision: 4 });
+    mocks.snapshot.mockResolvedValue({ rows: [databaseRow], revision: 5, pendingRevisions: 0 });
+
+    const result = await getPublishedDatabaseMatches();
+
+    expect(mocks.cacheStatus).toHaveBeenCalled();
+    expect(mocks.snapshot).toHaveBeenCalledOnce();
+    expect(result.state.cacheRevision).toBe(5);
+    expect(result.matches[0]?.tournament).toBe("New tournament");
   });
 
   it("does not fast-path a current snapshot while outbox delivery is pending", async () => {
