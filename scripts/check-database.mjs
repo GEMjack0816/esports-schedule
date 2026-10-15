@@ -84,3 +84,4 @@ try {
 } finally {
   await client.end({ timeout: 2 });
 }
+

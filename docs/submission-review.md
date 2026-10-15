@@ -17,7 +17,7 @@
 - `submission_rate_limits`：只保存来源摘要和当前限流窗口，不保存原始 IP；
 - `submission_rate_limit_windows`：固定 key 的全局请求、新来源数量和清理节流窗口；
 - `admin_audit_events`：编辑、批准、驳回、隐藏和恢复的审计记录。
-- `manual_match_cache_outbox`：与公开人工比赛写事务一同提交的单调缓存 revision 和待投递状态。
+- `manual_match_cache_outbox`：与公开人工比赛写事务一同提交的单调缓存 revision 和待投递状态。快照是完整视图，因此写入新 revision 时会在事务内合并更旧的 pending intent，避免缓存故障期间 outbox 无界增长；业务事务或 fence 失败会回滚合并。
 
 `npm run db:generate` 生成迁移；`npm run db:migrate` 只应对明确选择的数据库执行。Preview 必须使用独立数据库或独立分支，禁止把验证脚本连接到 Production 数据库。`npm run db:check` 只检查连接和表是否存在，不打印连接字符串。
 
@@ -31,7 +31,9 @@
 
 改变公开人工赛程的事务会在统一 PostgreSQL advisory lock 内分配 `manual_match_cache_revision_seq` revision，并在业务写入前把同一 revision 写入 Runtime Cache fence。fence 写入失败会回滚事务；业务写入、审计和 outbox revision 一起提交。Runtime Cache 快照携带 revision，低于 fence 或本次请求已观察到的数据库 revision 的旧快照会 fail closed。投递失败保留为 outbox pending，并由后续成功数据库读取重建；健康接口公开 pending 数量但不公开内部错误。已投递 outbox 使用固定批量清理。人工新建表单使用 UUID operation key，重复提交返回第一次创建的记录，不会重复发布。
 
-每次读取公开人工比赛时，先使用 outbox 主键索引查询一个最新已提交 revision，再比较 Next Data Cache；区域缓存与 fence 即使一起停留在旧版本，也不能遮挡在线数据库的新版本。版本不同时重建快照；Runtime Cache 写失败仍返回当前数据库结果。此检查增加一次单行数据库查询，不会重新调用 PandaScore，也不扫描全部人工比赛。
+每次读取公开人工比赛时，先通过一次 SQL 读取 revision 水位和 pending outbox 数，再比较 Next Data Cache；区域缓存与 fence 即使一起停留在旧版本，也不能遮挡在线数据库的新版本。版本不同时重建快照；Runtime Cache 写失败仍返回当前数据库结果。此检查不重新调用 PandaScore，也不扫描全部人工比赛。
+
+此 fence 存储在 Vercel Runtime Cache 中，而 Runtime Cache 按 region 隔离。当前 `vercel.json` 将应用固定部署在单一 region；在没有跨 region 共享、单调 fence 的设计之前，不得扩展到多个 function regions。否则，某 region 的数据库读取中断时，其他 region 可能仍只看到旧 fence，无法证明旧快照没有被新提交取代。若要启用多 region，必须先实现并验证全局一致的 fencing，或在无法证明快照最新时 fail closed。
 
 Runtime Cache `set` 没有 CAS 或取消能力，因此 mutation fence 在持有数据库串行事务锁期间必须完整等待，不能通过应用层超时遗留仍会继续执行的旧写入。fence 写入失败会回滚事务；竞争 mutation 仍受数据库 lock timeout 约束并返回 busy。数据库故障时，仅当 fallback snapshot revision 不低于保留的 fence 才继续提供数据库人工比赛；fence 缺失、损坏或更新时对数据库人工部分 fail closed，PandaScore 与静态补录数据仍保持可用。
 
@@ -68,3 +70,4 @@ npm run verify:admin -- <isolated-preview-url> <expected-git-sha> <expected-git-
 ```
 
 `verify:admin` 在任何写入前通过 `/api/version` 验证服务身份、`environment=preview`、精确 Git SHA/ref、Deployment ID 及显式 hostname allowlist；目标必须是无路径、查询或凭据的 HTTPS origin，allowlist 不接受通配符。脚本还会确认现有浏览器状态确实能打开 `/admin`，任一检查失败都会 fail closed。验证产生的 submission、人工比赛和关联审计记录会在 `finally` 中通过仅 Preview 可用的管理员清理端点按本次 ID 删除；清理失败会使验证失败，浏览器仍会关闭，禁止把 Production hostname 加入 allowlist。
+

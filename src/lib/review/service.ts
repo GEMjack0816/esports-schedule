@@ -40,7 +40,11 @@ export type PublishedManualCacheEffects = {
 
 const defaultCacheEffects: PublishedManualCacheEffects = {
   fence: writeManualMatchCacheFence,
-  synchronize: synchronizePublishedManualMatchesSnapshot,
+  synchronize: (repository) => synchronizePublishedManualMatchesSnapshot(
+    repository,
+    undefined,
+    writeManualMatchCacheFence,
+  ),
   invalidate: invalidatePublishedManualMatches,
 };
 
@@ -283,3 +287,4 @@ export async function toggleManualMatchHidden(
   await synchronizeMutationCaches(repository, effects);
   return result;
 }
+

@@ -88,3 +88,4 @@ describe("manual match visibility service", () => {
     )).resolves.toBe(row);
   });
 });
+

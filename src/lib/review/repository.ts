@@ -11,7 +11,6 @@ import {
   inArray,
   isNull,
   lte,
-  max,
   or,
   sql,
 } from "drizzle-orm";
@@ -68,10 +67,24 @@ const MANUAL_MATCH_LOCK_TIMEOUT_MS = 2_500;
 const DELIVERED_OUTBOX_CLEANUP_BATCH = 100;
 
 type ReviewTransaction = Parameters<Parameters<ReturnType<typeof getDatabase>["transaction"]>[0]>[0];
+type ReviewExecutor = Pick<ReviewTransaction, "execute">;
 
 async function lockManualMatchMutations(tx: ReviewTransaction): Promise<void> {
   await tx.execute(sql`select set_config('lock_timeout', ${`${MANUAL_MATCH_LOCK_TIMEOUT_MS}ms`}, true)`);
   await tx.execute(sql`select pg_advisory_xact_lock(${MANUAL_MATCH_MUTATION_LOCK})`);
+}
+
+async function readManualMatchSequenceRevision(executor: ReviewExecutor): Promise<number> {
+  // A Runtime Cache fence can be written before the DB transaction commits.
+  // PostgreSQL sequences are intentionally non-transactional, so their
+  // high-water mark also covers a reservation whose transaction later aborts.
+  // Tagging the reconciled DB snapshot with that same mark makes the fallback
+  // usable again without ever lowering a fence.
+  const [row] = await executor.execute(sql`
+    select case when is_called then last_value else 0 end as revision
+    from public.manual_match_cache_revision_seq
+  `);
+  return Number(row?.revision ?? 0);
 }
 
 async function createManualMatchCacheRevision(
@@ -81,6 +94,15 @@ async function createManualMatchCacheRevision(
   const [event] = await tx.insert(manualMatchCacheOutbox).values({}).returning({
     revision: manualMatchCacheOutbox.revision,
   });
+  // Each delivered snapshot is a complete view, not a per-mutation event log.
+  // The newest pending revision therefore subsumes older undelivered intents.
+  // Coalesce them inside the same transaction so repeated cache write failures
+  // cannot grow the outbox without bound. If fencing or the business write
+  // fails, PostgreSQL rolls this deletion back with the rest of the mutation.
+  await tx.delete(manualMatchCacheOutbox).where(and(
+    isNull(manualMatchCacheOutbox.deliveredAt),
+    sql`${manualMatchCacheOutbox.revision} < ${event.revision}`,
+  ));
   await fence(event.revision);
   return event.revision;
 }
@@ -560,7 +582,6 @@ export class DrizzleReviewRepository {
         if (!before) throw new ReviewNotFoundError("提交不存在。");
         if (before.status !== "pending") throw new ReviewConflictError("提交已被审核。");
         assertExpectedVersion(before.updatedAt, expectedUpdatedAt);
-        await createManualMatchCacheRevision(tx, fence);
         const now = nextUpdatedAt(before.updatedAt);
 
         const [published] = await tx.insert(publishedManualMatches).values({
@@ -597,6 +618,9 @@ export class DrizzleReviewRepository {
             publishedMatch: auditMatch(published),
           },
         });
+        // Publish the fence only after all fallible business/audit writes,
+        // while still holding the transaction lock and before commit.
+        await createManualMatchCacheRevision(tx, fence);
         return published;
       });
     } catch (error) {
@@ -708,7 +732,6 @@ export class DrizzleReviewRepository {
           .where(inArray(publishedManualMatches.sourceSubmissionId, submissionIds))
           .for("update");
         const entityIds = [...submissionIds, ...manualMatches.map((row) => row.id)];
-        if (manualMatches.length > 0) await createManualMatchCacheRevision(tx, fence);
         const deletedAudit = entityIds.length > 0
           ? await tx.delete(adminAuditEvents).where(inArray(adminAuditEvents.entityId, entityIds)).returning({ id: adminAuditEvents.id })
           : [];
@@ -720,6 +743,7 @@ export class DrizzleReviewRepository {
         const deletedSubmissions = await tx.delete(matchSubmissions)
           .where(inArray(matchSubmissions.id, submissionIds))
           .returning({ id: matchSubmissions.id });
+        if (manualMatches.length > 0) await createManualMatchCacheRevision(tx, fence);
 
         return {
           submissions: deletedSubmissions.length,
@@ -758,10 +782,11 @@ export class DrizzleReviewRepository {
     }
   }
 
-  async readManualMatchCacheSnapshot(): Promise<{
+  async readManualMatchCacheSnapshot(fence?: ManualMatchCacheFence): Promise<{
     rows: PublishedManualMatchRow[];
     revision: number;
     pendingRevisions: number;
+    fenceWritten?: boolean;
   }> {
     try {
       return await getDatabase().transaction(async (tx) => {
@@ -769,14 +794,29 @@ export class DrizzleReviewRepository {
         const rows = await tx.select().from(publishedManualMatches)
           .where(eq(publishedManualMatches.hidden, false))
           .orderBy(asc(publishedManualMatches.startTimeUtc));
-        const revisionRows = await tx.select({ value: max(manualMatchCacheOutbox.revision) })
-          .from(manualMatchCacheOutbox);
+        const revision = await readManualMatchSequenceRevision(tx);
         const pendingRows = await tx.select({ value: count() }).from(manualMatchCacheOutbox)
           .where(isNull(manualMatchCacheOutbox.deliveredAt));
+        let fenceWritten: boolean | undefined;
+        if (fence) {
+          // Rebuild an evicted fence while holding the same advisory lock as
+          // mutations. A fence write after releasing this lock could move the
+          // regional watermark backwards if a newer mutation wins the race.
+          try {
+            await fence(revision);
+            fenceWritten = true;
+          } catch {
+            // Cache repair is best effort. The database snapshot is still
+            // authoritative for this request, but must not be acknowledged as
+            // a recoverable Runtime Cache delivery without its fence.
+            fenceWritten = false;
+          }
+        }
         return {
           rows,
-          revision: Number(revisionRows[0]?.value ?? 0),
+          revision,
           pendingRevisions: Number(pendingRows[0]?.value ?? 0),
+          ...(fenceWritten === undefined ? {} : { fenceWritten }),
         };
       });
     } catch (error) {
@@ -828,11 +868,7 @@ export class DrizzleReviewRepository {
 
   async getCurrentManualMatchRevision(): Promise<number> {
     try {
-      // revision is the outbox primary key. This is a one-row indexed lookup,
-      // not a scan of all matches or pending deliveries on every public read.
-      const [row] = await getDatabase().select({ revision: manualMatchCacheOutbox.revision })
-        .from(manualMatchCacheOutbox).orderBy(desc(manualMatchCacheOutbox.revision)).limit(1);
-      return Number(row?.revision ?? 0);
+      return await readManualMatchSequenceRevision(getDatabase());
     } catch (error) {
       translateDatabaseError(error);
     }
@@ -841,14 +877,19 @@ export class DrizzleReviewRepository {
   async getManualMatchCacheStatus(): Promise<{ revision: number; pendingRevisions: number }> {
     try {
       const db = getDatabase();
-      const [revisionRows, pendingRows] = await Promise.all([
-        db.select({ value: max(manualMatchCacheOutbox.revision) }).from(manualMatchCacheOutbox),
-        db.select({ value: count() }).from(manualMatchCacheOutbox)
-          .where(isNull(manualMatchCacheOutbox.deliveredAt)),
-      ]);
+      // This status is checked on every public schedule read. Keep it to one
+      // database round trip instead of two independent requests, while reading
+      // the pending outbox count and revision watermark in one statement.
+      const [row] = await db.execute(sql`
+        select
+          (select case when is_called then last_value else 0 end
+            from public.manual_match_cache_revision_seq) as revision,
+          (select count(*) from public.manual_match_cache_outbox
+            where delivered_at is null) as pending_revisions
+      `);
       return {
-        revision: Number(revisionRows[0]?.value ?? 0),
-        pendingRevisions: Number(pendingRows[0]?.value ?? 0),
+        revision: Number(row?.revision ?? 0),
+        pendingRevisions: Number(row?.pending_revisions ?? 0),
       };
     } catch (error) {
       translateDatabaseError(error);
@@ -879,7 +920,6 @@ export class DrizzleReviewRepository {
             .where(eq(publishedManualMatches.operationKey, operationKey)).limit(1);
           if (existing) return existing;
         }
-        await createManualMatchCacheRevision(tx, fence);
         const [row] = await tx.insert(publishedManualMatches).values({
           ...publishedValues(input),
           publishedBy: actorId,
@@ -892,6 +932,7 @@ export class DrizzleReviewRepository {
           entityId: row.id,
           afterJson: auditMatch(row),
         });
+        await createManualMatchCacheRevision(tx, fence);
         return row;
       });
     } catch (error) {
@@ -913,7 +954,6 @@ export class DrizzleReviewRepository {
           .where(eq(publishedManualMatches.id, id)).for("update");
         if (!before) throw new ReviewNotFoundError("人工比赛不存在。");
         assertExpectedVersion(before.updatedAt, expectedUpdatedAt);
-        await createManualMatchCacheRevision(tx, fence);
         const updatedAt = nextUpdatedAt(before.updatedAt);
         const [after] = await tx.update(publishedManualMatches)
           .set(publishedValues(input, updatedAt))
@@ -930,6 +970,7 @@ export class DrizzleReviewRepository {
           beforeJson: auditMatch(before),
           afterJson: auditMatch(after),
         });
+        await createManualMatchCacheRevision(tx, fence);
         return after;
       });
     } catch (error) {
@@ -952,7 +993,6 @@ export class DrizzleReviewRepository {
           .where(eq(publishedManualMatches.id, id)).for("update");
         if (!before) throw new ReviewNotFoundError("人工比赛不存在。");
         assertExpectedVersion(before.updatedAt, expectedUpdatedAt);
-        await createManualMatchCacheRevision(tx, fence);
         const updatedAt = nextUpdatedAt(before.updatedAt);
         const [after] = await tx.update(publishedManualMatches)
           .set({ hidden, updatedAt })
@@ -969,6 +1009,7 @@ export class DrizzleReviewRepository {
           beforeJson: auditMatch(before),
           afterJson: auditMatch(after),
         });
+        await createManualMatchCacheRevision(tx, fence);
         return after;
       });
     } catch (error) {
@@ -990,7 +1031,6 @@ export class DrizzleReviewRepository {
           .where(eq(publishedManualMatches.id, id)).for("update");
         if (!before) throw new ReviewNotFoundError("人工比赛不存在。");
         assertExpectedVersion(before.updatedAt, expectedUpdatedAt);
-        await createManualMatchCacheRevision(tx, fence);
         const hidden = !before.hidden;
         const updatedAt = nextUpdatedAt(before.updatedAt);
         const [after] = await tx.update(publishedManualMatches)
@@ -1008,6 +1048,7 @@ export class DrizzleReviewRepository {
           beforeJson: auditMatch(before),
           afterJson: auditMatch(after),
         });
+        await createManualMatchCacheRevision(tx, fence);
         return after;
       });
     } catch (error) {

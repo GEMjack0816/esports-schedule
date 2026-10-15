@@ -128,6 +128,26 @@ describe("published database manual matches", () => {
     );
     expect(snapshot.revision).toBe(8);
     expect(snapshot.matches).toHaveLength(1);
+    expect(snapshot.cacheSynchronized).toBe(false);
     expect(repository.markManualMatchCacheDeliveryFailed).toHaveBeenCalledWith(8);
   });
+
+  it("confirms Runtime Cache delivery separately from the cached snapshot payload", async () => {
+    const repository = {
+      readManualMatchCacheSnapshot: async () => ({ rows: [row()], revision: 9, pendingRevisions: 1 }),
+      markManualMatchCacheDelivered: vi.fn().mockResolvedValue(undefined),
+      markManualMatchCacheDeliveryFailed: vi.fn().mockResolvedValue(undefined),
+    };
+    let written: unknown;
+    const snapshot = await synchronizePublishedManualMatchesSnapshot(
+      repository,
+      async (value) => { written = value; },
+    );
+
+    expect(snapshot.cacheSynchronized).toBe(true);
+    expect(written).not.toHaveProperty("cacheSynchronized");
+    expect(written).toHaveProperty("pendingCacheRevisions", 1);
+    expect(repository.markManualMatchCacheDelivered).toHaveBeenCalledWith(9);
+  });
 });
+
