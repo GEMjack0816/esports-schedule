@@ -27,9 +27,12 @@ export function millisecondsUntilNextMinute(now = Date.now()): number {
 }
 
 export function subscribeCalendarClock(callback: () => void): () => void {
+  let active = true;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const schedule = () => {
+    if (!active) return;
     timer = setTimeout(() => {
+      if (!active) return;
       callback();
       schedule();
     }, millisecondsUntilNextMinute());
@@ -42,6 +45,7 @@ export function subscribeCalendarClock(callback: () => void): () => void {
   window.addEventListener("focus", callback);
   document.addEventListener("visibilitychange", onVisible);
   return () => {
+    active = false;
     if (timer !== undefined) clearTimeout(timer);
     window.removeEventListener("focus", callback);
     document.removeEventListener("visibilitychange", onVisible);

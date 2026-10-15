@@ -73,4 +73,24 @@ describe("client calendar clock", () => {
     await vi.advanceTimersByTimeAsync(60_025);
     expect(listener).toHaveBeenCalledTimes(3);
   });
+
+  it("does not re-arm the minute timer if a listener unsubscribes during its callback", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(119_999));
+    vi.stubGlobal("window", new EventTarget());
+    const browserDocument = new EventTarget();
+    Object.defineProperty(browserDocument, "visibilityState", { configurable: true, value: "visible" });
+    vi.stubGlobal("document", browserDocument);
+
+    let unsubscribe: () => void = () => undefined;
+    const listener = vi.fn(() => unsubscribe());
+    unsubscribe = subscribeCalendarClock(listener);
+
+    await vi.advanceTimersByTimeAsync(26);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(60_025);
+    expect(listener).toHaveBeenCalledOnce();
+  });
 });
