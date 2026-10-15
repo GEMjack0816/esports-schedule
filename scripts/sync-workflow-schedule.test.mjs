@@ -33,4 +33,24 @@ describe("fixture sync workflow schedule", () => {
       expect(gap).toBe(15);
     }
   });
+
+  it("keeps authenticated sync dispatch serialized and validates its structured result", () => {
+    const workflow = readFileSync(workflowPath, "utf8");
+
+    expect(workflow).toMatch(/^  workflow_dispatch:\s*$/m);
+    expect(workflow).toMatch(/^concurrency:\s*$/m);
+    expect(workflow).toMatch(/^  group: esports-schedule-production-sync\s*$/m);
+    expect(workflow).toMatch(/^  cancel-in-progress: false\s*$/m);
+
+    // The credential must come from Actions Secrets and travel only as an
+    // Authorization header; never put it in the request URL or query string.
+    expect(workflow).toContain("CRON_SECRET: ${{ secrets.CRON_SECRET }}");
+    expect(workflow).toContain("SYNC_URL: https://esports-schedule-two.vercel.app/api/cron/sync");
+    expect(workflow).toMatch(/--header\s+"Authorization: Bearer \$CRON_SECRET"/);
+    expect(workflow).not.toMatch(/(?:SYNC_URL|url|query)\s*[:=].*(?:secrets\.CRON_SECRET|Bearer)/i);
+
+    // A successful HTTP status alone is insufficient: the JSON contract
+    // validator must decide whether the sync itself succeeded.
+    expect(workflow).toMatch(/node scripts\/validate-sync-response\.mjs "\$response_file" "\$http_status"/);
+  });
 });
