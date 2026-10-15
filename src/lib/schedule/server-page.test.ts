@@ -179,7 +179,7 @@ describe("server-paginated schedule pages", () => {
     expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(Buffer.byteLength(JSON.stringify(schedule)));
   });
 
-  it("shows the most recent history date first while preserving time order within a date", () => {
+  it("shows the newest history matches first, including within the same date", () => {
     const schedule = payload([
       match("mar-1-late", "2026-03-01T12:00:00.000Z"),
       match("mar-2", "2026-03-02T09:00:00.000Z"),
@@ -189,8 +189,23 @@ describe("server-paginated schedule pages", () => {
 
     const page = createSchedulePage(schedule, query({ range: "history", timeZone: "UTC" }), new Date("2026-03-08T00:00:00.000Z"));
 
-    expect(page.matches.map((item) => item.id)).toEqual(["mar-2", "mar-1-early", "mar-1-late"]);
+    expect(page.matches.map((item) => item.id)).toEqual(["mar-2", "mar-1-late", "mar-1-early"]);
     expect(page.rangeCounts.history).toBe(3);
+
+    const firstPage = createSchedulePage(
+      schedule,
+      query({ range: "history", timeZone: "UTC", limit: "2" }),
+      new Date("2026-03-08T00:00:00.000Z"),
+    );
+    expect(firstPage.matches.map((item) => item.id)).toEqual(["mar-2", "mar-1-late"]);
+    expect(firstPage.page.nextCursor).toBeTruthy();
+
+    const secondPage = createSchedulePage(
+      schedule,
+      query({ range: "history", timeZone: "UTC", limit: "2", cursor: firstPage.page.nextCursor! }),
+      new Date("2026-03-08T00:00:00.000Z"),
+    );
+    expect(secondPage.matches.map((item) => item.id)).toEqual(["mar-1-early"]);
   });
 
   it("lets an explicit date override the shortcut and rejects a cursor from other filters", () => {
@@ -240,3 +255,4 @@ describe("server-paginated schedule pages", () => {
     expect(next.matches.map((item) => item.id)).toEqual(["long-filter-2"]);
   });
 });
+
