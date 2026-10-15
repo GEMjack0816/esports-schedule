@@ -83,6 +83,9 @@ try {
     await page.locator(".refresh-button").click();
     await page.getByRole("tab", { name: /全部收录/ }).click();
     await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 200);
+    assert.equal(await page.locator(".match-list").getAttribute("aria-live"), null);
+    assert.equal(await page.locator(".match-list-more p").getAttribute("aria-live"), "polite");
+    assert.equal(await page.locator(".match-list-more p").getAttribute("aria-atomic"), "true");
     const loadMore = page.getByRole("button", { name: "加载更多比赛" });
     assert.match(await page.locator(".match-list-more p").innerText(), /200 \/ 450/);
     await loadMore.click();
