@@ -42,6 +42,7 @@ for (const profile of [
   const page = await context.newPage();
   const errors = [];
   const criticalRequestFailures = [];
+  const resultAnnouncementFailures = [];
   const optionalResourceFailures = [];
   const browserResourceWarnings = [];
   let expectScheduleChanged = false;
@@ -123,6 +124,21 @@ for (const profile of [
       criticalRequestFailures.push(`GET /api/matches/page HTTP ${filterResponse.status()}`);
     }
     await page.waitForFunction(() => document.querySelector(".match-list")?.getAttribute("aria-busy") === "false");
+    if (filterResponse.ok()) {
+      const body = await filterResponse.json();
+      const expectedAnnouncement = body.page?.total === 0
+        ? "没有符合条件的比赛。"
+        : `筛选结果：${body.page.total} 场比赛。`;
+      try {
+        await page.waitForFunction(
+          (expected) => document.querySelector(".schedule-result-status")?.textContent?.trim() === expected,
+          expectedAnnouncement,
+          { timeout: 5_000 },
+        );
+      } catch {
+        resultAnnouncementFailures.push(`${filterName}=${filterValue}: result count was not announced`);
+      }
+    }
   }
   await page.getByRole("tab", { name: /全部收录/ }).click();
   const gameSelect = page.locator(".filter-panel select").nth(0);
@@ -435,6 +451,7 @@ for (const profile of [
     healthVersionMatches:
       healthResult.body.version?.gitCommitSha === versionResult.body.gitCommitSha,
     criticalRequestFailures,
+    resultAnnouncementFailures,
     optionalResourceFailureCount: optionalResourceFailures.length,
     optionalResourceFailureSamples: optionalResourceFailures.slice(0, 5),
     browserResourceWarningCount: browserResourceWarnings.length,
@@ -486,6 +503,7 @@ for (const result of results) {
   if (!result.failedFilterRetainedResultsSafely) failures.push(`${prefix}: failed filter exposed a stale pagination cursor or ambiguous previous results`);
   failures.push(...result.errors.map((error) => `${prefix}: ${error}`));
   failures.push(...result.criticalRequestFailures.map((error) => `${prefix}: ${error}`));
+  failures.push(...result.resultAnnouncementFailures.map((error) => `${prefix}: ${error}`));
 }
 
 if (failures.length > 0) {

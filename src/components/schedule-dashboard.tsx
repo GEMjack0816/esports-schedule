@@ -11,6 +11,8 @@ import {
   schedulePageRequestKey,
 } from "@/lib/schedule/client-page-request";
 import { groupScheduleMatches } from "@/lib/schedule/client-grouping";
+import { ScheduleResultStatus } from "@/components/schedule-result-status";
+import { scheduleResultAnnouncementUpdate } from "@/lib/schedule/announcements";
 import { dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type Theme = "dark" | "light";
@@ -213,6 +215,16 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
   });
   const [loadedRequestKey, setLoadedRequestKey] = useState(initialPayloadKey);
   const payloadMatchesFilters = isSchedulePageForCurrentFilters(loadedRequestKey, requestKey);
+  const [announcedMatchCount, setAnnouncedMatchCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (!payloadMatchesFilters) {
+      setAnnouncedMatchCount(null);
+      return;
+    }
+    // Clear first so a different filter set with the same count is announced too.
+    setAnnouncedMatchCount(null);
+    return scheduleResultAnnouncementUpdate(payload.page.total, setAnnouncedMatchCount);
+  }, [payload.page.total, payloadMatchesFilters, requestKey]);
   const currentRequestKey = useRef(requestKey);
   useLayoutEffect(() => {
     currentRequestKey.current = requestKey;
@@ -461,7 +473,8 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
             <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt ? dateKeyInTimeZone(payload.coverage.range.earliestMatchAt, timeZone) : undefined} max={payload.coverage.range.latestMatchAt ? dateKeyInTimeZone(payload.coverage.range.latestMatchAt, timeZone) : undefined} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
           </div>
 
-          <div className="match-list" aria-live="polite" aria-busy={loading || loadingMore}>
+          <ScheduleResultStatus count={announcedMatchCount} />
+          <div className="match-list" aria-busy={loading || loadingMore}>
             {!payloadMatchesFilters && <div className="data-notice" role={requestError ? "alert" : "status"}>
               {requestError
                 ? "当前筛选加载失败，下面显示的是上一组筛选结果；请重试。"
