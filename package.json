@@ -12,6 +12,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:check": "node scripts/check-database.mjs",
     "verify:browser": "node scripts/verify-browser.mjs",
+    "verify:date-bounds": "node scripts/verify-date-bounds.mjs",
     "verify:admin": "node scripts/verify-admin.mjs",
     "verify:production": "node scripts/verify-production.mjs",
     "lint": "eslint",
@@ -43,3 +44,4 @@
     "vitest": "^4.1.10"
   }
 }
+
