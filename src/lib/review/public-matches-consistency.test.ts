@@ -165,6 +165,64 @@ describe("manual match cache authoritative version checks", () => {
     expect(mocks.snapshot).not.toHaveBeenCalled();
   });
 
+  it("keeps a newer Runtime Cache revision after PostgreSQL restores an older revision with pending delivery", async () => {
+    const newerMatch = {
+      id: "manual:honor-of-kings:db-newer-cache",
+      provider: "manual",
+      providerMatchId: "db-newer-cache",
+      game: "honor-of-kings",
+      tournament: "Newer cached tournament",
+      league: "KPL",
+      stage: null,
+      homeTeam: { name: "Alpha", logo: "/team-placeholder.svg" },
+      awayTeam: { name: "Beta", logo: "/team-placeholder.svg" },
+      homeScore: null,
+      awayScore: null,
+      bestOf: 5,
+      status: "scheduled",
+      startTimeUtc: "2026-10-15T12:00:00.000Z",
+      streams: [],
+      lastUpdatedAt: "2026-10-15T11:00:00.000Z",
+    } as EsportsMatch;
+    const oldMatch = { ...newerMatch, tournament: "Restored older tournament" };
+    const latestRuntimeSnapshot = {
+      matches: [newerMatch],
+      fetchedAt: "Runtime Cache revision 6",
+      revision: 6,
+      pendingCacheRevisions: 0,
+    };
+    let simulateCacheEviction = false;
+    mocks.get.mockImplementation(async (key: string) => {
+      if (key === "published-manual-matches-fence-v1") return { revision: simulateCacheEviction ? 5 : 6 };
+      if (key.endsWith(":6")) return simulateCacheEviction ? null : latestRuntimeSnapshot;
+      if (key === "published-manual-matches-v1") {
+        return { matches: [oldMatch], fetchedAt: "legacy revision 5", revision: 5 };
+      }
+      return null;
+    });
+    mocks.cacheStatus
+      .mockResolvedValueOnce({ revision: 5, pendingRevisions: 1 })
+      .mockRejectedValueOnce(new Error("database unavailable"));
+    mocks.cached.mockResolvedValue({ matches: [oldMatch], fetchedAt: "Next Data Cache revision 5", revision: 5 });
+    mocks.snapshot.mockResolvedValue({ rows: [], revision: 5, pendingRevisions: 1 });
+
+    const restored = await getPublishedDatabaseMatches();
+
+    expect(restored.matches).toEqual([newerMatch]);
+    expect(restored.state.cacheRevision).toBe(6);
+    expect(restored.state.status).toBe("cached");
+    expect(restored.state.pendingCacheRevisions).toBe(1);
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+
+    // The regional snapshot is subsequently unavailable. A process that has
+    // already served revision 6 must not accept the restored revision 5.
+    simulateCacheEviction = true;
+    const duringOutage = await getPublishedDatabaseMatches();
+    expect(duringOutage.state.status).toBe("unavailable");
+    expect(duringOutage.state.cacheRevision).toBe(6);
+    expect(duringOutage.matches).toEqual([]);
+  });
+
   it("rejects old fallback after learning a newer revision even if the subsequent full read fails", async () => {
     mocks.snapshot.mockRejectedValue(new Error("database unavailable"));
     mocks.get.mockImplementation(async (key: string) => key.includes("fence")
@@ -473,3 +531,4 @@ describe("manual match cache deployment topology", () => {
     expect(config.regions).toHaveLength(1);
   });
 });
+

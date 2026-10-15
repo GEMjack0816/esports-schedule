@@ -383,7 +383,12 @@ export async function getPublishedDatabaseMatches(): Promise<{
 
   if (runtimeSnapshot
     && runtimeSnapshot.revision >= cacheStatus.revision
-    && cacheStatus.pendingRevisions === 0) {
+    && (cacheStatus.pendingRevisions === 0 || runtimeSnapshot.revision > cacheStatus.revision)) {
+    // A restored or lagging database watermark must not make a newer valid
+    // regional snapshot lose to an older database snapshot, even while an
+    // outbox row remains pending. Keep the process high-water mark as well so
+    // a later database outage cannot serve a lower revision.
+    observeManualMatchRevision(runtimeSnapshot.revision);
     const matchesCurrentDatabase = runtimeSnapshot.revision === cacheStatus.revision;
     publicState = {
       configured: true,
@@ -391,7 +396,7 @@ export async function getPublishedDatabaseMatches(): Promise<{
       lastSuccessfulReadAt: runtimeSnapshot.fetchedAt,
       cachedManualMatches: runtimeSnapshot.matches.length,
       cacheRevision: Math.max(publicState.cacheRevision, runtimeSnapshot.revision),
-      pendingCacheRevisions: 0,
+      pendingCacheRevisions: matchesCurrentDatabase ? 0 : cacheStatus.pendingRevisions,
     };
     return { matches: runtimeSnapshot.matches, state: publicState };
   }
@@ -480,3 +485,4 @@ export async function getDatabaseHealth(): Promise<DatabasePublicState & {
     };
   }
 }
+
