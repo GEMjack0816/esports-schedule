@@ -108,8 +108,26 @@ export function assertAdminVerifyDeployment(version, expected) {
   }
 
   return {
+    origin: deploymentOrigin,
     deploymentId: version.deploymentId,
     gitCommitRef: version.gitCommitRef,
     gitCommitSha: version.gitCommitSha,
   };
+}
+
+export function assertAdminVerifySessionPreflight({ status, pageUrl, expectedOrigin }) {
+  if (status !== 200) {
+    throw new Error("Admin session preflight did not return HTTP 200; no test data was written.");
+  }
+
+  let page;
+  try {
+    page = new URL(pageUrl);
+  } catch {
+    throw new Error("Admin session preflight returned an invalid URL; no test data was written.");
+  }
+
+  if (page.origin !== expectedOrigin || page.pathname !== "/admin") {
+    throw new Error("Authenticated admin session is not available on the verified Preview deployment; no test data was written.");
+  }
 }

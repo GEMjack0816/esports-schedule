@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertAdminVerifyDeployment,
+  assertAdminVerifySessionPreflight,
   buildVerificationRunMarkers,
   parseAdminVerifyConfiguration,
   summarizeAdminVerifyFailure,
@@ -112,10 +113,11 @@ describe("verify:admin target safety", () => {
       expectedGitSha: sha,
     });
 
-    expect(assertAdminVerifyDeployment({
+    const verified = assertAdminVerifyDeployment({
       ...deployment,
       deploymentUrl: deploymentOrigin,
-    }, branchTarget).deploymentId).toBe("dpl_preview");
+    }, branchTarget);
+    expect(verified).toMatchObject({ origin: deploymentOrigin, deploymentId: "dpl_preview" });
     expect(() => assertAdminVerifyDeployment({
       ...deployment,
       deploymentUrl: deploymentOrigin,
@@ -124,10 +126,27 @@ describe("verify:admin target safety", () => {
 
   it("accepts only matching Preview environment, deployment URL, ref and SHA", () => {
     expect(assertAdminVerifyDeployment(deployment, expected)).toEqual({
+      origin,
       deploymentId: "dpl_preview",
       gitCommitRef: expected.expectedGitRef,
       gitCommitSha: sha,
     });
+  });
+
+  it("requires an authenticated admin session on the immutable verified deployment before writes", () => {
+    expect(() => assertAdminVerifySessionPreflight({
+      status: 200,
+      pageUrl: `${origin}/admin`,
+      expectedOrigin: origin,
+    })).not.toThrow();
+
+    for (const invalid of [
+      { status: 200, pageUrl: `${origin}/admin/login`, expectedOrigin: origin },
+      { status: 200, pageUrl: "https://branch-alias.vercel.app/admin", expectedOrigin: origin },
+      { status: 401, pageUrl: `${origin}/admin`, expectedOrigin: origin },
+    ]) {
+      expect(() => assertAdminVerifySessionPreflight(invalid)).toThrow(/no test data was written/);
+    }
   });
 
   it.each([

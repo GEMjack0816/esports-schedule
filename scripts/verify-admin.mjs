@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { chromium } from "playwright-core";
 import {
   assertAdminVerifyDeployment,
+  assertAdminVerifySessionPreflight,
   buildVerificationRunMarkers,
   parseAdminVerifyConfiguration,
   summarizeAdminVerifyFailure,
@@ -110,6 +111,7 @@ async function runVerification() {
   let browser;
   let context;
   let verifiedDeployment;
+  let testDataMayExist = false;
   let testError;
   let cleanupCounts;
   let cleanupError;
@@ -118,9 +120,18 @@ async function runVerification() {
     browser = await launchBrowser();
     context = await browser.newContext({ storageState, locale: "zh-CN" });
     verifiedDeployment = await readVerifiedDeployment(context, target);
+    const verifiedOrigin = verifiedDeployment.origin;
 
     const page = await context.newPage();
-    await submit(context, target.origin, {
+    const adminResponse = await page.goto(`${verifiedOrigin}/admin`, { waitUntil: "networkidle" });
+    assertAdminVerifySessionPreflight({
+      status: adminResponse?.status(),
+      pageUrl: page.url(),
+      expectedOrigin: verifiedOrigin,
+    });
+
+    testDataMayExist = true;
+    await submit(context, verifiedOrigin, {
       game: "honor-of-kings",
       league,
       teamA: approvedTeams[0],
@@ -131,7 +142,7 @@ async function runVerification() {
       notes,
       website: "",
     });
-    await page.goto(`${target.origin}/admin/submissions?q=${encodeURIComponent(approvedTeams[0])}`, {
+    await page.goto(`${verifiedOrigin}/admin/submissions?q=${encodeURIComponent(approvedTeams[0])}`, {
       waitUntil: "networkidle",
     });
     await page.getByRole("link", { name: "查看" }).click();
@@ -140,7 +151,7 @@ async function runVerification() {
 
     let publicMatch;
     for (let attempt = 0; attempt < 10; attempt += 1) {
-      const response = await context.request.get(`${target.origin}/api/matches`, {
+      const response = await context.request.get(`${verifiedOrigin}/api/matches`, {
         headers: { "Cache-Control": "no-cache" },
       });
       const payload = await response.json();
@@ -152,7 +163,7 @@ async function runVerification() {
     }
     if (!publicMatch) throw new Error("approved match did not appear in the public schedule");
 
-    await page.goto(`${target.origin}/admin/matches`, { waitUntil: "networkidle" });
+    await page.goto(`${verifiedOrigin}/admin/matches`, { waitUntil: "networkidle" });
     const approvedRow = page.getByRole("row").filter({ hasText: approvedTeams[0] });
     await approvedRow.getByRole("link", { name: "编辑" }).click();
     await page.getByLabel("赛事").fill(`${league} edited`);
@@ -160,7 +171,7 @@ async function runVerification() {
     await page.getByRole("button", { name: "隐藏比赛" }).click();
     await page.getByRole("button", { name: "恢复公开" }).click();
 
-    const rejectedSubmission = await submit(context, target.origin, {
+    const rejectedSubmission = await submit(context, verifiedOrigin, {
       game: "honor-of-kings",
       league,
       teamA: rejectedTeams[0],
@@ -171,27 +182,27 @@ async function runVerification() {
       notes,
       website: "",
     });
-    await page.goto(`${target.origin}/admin/submissions/${rejectedSubmission.id}`, { waitUntil: "networkidle" });
+    await page.goto(`${verifiedOrigin}/admin/submissions/${rejectedSubmission.id}`, { waitUntil: "networkidle" });
     await page.getByLabel("驳回原因").fill("Automated isolated Preview rejection test");
     await page.getByRole("button", { name: "驳回" }).click();
     await page.waitForURL(/status=rejected/);
 
-    const rejectedPayload = await (await context.request.get(`${target.origin}/api/matches`)).json();
+    const rejectedPayload = await (await context.request.get(`${verifiedOrigin}/api/matches`)).json();
     if (rejectedPayload.matches?.some(
       (match) => match.homeTeam?.name === rejectedTeams[0] || match.awayTeam?.name === rejectedTeams[1],
     )) {
       throw new Error("rejected match appeared in the public schedule");
     }
 
-    await page.goto(`${target.origin}/admin`, { waitUntil: "networkidle" });
+    await page.goto(`${verifiedOrigin}/admin`, { waitUntil: "networkidle" });
     const dashboardText = await page.locator("body").innerText();
     if (!dashboardText.includes("最近操作")) throw new Error("admin audit summary is missing");
   } catch (error) {
     testError = summarizeAdminVerifyFailure(error, "verification");
   } finally {
-    if (verifiedDeployment && context) {
+    if (testDataMayExist && verifiedDeployment && context) {
       try {
-        cleanupCounts = await cleanupRun(context, target.origin, runId);
+        cleanupCounts = await cleanupRun(context, verifiedDeployment.origin, runId);
       } catch (error) {
         cleanupError = summarizeAdminVerifyFailure(error, "cleanup");
       }

@@ -56,6 +56,6 @@ $env:VERIFY_ADMIN_EXPECTED_GIT_SHA = "<expected-full-40-character-commit-sha>"
 npm run verify:admin -- <isolated-preview-url>
 ```
 
-`verify:admin` 在首次写入前请求 `/api/version`，并要求目标 URL 和部署 URL 都在精确 Preview origin 白名单中，且环境为 `preview`、分支和完整 SHA 与预期值一致。缺少任何元数据或请求被 Deployment Protection 拦截时都会 fail closed。不要把 Production 域名加入 allowlist。
+`verify:admin` 首先通过传入的 Preview URL 请求 `/api/version`，并要求目标 URL 和部署 URL 都在精确 Preview origin 白名单中，且环境为 `preview`、分支和完整 SHA 与预期值一致。验证通过后，所有页面、API 写入和清理请求都会固定到该响应报告的不可变 Deployment origin，不继续访问可移动的分支 alias。首次公开提交前还会在这个 Deployment origin 上验证管理员会话确实落到 `/admin`；如果认证状态只适用于分支 alias，脚本会在产生测试数据前失败。请确保 `ADMIN_STORAGE_STATE` 是针对该不可变 Preview Deployment origin 创建的。缺少任何元数据、会话不匹配或请求被 Deployment Protection 拦截时都会 fail closed。不要把 Production 域名加入 allowlist。
 
 测试生成的数据使用唯一 run UUID 标记。无论审核流程成功还是中途失败，脚本都会在 `finally` 调用 `/api/admin/verify-cleanup` 清理该 run 的 submissions、关联人工比赛和审计事件，并同步公开比赛缓存。清理端点只在 Vercel Preview runtime 开放，且要求管理员会话和同源 Origin；Production runtime 固定返回 404。若清理返回非 2xx，验证整体失败并报告清理失败，不会宣称数据已清除。
