@@ -519,4 +519,44 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       (value) => value.providerMatchId === `db-${match.id}`,
     )?.league).toBe(`${pending.input.league} edited`);
   });
+
+  it("atomically removes only records belonging to one isolated verification run", async () => {
+    const runId = randomUUID();
+    const league = `Codex isolated review ${runId}`;
+    const approvedId = randomUUID();
+    const rejectedId = randomUUID();
+    submissionIds.push(approvedId, rejectedId);
+    const approvedInput = { ...submission("verify-approved"), league };
+    const rejectedInput = { ...submission("verify-rejected"), league };
+    const approvedRow = await repository.createSubmission(approvedInput, { id: approvedId });
+    const rejectedRow = await repository.createSubmission(rejectedInput, { id: rejectedId });
+    const publishedRow = await repository.approveSubmission(
+      approvedId,
+      { submission: approvedInput, published: published(approvedInput) },
+      "admin-a",
+      approvedRow.updatedAt,
+    );
+    manualMatchIds.push(publishedRow.id);
+    await repository.rejectSubmission(rejectedId, "verification", "admin-a", rejectedRow.updatedAt);
+
+    // Cleanup is keyed by the run UUID, not response IDs, so a lost HTTP
+    // response after a committed submission cannot strand test data.
+    const deleted = await repository.cleanupIsolatedVerificationRun(runId);
+    expect(deleted.submissions).toBe(2);
+    expect(deleted.manualMatches).toBe(1);
+    expect(deleted.auditEvents).toBeGreaterThanOrEqual(2);
+    const [remainingSubmissions] = await cleanup`
+      select count(*)::int as count from match_submissions
+      where id = any(${[approvedId, rejectedId]}::uuid[])
+    `;
+    const [remainingMatches] = await cleanup`
+      select count(*)::int as count from published_manual_matches
+      where id = ${publishedRow.id}
+    `;
+    expect(remainingSubmissions.count).toBe(0);
+    expect(remainingMatches.count).toBe(0);
+
+    const repeated = await repository.cleanupIsolatedVerificationRun(runId);
+    expect(repeated).toEqual({ submissions: 0, manualMatches: 0, auditEvents: 0 });
+  });
 });
