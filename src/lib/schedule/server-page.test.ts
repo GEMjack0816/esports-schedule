@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import type { EsportsMatch, SchedulePayload } from "./types";
 import { applyManualData } from "./manual";
@@ -107,6 +107,33 @@ describe("server-paginated schedule pages", () => {
     expect(new Set(seen).size).toBe(300);
     expect(seen).toEqual(schedule.matches.slice(0, 300).map((item) => item.id));
     expect(cursor).toBeTruthy();
+  });
+
+  it("streams the cursor hash without serializing a second full match array", () => {
+    const schedule = payload(Array.from({ length: 80 }, (_, index) => match(
+      `hash-match-${String(index).padStart(3, "0")}`,
+      new Date(Date.UTC(2026, 0, 1, index)).toISOString(),
+    )));
+    const stringify = vi.spyOn(JSON, "stringify");
+
+    let resultSetHash: string;
+    try {
+      const page = createSchedulePage(schedule, query({ range: "all", limit: "20" }), new Date("2026-01-01T00:00:00.000Z"));
+      resultSetHash = JSON.parse(Buffer.from(page.page.nextCursor ?? "", "base64url").toString("utf8"))[2];
+      expect(stringify.mock.calls.some(([value]) => Array.isArray(value)
+        && value.length === schedule.matches.length
+        && value.every((item) => item && typeof item === "object" && "id" in item))).toBe(false);
+    } finally {
+      stringify.mockRestore();
+    }
+
+    const legacyCursorMatchSet = schedule.matches.map((item) => {
+      const { lastUpdatedAt: freshnessOnly, ...stableMatch } = item;
+      void freshnessOnly;
+      return stableMatch;
+    });
+    const expectedHash = createHash("sha256").update(JSON.stringify(legacyCursorMatchSet)).digest("base64url");
+    expect(resultSetHash!).toBe(expectedHash);
   });
 
   it("rejects a continuation cursor when the filtered match snapshot changed", () => {

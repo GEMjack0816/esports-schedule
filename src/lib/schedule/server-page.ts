@@ -278,14 +278,17 @@ export function createSchedulePage(
   // manual JSON matches receive a request-time fallback timestamp, so hashing
   // it would invalidate every continuation cursor even when visible schedule
   // content is unchanged.
-  const cursorMatchSet = matchingEntries.map(({ match }) => {
+  // Stream the exact JSON array bytes into the digest. This preserves cursor
+  // hashes across rolling deployments while avoiding a second array plus one
+  // full-schedule JSON string on every page request.
+  const resultSetHashDigest = createHash("sha256").update("[");
+  matchingEntries.forEach(({ match }, index) => {
+    if (index > 0) resultSetHashDigest.update(",");
     const { lastUpdatedAt: freshnessOnly, ...stableMatch } = match;
     void freshnessOnly;
-    return stableMatch;
+    resultSetHashDigest.update(JSON.stringify(stableMatch));
   });
-  const resultSetHash = createHash("sha256")
-    .update(JSON.stringify(cursorMatchSet))
-    .digest("base64url");
+  const resultSetHash = resultSetHashDigest.update("]").digest("base64url");
 
   const cursor = query.cursor
     ? decodeCursor(query.cursor, signature, legacySignature, resultSetHash)
