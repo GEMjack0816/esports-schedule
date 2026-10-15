@@ -182,6 +182,34 @@ describe("public submission transport", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("reports a timeout when the response body stalls after headers arrive", async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          bodyController = controller;
+        },
+      });
+      init?.signal?.addEventListener("abort", () => {
+        bodyController?.error(new DOMException("Aborted", "AbortError"));
+      }, { once: true });
+
+      return new Response(body, {
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    const result = requestMatchSubmission(payload, fetcher);
+    await vi.advanceTimersByTimeAsync(SUBMISSION_REQUEST_TIMEOUT_MS);
+
+    await expect(result).resolves.toEqual({
+      ok: false,
+      message: SUBMISSION_REQUEST_TIMEOUT_ERROR,
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("clears its deadline immediately after success", async () => {
     vi.useFakeTimers();
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(receipt));

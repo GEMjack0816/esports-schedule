@@ -74,7 +74,12 @@ export async function requestMatchSubmission(
     try {
       body = await response.json();
     } catch {
-      return { ok: false, message: SUBMISSION_REQUEST_ERROR };
+      return {
+        ok: false,
+        message: controller.signal.aborted
+          ? SUBMISSION_REQUEST_TIMEOUT_ERROR
+          : SUBMISSION_REQUEST_ERROR,
+      };
     }
 
     if (!response.ok) {
