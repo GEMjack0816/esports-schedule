@@ -164,7 +164,7 @@ function compareMatchKeys(
       : first.dateKey.localeCompare(second.dateKey);
   }
   const timeOrder = (first.time ?? Number.MAX_SAFE_INTEGER) - (second.time ?? Number.MAX_SAFE_INTEGER);
-  return timeOrder || first.id.localeCompare(second.id);
+  return (range === "history" ? -timeOrder : timeOrder) || first.id.localeCompare(second.id);
 }
 
 function toCursor(
@@ -308,3 +308,4 @@ export function createSchedulePage(
     timeZone: query.timeZone,
   };
 }
+
