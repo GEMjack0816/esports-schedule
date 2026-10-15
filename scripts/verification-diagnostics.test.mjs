@@ -4,6 +4,7 @@ import {
   safeRequestPath,
   summarizeBrowserDiagnostic,
   summarizeRequestFailure,
+  summarizeResponseFailure,
 } from "./verification-diagnostics.mjs";
 
 const sensitiveValue = "access_token=hidden-token&client_secret=hidden-secret";
@@ -47,6 +48,17 @@ describe("verification diagnostic redaction", () => {
     );
 
     expect(message).toBe("GET /api/version failed");
+    expect(message).not.toContain(sensitiveValue);
+  });
+
+  it("summarizes failed responses without echoing sensitive path segments", () => {
+    const message = summarizeResponseFailure(
+      "GET",
+      `https://preview.invalid/api/private/${sensitiveValue}?also=${sensitiveValue}`,
+      500,
+    );
+
+    expect(message).toBe("GET [other path] HTTP 500");
     expect(message).not.toContain(sensitiveValue);
   });
 

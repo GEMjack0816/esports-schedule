@@ -6,6 +6,7 @@ import {
   safeRequestPath,
   summarizeBrowserDiagnostic,
   summarizeRequestFailure,
+  summarizeResponseFailure,
 } from "./verification-diagnostics.mjs";
 
 let browser;
@@ -79,7 +80,11 @@ for (const profile of [
       && criticalPaths.includes(candidateUrl.pathname)
       && candidate.status() >= 400
     ) {
-      criticalRequestFailures.push(`${candidate.request().method()} ${candidateUrl.pathname} HTTP ${candidate.status()}`);
+      criticalRequestFailures.push(summarizeResponseFailure(
+        candidate.request().method(),
+        candidate.url(),
+        candidate.status(),
+      ));
     }
   });
 

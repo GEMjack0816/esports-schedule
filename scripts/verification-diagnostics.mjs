@@ -60,6 +60,16 @@ export function summarizeRequestFailure(method, requestUrl, errorText) {
   return `${safeMethod} ${safeRequestPath(requestUrl)} failed${errorCode ? ` (${errorCode})` : ""}`;
 }
 
+export function summarizeResponseFailure(method, requestUrl, status) {
+  const safeMethod = typeof method === "string" && /^[A-Z]{3,10}$/.test(method)
+    ? method
+    : "REQUEST";
+  const safeStatus = Number.isInteger(status) && status >= 100 && status <= 599
+    ? status
+    : "unknown";
+  return `${safeMethod} ${safeRequestPath(requestUrl)} HTTP ${safeStatus}`;
+}
+
 export function summarizeBrowserDiagnostic(kind) {
   switch (kind) {
     case "console":
