@@ -1,9 +1,27 @@
 import { describe, expect, it } from "vitest";
+import nextConfig from "../../../next.config";
 import {
   isPandaScoreCdnLogo,
   resolveTeamLogoSource,
   TEAM_LOGO_PLACEHOLDER,
 } from "./team-logo";
+
+describe("Next Image optimizer restrictions", () => {
+  it("limits remote optimization to small, redirect-free team logos", () => {
+    expect(nextConfig.images).toMatchObject({
+      maximumRedirects: 0,
+      maximumResponseBody: 5_000_000,
+      dangerouslyAllowLocalIP: false,
+      remotePatterns: [{
+        protocol: "https",
+        hostname: "cdn.pandascore.co",
+        port: "",
+        pathname: "/images/team/image/**",
+        search: "",
+      }],
+    });
+  });
+});
 
 describe("isPandaScoreCdnLogo", () => {
   it("allows HTTPS images on PandaScore's documented image CDN", () => {
@@ -19,6 +37,9 @@ describe("isPandaScoreCdnLogo", () => {
     "https://cdn.pandascore.co:8443/images/team.png",
     "https://user@cdn.pandascore.co/images/team.png",
     "https://cdn.pandascore.co/avatar/team.png",
+    "https://cdn.pandascore.co/images/league/image/123/logo.png",
+    "https://cdn.pandascore.co/images/team/image/125063/team.png?size=large",
+    "https://cdn.pandascore.co/images/team/image/125063/team.png#fragment",
     "/team-placeholder.svg",
     "not a URL",
   ])("does not optimize untrusted or non-CDN source %s", (source) => {
@@ -36,8 +57,8 @@ describe("resolveTeamLogoSource", () => {
   });
 
   it("allows a refreshed source to retry after an earlier URL failed", () => {
-    const failedSource = "https://cdn.pandascore.co/images/team/old.png";
-    const refreshedSource = "https://cdn.pandascore.co/images/team/new.png";
+    const failedSource = "https://cdn.pandascore.co/images/team/image/123/old.png";
+    const refreshedSource = "https://cdn.pandascore.co/images/team/image/123/new.png";
 
     expect(resolveTeamLogoSource(refreshedSource, failedSource)).toBe(refreshedSource);
   });

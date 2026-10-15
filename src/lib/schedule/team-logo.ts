@@ -1,4 +1,5 @@
 const PANDASCORE_CDN_HOST = "cdn.pandascore.co";
+const PANDASCORE_TEAM_IMAGE_PATH = "/images/team/image/";
 export const TEAM_LOGO_PLACEHOLDER = "/team-placeholder.svg";
 
 /**
@@ -13,7 +14,9 @@ export function isPandaScoreCdnLogo(source: string): boolean {
       && url.port === ""
       && !url.username
       && !url.password
-      && url.pathname.startsWith("/images/");
+      && url.pathname.startsWith(PANDASCORE_TEAM_IMAGE_PATH)
+      && url.search === ""
+      && url.hash === "";
   } catch {
     return false;
   }

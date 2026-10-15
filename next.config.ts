@@ -23,11 +23,19 @@ const nextConfig: NextConfig = {
     // Retain successful responses for PandaScore's dedicated logo CDN through
     // short upstream interruptions; URL paths are unique per logo revision.
     minimumCacheTTL: 86_400,
+    // `remotePatterns` constrain the initial URL only. Do not follow an
+    // allowlisted CDN redirect to an untrusted host, and cap optimizer memory
+    // use because team logos are small assets.
+    maximumRedirects: 0,
+    maximumResponseBody: 5_000_000,
+    dangerouslyAllowLocalIP: false,
     remotePatterns: [
       {
         protocol: "https",
         hostname: "cdn.pandascore.co",
-        pathname: "/images/**",
+        port: "",
+        pathname: "/images/team/image/**",
+        search: "",
       },
     ],
   },
