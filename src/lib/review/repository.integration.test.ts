@@ -521,7 +521,8 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
   });
 
   it("atomically removes only records belonging to one isolated verification run", async () => {
-    const league = `Codex isolated review ${randomUUID()}`;
+    const runId = randomUUID();
+    const league = `Codex isolated review ${runId}`;
     const approvedId = randomUUID();
     const rejectedId = randomUUID();
     submissionIds.push(approvedId, rejectedId);
@@ -538,10 +539,9 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     manualMatchIds.push(publishedRow.id);
     await repository.rejectSubmission(rejectedId, "verification", "admin-a", rejectedRow.updatedAt);
 
-    const deleted = await repository.cleanupIsolatedVerificationRun(
-      [approvedId, rejectedId],
-      league,
-    );
+    // Cleanup is keyed by the run UUID, not response IDs, so a lost HTTP
+    // response after a committed submission cannot strand test data.
+    const deleted = await repository.cleanupIsolatedVerificationRun(runId);
     expect(deleted.submissions).toBe(2);
     expect(deleted.manualMatches).toBe(1);
     expect(deleted.auditEvents).toBeGreaterThanOrEqual(2);
@@ -555,5 +555,8 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     `;
     expect(remainingSubmissions.count).toBe(0);
     expect(remainingMatches.count).toBe(0);
+
+    const repeated = await repository.cleanupIsolatedVerificationRun(runId);
+    expect(repeated).toEqual({ submissions: 0, manualMatches: 0, auditEvents: 0 });
   });
 });

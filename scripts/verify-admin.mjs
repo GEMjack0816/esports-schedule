@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { chromium } from "playwright-core";
 import { assertIsolatedPreviewTarget, parseAllowedPreviewHosts } from "./lib/verify-admin-target.mjs";
 
@@ -35,18 +36,20 @@ if (!browser) throw new Error("No supported browser executable found.");
 
 const context = await browser.newContext({ storageState, locale: "zh-CN" });
 const page = await context.newPage();
-const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-const league = `Codex isolated review ${suffix}`;
-const approvedTeams = [`Approval A ${suffix}`, `Approval B ${suffix}`];
-const rejectedTeams = [`Reject A ${suffix}`, `Reject B ${suffix}`];
+const runId = randomUUID();
+const league = `Codex isolated review ${runId}`;
+const approvedTeams = [`Approval A ${runId}`, `Approval B ${runId}`];
+const rejectedTeams = [`Reject A ${runId}`, `Reject B ${runId}`];
 const startTime = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 let version;
+let submissionAttempts = 0;
 
 function endpoint(pathname) {
   return new URL(pathname, baseUrl).toString();
 }
 
 async function submit(teams) {
+  submissionAttempts += 1;
   const response = await context.request.post(endpoint("/api/submissions"), {
     data: {
       game: "honor-of-kings",
@@ -64,7 +67,6 @@ async function submit(teams) {
   return response.json();
 }
 
-const createdSubmissionIds = [];
 let publicMatch;
 let passed = false;
 try {
@@ -99,8 +101,7 @@ if (
   throw new Error("Authenticated Preview administrator preflight failed.");
 }
 
-const approvedSubmission = await submit(approvedTeams);
-createdSubmissionIds.push(approvedSubmission.id);
+await submit(approvedTeams);
 await page.goto(endpoint(`/admin/submissions?q=${encodeURIComponent(approvedTeams[0])}`), {
   waitUntil: "networkidle",
 });
@@ -150,12 +151,11 @@ passed = true;
 } finally {
   let cleanupError;
   try {
-    if (createdSubmissionIds.length > 0) {
+    if (submissionAttempts > 0) {
       const cleanupResponse = await context.request.post(endpoint("/api/admin/verification-cleanup"), {
         headers: { Origin: new URL(baseUrl).origin },
         data: {
-          submissionIds: createdSubmissionIds,
-          league,
+          runId,
           gitCommitSha: expectedSha,
           gitCommitRef: expectedRef,
           deploymentId: expectedDeploymentId,

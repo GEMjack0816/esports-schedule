@@ -7,12 +7,9 @@ import { ReviewConflictError } from "@/lib/review/types";
 
 export const dynamic = "force-dynamic";
 
-function validIds(value: unknown): value is string[] {
-  return Array.isArray(value)
-    && value.length > 0
-    && value.length <= 10
-    && value.every((id) => typeof id === "string"
-      && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id));
+function validRunId(value: unknown): value is string {
+  return typeof value === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 export async function POST(request: Request) {
@@ -46,17 +43,14 @@ export async function POST(request: Request) {
     || body.gitCommitSha !== deployedSha
     || body.gitCommitRef !== deployedRef
     || body.deploymentId !== deploymentId
-    || typeof body.league !== "string"
-    || body.league.length > 160
-    || !body.league.startsWith("Codex isolated review ")
-    || !validIds(body.submissionIds)
+    || !validRunId(body.runId)
   ) {
     return Response.json({ error: "验证目标或数据无效。" }, { status: 409 });
   }
 
   const repository = getReviewRepository();
   try {
-    const deleted = await repository.cleanupIsolatedVerificationRun(body.submissionIds, body.league);
+    const deleted = await repository.cleanupIsolatedVerificationRun(body.runId);
     await synchronizePublishedManualMatchesSnapshot(repository);
     revalidateTag("published-manual-matches", { expire: 0 });
     return Response.json({ ok: true, deleted }, { headers: { "Cache-Control": "no-store" } });

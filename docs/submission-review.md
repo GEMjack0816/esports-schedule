@@ -54,4 +54,4 @@ $env:ADMIN_VERIFY_ALLOWED_PREVIEW_HOSTS = "<exact-preview-host>"
 npm run verify:admin -- <isolated-preview-url> <expected-git-sha> <expected-git-ref> <expected-deployment-id>
 ```
 
-`verify:admin` 在任何写入前通过 `/api/version` 验证服务身份、`environment=preview`、精确 Git SHA/ref、Deployment ID 及显式 hostname allowlist；目标必须是无路径、查询或凭据的 HTTPS origin，allowlist 不接受通配符。脚本还会确认现有浏览器状态确实能打开 `/admin`，任一检查失败都会 fail closed。验证产生的 submission、人工比赛和关联审计记录会在 `finally` 中通过仅 Preview 可用的管理员清理端点按本次 ID 删除；清理失败会使验证失败，浏览器仍会关闭，禁止把 Production hostname 加入 allowlist。
+`verify:admin` 在任何写入前通过 `/api/version` 验证服务身份、`environment=preview`、精确 Git SHA/ref、Deployment ID 及显式 hostname allowlist；目标必须是无路径、查询或凭据的 HTTPS origin，allowlist 不接受通配符。脚本还会确认现有浏览器状态确实能打开 `/admin`，任一检查失败都会 fail closed。验证产生的 submission、人工比赛和关联审计记录会在 `finally` 中通过仅 Preview 可用的管理员清理端点按本次随机 run UUID 对应的唯一赛事名删除；即使 submission 已提交但响应体丢失，清理仍可定位记录。清理失败会使验证失败，浏览器仍会关闭，禁止把 Production hostname 加入 allowlist。

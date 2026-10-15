@@ -597,24 +597,24 @@ export class DrizzleReviewRepository {
   }
 
   async cleanupIsolatedVerificationRun(
-    submissionIds: string[],
-    expectedLeague: string,
+    runId: string,
   ): Promise<{ submissions: number; manualMatches: number; auditEvents: number }> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)) {
+      throw new ReviewConflictError("验证数据与清理请求不匹配。");
+    }
+    const expectedLeague = `Codex isolated review ${runId}`;
     try {
       return await getDatabase().transaction(async (tx) => {
         const submissions = await tx.select({ id: matchSubmissions.id, league: matchSubmissions.league })
           .from(matchSubmissions)
-          .where(inArray(matchSubmissions.id, submissionIds))
+          .where(eq(matchSubmissions.league, expectedLeague))
           .for("update");
-        if (
-          submissions.length !== submissionIds.length
-          || submissions.some((row) => row.league !== expectedLeague)
-          || !expectedLeague.startsWith("Codex isolated review ")
-        ) {
+        if (submissions.length > 2 || submissions.some((row) => row.league !== expectedLeague)) {
           throw new ReviewConflictError("验证数据与清理请求不匹配。");
         }
 
-        const manualMatches = await tx.select({ id: publishedManualMatches.id })
+        const submissionIds = submissions.map((row) => row.id);
+        const manualMatches = submissionIds.length === 0 ? [] : await tx.select({ id: publishedManualMatches.id })
           .from(publishedManualMatches)
           .where(inArray(publishedManualMatches.sourceSubmissionId, submissionIds))
           .for("update");
@@ -627,7 +627,7 @@ export class DrizzleReviewRepository {
             .where(inArray(publishedManualMatches.id, manualMatches.map((row) => row.id)))
             .returning({ id: publishedManualMatches.id })
           : [];
-        const deletedSubmissions = await tx.delete(matchSubmissions)
+        const deletedSubmissions = submissionIds.length === 0 ? [] : await tx.delete(matchSubmissions)
           .where(inArray(matchSubmissions.id, submissionIds))
           .returning({ id: matchSubmissions.id });
 

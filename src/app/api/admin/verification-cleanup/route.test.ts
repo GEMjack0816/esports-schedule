@@ -20,7 +20,7 @@ vi.mock("next/cache", () => ({ revalidateTag: mocks.revalidateTag }));
 
 import { POST } from "./route";
 
-const id = "11111111-1111-4111-8111-111111111111";
+const runId = "11111111-1111-4111-8111-111111111111";
 
 function request(body: unknown) {
   return new Request("https://preview.example/api/admin/verification-cleanup", {
@@ -45,14 +45,13 @@ describe("POST /api/admin/verification-cleanup", () => {
 
   it("cleans only an authenticated run bound to the current Preview identity", async () => {
     const response = await POST(request({
-      submissionIds: [id],
-      league: "Codex isolated review run",
+      runId,
       gitCommitSha: "sha",
       gitCommitRef: "fix/ref",
       deploymentId: "dpl_preview",
     }));
     expect(response.status).toBe(200);
-    expect(mocks.cleanup).toHaveBeenCalledWith([id], "Codex isolated review run");
+    expect(mocks.cleanup).toHaveBeenCalledWith(runId);
     expect(mocks.synchronize).toHaveBeenCalledOnce();
     expect(mocks.revalidateTag).toHaveBeenCalledWith(
       "published-manual-matches",
@@ -73,8 +72,7 @@ describe("POST /api/admin/verification-cleanup", () => {
     ["deployment", { gitCommitSha: "sha", gitCommitRef: "fix/ref", deploymentId: "dpl_other" }],
   ])("fails closed when %s does not match", async (_label, identity) => {
     const response = await POST(request({
-      submissionIds: [id],
-      league: "Codex isolated review run",
+      runId,
       ...identity,
     }));
     expect(response.status).toBe(409);
@@ -85,5 +83,16 @@ describe("POST /api/admin/verification-cleanup", () => {
     mocks.requireAdminApi.mockResolvedValue({ ok: false, response: new Response(null, { status: 401 }) });
     const response = await POST(request({}));
     expect(response.status).toBe(401);
+  });
+
+  it("rejects a malformed run identifier before cleanup", async () => {
+    const response = await POST(request({
+      runId: "not-a-uuid",
+      gitCommitSha: "sha",
+      gitCommitRef: "fix/ref",
+      deploymentId: "dpl_preview",
+    }));
+    expect(response.status).toBe(409);
+    expect(mocks.cleanup).not.toHaveBeenCalled();
   });
 });
