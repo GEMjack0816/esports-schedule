@@ -17,10 +17,10 @@ describe("sync workflow response validation", () => {
     expect(validateSyncResponse(success, 200).ok).toBe(true);
   });
 
-  it("accepts a clearly reported busy lock without treating it as a refresh", () => {
+  it("rejects a clearly reported busy lock so scheduled automation does not report a refresh", () => {
     expect(validateSyncResponse({ status: "busy", lockAcquired: false, generation: null }, 409)).toEqual({
-      ok: true,
-      message: "sync busy: another refresh owns the lock",
+      ok: false,
+      message: "sync busy: another refresh owns the lock; this invocation did not refresh",
     });
   });
 
