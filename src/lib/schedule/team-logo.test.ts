@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isPandaScoreCdnLogo } from "./team-logo";
+import {
+  isPandaScoreCdnLogo,
+  resolveTeamLogoSource,
+  TEAM_LOGO_PLACEHOLDER,
+} from "./team-logo";
 
 describe("isPandaScoreCdnLogo", () => {
   it("allows HTTPS images on PandaScore's documented image CDN", () => {
@@ -19,5 +23,26 @@ describe("isPandaScoreCdnLogo", () => {
     "not a URL",
   ])("does not optimize untrusted or non-CDN source %s", (source) => {
     expect(isPandaScoreCdnLogo(source)).toBe(false);
+  });
+});
+
+describe("resolveTeamLogoSource", () => {
+  it("switches an errored optimized source to the local unoptimized placeholder", () => {
+    const source = "https://cdn.pandascore.co/images/team/image/125063/team.png";
+    const resolved = resolveTeamLogoSource(source, source);
+
+    expect(resolved).toBe(TEAM_LOGO_PLACEHOLDER);
+    expect(isPandaScoreCdnLogo(resolved)).toBe(false);
+  });
+
+  it("allows a refreshed source to retry after an earlier URL failed", () => {
+    const failedSource = "https://cdn.pandascore.co/images/team/old.png";
+    const refreshedSource = "https://cdn.pandascore.co/images/team/new.png";
+
+    expect(resolveTeamLogoSource(refreshedSource, failedSource)).toBe(refreshedSource);
+  });
+
+  it("uses the local placeholder when no logo is available", () => {
+    expect(resolveTeamLogoSource("", null)).toBe(TEAM_LOGO_PLACEHOLDER);
   });
 });

@@ -5,7 +5,11 @@ import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
-import { isPandaScoreCdnLogo } from "@/lib/schedule/team-logo";
+import {
+  isPandaScoreCdnLogo,
+  resolveTeamLogoSource,
+  TEAM_LOGO_PLACEHOLDER,
+} from "@/lib/schedule/team-logo";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -95,17 +99,23 @@ function TeamRow({ team, score, winning }: {
   score: number | null;
   winning: boolean;
 }) {
+  const source = team.logo || TEAM_LOGO_PLACEHOLDER;
+  const [failedSource, setFailedSource] = useState<string | null>(null);
+  const logoSource = resolveTeamLogoSource(source, failedSource);
+
   return (
     <div className={`team-row ${winning ? "team-winning" : ""}`}>
       <span className="team-mark" aria-hidden="true">
         <Image
-          src={team.logo || "/team-placeholder.svg"}
+          src={logoSource}
           alt=""
           width={28}
           height={28}
-          unoptimized={!isPandaScoreCdnLogo(team.logo)}
+          unoptimized={!isPandaScoreCdnLogo(logoSource)}
           referrerPolicy="no-referrer"
-          onError={(event) => { event.currentTarget.src = "/team-placeholder.svg"; }}
+          onError={() => {
+            if (logoSource !== TEAM_LOGO_PLACEHOLDER) setFailedSource(source);
+          }}
         />
         <span>{team.acronym?.slice(0, 3) || initials(team.name)}</span>
       </span>
