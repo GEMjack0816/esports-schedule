@@ -15,3 +15,8 @@ export function dateKeyInTimeZone(value: string | Date, timeZone: string): strin
 export function addDaysKey(days: number, timeZone: string, now = Date.now()): string {
   return dateKeyInTimeZone(new Date(now + days * DAY_MS), timeZone);
 }
+
+export function dateInputBound(value: string | null | undefined, timeZone: string): string | undefined {
+  if (!value || !Number.isFinite(Date.parse(value))) return undefined;
+  return dateKeyInTimeZone(value, timeZone);
+}
