@@ -783,9 +783,9 @@ export async function getSchedule(options: {
 
   const now = options.now ?? new Date();
   const token = process.env.PANDASCORE_TOKEN?.trim();
-  const { snapshots, states, snapshotSources, refreshInProgress } = await readScheduleParts(now);
+  const parts = await readScheduleParts(now);
   return buildScheduleFromParts(
-    { snapshots, states, snapshotSources, refreshInProgress },
+    parts,
     token,
     now,
   );
