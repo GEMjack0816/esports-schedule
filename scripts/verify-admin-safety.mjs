@@ -1,4 +1,5 @@
 const SHA_PATTERN = /^[a-f0-9]{40}$/i;
+const DATABASE_FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/i;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function buildVerificationRunMarkers(runId, fixtureLabel) {
@@ -45,6 +46,7 @@ export function parseAdminVerifyConfiguration({
   allowlistedOrigins,
   expectedGitRef,
   expectedGitSha,
+  expectedDatabaseFingerprint,
 }) {
   if (typeof allowlistedOrigins !== "string") {
     throw new Error("VERIFY_ADMIN_ALLOWED_PREVIEW_ORIGINS is required.");
@@ -68,12 +70,17 @@ export function parseAdminVerifyConfiguration({
   if (typeof expectedGitSha !== "string" || !SHA_PATTERN.test(expectedGitSha)) {
     throw new Error("VERIFY_ADMIN_EXPECTED_GIT_SHA must be a full 40-character commit SHA.");
   }
+  if (typeof expectedDatabaseFingerprint !== "string"
+    || !DATABASE_FINGERPRINT_PATTERN.test(expectedDatabaseFingerprint)) {
+    throw new Error("VERIFY_ADMIN_EXPECTED_DATABASE_FINGERPRINT must be a 64-character SHA-256 fingerprint.");
+  }
 
   return {
     origin,
     allowedOrigins,
     expectedGitRef: expectedGitRef.trim(),
     expectedGitSha: expectedGitSha.toLowerCase(),
+    expectedDatabaseFingerprint: expectedDatabaseFingerprint.toLowerCase(),
   };
 }
 
@@ -113,6 +120,29 @@ export function assertAdminVerifyDeployment(version, expected) {
     gitCommitRef: version.gitCommitRef,
     gitCommitSha: version.gitCommitSha,
   };
+}
+
+export function assertAdminVerifyDatabaseTarget(health, expected) {
+  if (!health || typeof health !== "object") {
+    throw new Error("Preview health check returned an invalid response; no test data was written.");
+  }
+  if (health.database?.status !== "connected") {
+    throw new Error("Preview database is not connected; no test data was written.");
+  }
+  const actualFingerprint = health.database?.targetFingerprint;
+  if (typeof actualFingerprint !== "string" || !DATABASE_FINGERPRINT_PATTERN.test(actualFingerprint)) {
+    throw new Error("Preview database identity is unavailable; no test data was written.");
+  }
+  if (actualFingerprint.toLowerCase() !== expected.expectedDatabaseFingerprint) {
+    throw new Error("Preview database identity does not match the expected isolated database; no test data was written.");
+  }
+  if (
+    health.version?.deploymentId !== expected.deploymentId
+    || typeof health.version?.gitCommitSha !== "string"
+    || health.version.gitCommitSha.toLowerCase() !== expected.gitCommitSha
+  ) {
+    throw new Error("Preview health metadata does not match the verified deployment; no test data was written.");
+  }
 }
 
 export function assertAdminVerifySessionPreflight({ status, pageUrl, expectedOrigin }) {

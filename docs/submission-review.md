@@ -53,9 +53,12 @@ $env:ADMIN_STORAGE_STATE = "<authenticated-playwright-storage-state>"
 $env:VERIFY_ADMIN_ALLOWED_PREVIEW_ORIGINS = "https://<exact-preview-origin>,https://<deployment-origin-from-api-version>"
 $env:VERIFY_ADMIN_EXPECTED_GIT_REF = "<expected-preview-branch>"
 $env:VERIFY_ADMIN_EXPECTED_GIT_SHA = "<expected-full-40-character-commit-sha>"
+$env:VERIFY_ADMIN_EXPECTED_DATABASE_FINGERPRINT = node scripts/fingerprint-preview-db-target.mjs <expected-neon-endpoint-hostname> <database-name>
 npm run verify:admin -- <isolated-preview-url>
 ```
 
-`verify:admin` 首先通过传入的 Preview URL 请求 `/api/version`，并要求目标 URL 和部署 URL 都在精确 Preview origin 白名单中，且环境为 `preview`、分支和完整 SHA 与预期值一致。验证通过后，所有页面、API 写入和清理请求都会固定到该响应报告的不可变 Deployment origin，不继续访问可移动的分支 alias。首次公开提交前还会在这个 Deployment origin 上验证管理员会话确实落到 `/admin`；如果认证状态只适用于分支 alias，脚本会在产生测试数据前失败。请确保 `ADMIN_STORAGE_STATE` 是针对该不可变 Preview Deployment origin 创建的。缺少任何元数据、会话不匹配或请求被 Deployment Protection 拦截时都会 fail closed。不要把 Production 域名加入 allowlist。
+先从 Neon 项目控制台取得预期隔离 Preview 数据库的 endpoint hostname 和 database name；只将这两个非凭据字段传给 fingerprint 命令。PowerShell 会把命令输出赋给进程环境变量，不要将 fingerprint 复制到 PR 或聊天。
+
+`verify:admin` 首先通过传入的 Preview URL 请求 `/api/version`，并要求目标 URL 和部署 URL 都在精确 Preview origin 白名单中，且环境为 `preview`、分支和完整 SHA 与预期值一致。随后脚本从同一个不可变 Deployment 请求 `/api/health/data-coverage`，要求数据库状态为 `connected`、运行时数据库指纹与本地预期 endpoint/database 指纹一致，且 health/version 的 deployment ID 与 SHA 一致。无 DATABASE_URL、无指纹、数据库不可用或 Preview 误绑到其他数据库时，都会在任何测试数据写入前退出。验证通过后，所有页面、API 写入和清理请求都会固定到该不可变 Deployment origin，不继续访问可移动的分支 alias。首次公开提交前还会在这个 Deployment origin 上验证管理员会话确实落到 `/admin`；如果认证状态只适用于分支 alias，脚本会在产生测试数据前失败。请确保 `ADMIN_STORAGE_STATE` 是针对该不可变 Preview Deployment origin 创建的。缺少任何元数据、会话不匹配或请求被 Deployment Protection 拦截时都会 fail closed。不要把 Production 域名加入 allowlist。
 
 测试生成的数据使用唯一 run UUID 标记。无论审核流程成功还是中途失败，脚本都会在 `finally` 调用 `/api/admin/verify-cleanup` 清理该 run 的 submissions、关联人工比赛和审计事件，并同步公开比赛缓存。清理端点只在 Vercel Preview runtime 开放，且要求管理员会话和同源 Origin；Production runtime 固定返回 404。若清理返回非 2xx，验证整体失败并报告清理失败，不会宣称数据已清除。

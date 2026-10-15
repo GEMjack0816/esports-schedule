@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertAdminVerifyDatabaseTarget,
   assertAdminVerifyDeployment,
   assertAdminVerifySessionPreflight,
   buildVerificationRunMarkers,
@@ -9,11 +10,13 @@ import {
 
 const origin = "https://esports-schedule-preview.vercel.app";
 const sha = "a".repeat(40);
+const databaseFingerprint = "c".repeat(64);
 const expected = parseAdminVerifyConfiguration({
   baseUrl: origin,
   allowlistedOrigins: origin,
   expectedGitRef: "integration/review-reliability-validation",
   expectedGitSha: sha,
+  expectedDatabaseFingerprint: databaseFingerprint,
 });
 const deployment = {
   service: "esports-schedule",
@@ -60,6 +63,7 @@ describe("verify:admin target safety", () => {
       allowlistedOrigins: origin,
       expectedGitRef: "feature/test",
       expectedGitSha: sha,
+      expectedDatabaseFingerprint: databaseFingerprint,
     })).toThrow(/not in .*ALLOWLIST|not in VERIFY_ADMIN_ALLOWED_PREVIEW_ORIGINS/i);
   });
 
@@ -74,6 +78,7 @@ describe("verify:admin target safety", () => {
       allowlistedOrigins: origin,
       expectedGitRef: "feature/test",
       expectedGitSha: sha,
+      expectedDatabaseFingerprint: databaseFingerprint,
     })).toThrow();
   });
 
@@ -83,24 +88,28 @@ describe("verify:admin target safety", () => {
       allowlistedOrigins: origin,
       expectedGitRef: "",
       expectedGitSha: sha,
+      expectedDatabaseFingerprint: databaseFingerprint,
     })).toThrow(/GIT_REF/);
     expect(() => parseAdminVerifyConfiguration({
       baseUrl: origin,
       allowlistedOrigins: origin,
       expectedGitRef: "feature/test",
       expectedGitSha: "short-sha",
+      expectedDatabaseFingerprint: databaseFingerprint,
     })).toThrow(/full 40-character/);
     expect(() => parseAdminVerifyConfiguration({
       baseUrl: origin,
       allowlistedOrigins: origin,
       expectedGitRef: 7,
       expectedGitSha: sha,
+      expectedDatabaseFingerprint: databaseFingerprint,
     })).toThrow(/GIT_REF/);
     expect(() => parseAdminVerifyConfiguration({
       baseUrl: origin,
       allowlistedOrigins: origin,
       expectedGitRef: "feature/test",
       expectedGitSha: 7,
+      expectedDatabaseFingerprint: databaseFingerprint,
     })).toThrow(/full 40-character/);
   });
 
@@ -111,6 +120,7 @@ describe("verify:admin target safety", () => {
       allowlistedOrigins: `${origin},${deploymentOrigin}`,
       expectedGitRef: expected.expectedGitRef,
       expectedGitSha: sha,
+      expectedDatabaseFingerprint: databaseFingerprint,
     });
 
     const verified = assertAdminVerifyDeployment({
@@ -131,6 +141,41 @@ describe("verify:admin target safety", () => {
       gitCommitRef: expected.expectedGitRef,
       gitCommitSha: sha,
     });
+  });
+
+  it("requires a connected database with the expected fingerprint on the same deployment", () => {
+    const health = {
+      database: { status: "connected", targetFingerprint: databaseFingerprint },
+      version: { deploymentId: "dpl_preview", gitCommitSha: sha },
+    };
+    expect(() => assertAdminVerifyDatabaseTarget(health, {
+      expectedDatabaseFingerprint: databaseFingerprint,
+      deploymentId: "dpl_preview",
+      gitCommitSha: sha,
+    })).not.toThrow();
+  });
+
+  it.each([
+    [{ database: { status: "unavailable", targetFingerprint: databaseFingerprint }, version: { deploymentId: "dpl_preview", gitCommitSha: sha } }, /not connected/],
+    [{ database: { status: "connected", targetFingerprint: null }, version: { deploymentId: "dpl_preview", gitCommitSha: sha } }, /identity is unavailable/],
+    [{ database: { status: "connected", targetFingerprint: "d".repeat(64) }, version: { deploymentId: "dpl_preview", gitCommitSha: sha } }, /does not match/],
+    [{ database: { status: "connected", targetFingerprint: databaseFingerprint }, version: { deploymentId: "dpl_other", gitCommitSha: sha } }, /does not match the verified deployment/],
+  ])("fails closed before any verifier write for an untrusted Preview database", (health, message) => {
+    expect(() => assertAdminVerifyDatabaseTarget(health, {
+      expectedDatabaseFingerprint: databaseFingerprint,
+      deploymentId: "dpl_preview",
+      gitCommitSha: sha,
+    })).toThrow(message);
+  });
+
+  it("requires a caller-supplied expected database fingerprint", () => {
+    expect(() => parseAdminVerifyConfiguration({
+      baseUrl: origin,
+      allowlistedOrigins: origin,
+      expectedGitRef: expected.expectedGitRef,
+      expectedGitSha: sha,
+      expectedDatabaseFingerprint: "not-a-fingerprint",
+    })).toThrow(/VERIFY_ADMIN_EXPECTED_DATABASE_FINGERPRINT/);
   });
 
   it("requires an authenticated admin session on the immutable verified deployment before writes", () => {

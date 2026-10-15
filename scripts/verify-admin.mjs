@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { chromium } from "playwright-core";
 import {
   assertAdminVerifyDeployment,
+  assertAdminVerifyDatabaseTarget,
   assertAdminVerifySessionPreflight,
   buildVerificationRunMarkers,
   parseAdminVerifyConfiguration,
@@ -45,7 +46,27 @@ async function readVerifiedDeployment(context, target) {
   } catch {
     throw new Error("Preview /api/version returned invalid JSON; no test data was written.");
   }
-  return assertAdminVerifyDeployment(version, target);
+  const verifiedDeployment = assertAdminVerifyDeployment(version, target);
+  const healthResponse = await context.request.get(`${verifiedDeployment.origin}/api/health/data-coverage`, {
+    headers: { Accept: "application/json", "Cache-Control": "no-cache" },
+    maxRedirects: 0,
+    timeout: 15_000,
+  });
+  if (healthResponse.status() !== 200) {
+    throw new Error(`Preview health check returned HTTP ${healthResponse.status()}; no test data was written.`);
+  }
+  let health;
+  try {
+    health = await healthResponse.json();
+  } catch {
+    throw new Error("Preview health check returned invalid JSON; no test data was written.");
+  }
+  assertAdminVerifyDatabaseTarget(health, {
+    expectedDatabaseFingerprint: target.expectedDatabaseFingerprint,
+    deploymentId: verifiedDeployment.deploymentId,
+    gitCommitSha: verifiedDeployment.gitCommitSha,
+  });
+  return verifiedDeployment;
 }
 
 async function submit(context, origin, input) {
@@ -85,7 +106,7 @@ async function runVerification() {
   const baseUrl = process.argv[2];
   if (!baseUrl) {
     throw new Error(
-      "Usage: set VERIFY_ADMIN_ALLOWED_PREVIEW_ORIGINS, VERIFY_ADMIN_EXPECTED_GIT_REF, and VERIFY_ADMIN_EXPECTED_GIT_SHA; then pass an allowlisted Preview origin.",
+      "Usage: set the Preview origin allowlist, expected branch, full commit SHA, and isolated database fingerprint; then pass an allowlisted Preview origin.",
     );
   }
   if (process.env.ALLOW_ISOLATED_ADMIN_VERIFY !== "1") {
@@ -97,6 +118,7 @@ async function runVerification() {
     allowlistedOrigins: process.env.VERIFY_ADMIN_ALLOWED_PREVIEW_ORIGINS ?? "",
     expectedGitRef: process.env.VERIFY_ADMIN_EXPECTED_GIT_REF,
     expectedGitSha: process.env.VERIFY_ADMIN_EXPECTED_GIT_SHA,
+    expectedDatabaseFingerprint: process.env.VERIFY_ADMIN_EXPECTED_DATABASE_FINGERPRINT,
   });
   const storageState = requiredEnvironment("ADMIN_STORAGE_STATE");
   if (!existsSync(storageState)) {
