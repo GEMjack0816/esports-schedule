@@ -202,6 +202,27 @@ describe("manual match cache authoritative version checks", () => {
     expect(result.state.lastSuccessfulReadAt).toBe("generation-5");
   });
 
+  it("preserves the cached pending-delivery count during a database outage", async () => {
+    const latest = {
+      matches: [],
+      fetchedAt: "generation-5",
+      revision: 5,
+      pendingCacheRevisions: 2,
+    };
+    mocks.cacheStatus.mockRejectedValue(new Error("database unavailable"));
+    mocks.cached.mockRejectedValue(new Error("database unavailable"));
+    mocks.get.mockImplementation(async (key: string) => {
+      if (key === "published-manual-matches-fence-v1") return { revision: 5 };
+      if (key === "published-manual-matches-v1:5") return latest;
+      return undefined;
+    });
+
+    const result = await getPublishedDatabaseMatches();
+
+    expect(result.state.status).toBe("cached");
+    expect(result.state.pendingCacheRevisions).toBe(2);
+  });
+
   it("serves a verified current Runtime Cache snapshot without waiting on PostgreSQL", async () => {
     const cachedMatch: EsportsMatch = {
       id: "manual:honor-of-kings:db-cached-match",

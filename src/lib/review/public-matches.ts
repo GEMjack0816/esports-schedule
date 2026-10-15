@@ -384,7 +384,7 @@ export async function getPublishedDatabaseMatches(): Promise<{
     lastSuccessfulReadAt: cached?.fetchedAt ?? publicState.lastSuccessfulReadAt,
     cachedManualMatches: cached?.matches.length ?? 0,
     cacheRevision: Math.max(cached?.revision ?? 0, publicState.cacheRevision),
-    pendingCacheRevisions: publicState.pendingCacheRevisions,
+    pendingCacheRevisions: cached?.pendingCacheRevisions ?? publicState.pendingCacheRevisions,
   };
   console.warn("[review-db] database read unavailable; preserving last successful public manual matches");
   return { matches: cached?.matches ?? [], state: publicState };
