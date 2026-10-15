@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { isPandaScoreCdnLogo } from "@/lib/schedule/team-logo";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -102,7 +103,8 @@ function TeamRow({ team, score, winning }: {
           alt=""
           width={28}
           height={28}
-          unoptimized
+          unoptimized={!isPandaScoreCdnLogo(team.logo)}
+          referrerPolicy="no-referrer"
           onError={(event) => { event.currentTarget.src = "/team-placeholder.svg"; }}
         />
         <span>{team.acronym?.slice(0, 3) || initials(team.name)}</span>
