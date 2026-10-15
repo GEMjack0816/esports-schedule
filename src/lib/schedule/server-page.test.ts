@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import type { EsportsMatch, SchedulePayload } from "./types";
 import { createSchedulePage, parseSchedulePageQuery, SchedulePageQueryError } from "./server-page";
 
@@ -164,6 +165,34 @@ describe("server-paginated schedule pages", () => {
     );
 
     expect(next.matches.map((item) => item.id)).toEqual(["latest"]);
+  });
+
+  it("restarts a legacy history cursor when the newest-first order changed during deployment", () => {
+    const early = match("early", "2026-03-07T10:00:00.000Z");
+    const late = match("late", "2026-03-07T12:00:00.000Z");
+    const schedule = payload([late, early]);
+    const oldOrderHash = createHash("sha256")
+      .update(JSON.stringify([early, late]))
+      .digest("base64url");
+    const legacyCursor = Buffer.from(JSON.stringify({
+      dateKey: "2026-03-07",
+      time: Date.parse(early.startTimeUtc!),
+      id: early.id,
+      signature: JSON.stringify(["history", "UTC", "all", "all", "all", "", null]),
+      resultSetHash: oldOrderHash,
+    })).toString("base64url");
+
+    try {
+      createSchedulePage(
+        schedule,
+        query({ range: "history", timeZone: "UTC", limit: "1", cursor: legacyCursor }),
+        new Date("2026-03-08T00:00:00.000Z"),
+      );
+      expect.fail("a cursor from the previous history order must restart pagination");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SchedulePageQueryError);
+      expect((error as SchedulePageQueryError).code).toBe("SCHEDULE_CHANGED");
+    }
   });
 
   it("serializes only the requested slice for a large schedule", () => {
