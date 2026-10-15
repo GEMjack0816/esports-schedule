@@ -39,6 +39,14 @@ const statusMeta: Record<MatchStatus, { label: string; className: string }> = {
   unknown: { label: "状态待确认", className: "status-unknown" },
 };
 
+const rangeLabels: Record<RangeKey, string> = {
+  today: "今日",
+  tomorrow: "明日",
+  seven: "未来 7 天",
+  history: "历史比赛",
+  all: "全部收录",
+};
+
 function formatTime(value: string | null, timeZone: string): string {
   if (!value) return "待定";
   return new Intl.DateTimeFormat("zh-CN", {
@@ -214,10 +222,28 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     });
   }, [game, league, payload.matches, query, range, selectedDate, sevenDaysOut, status, timeZone, today, tomorrow]);
 
-  const [announcedMatchCount, setAnnouncedMatchCount] = useState(filtered.length);
+  const filterContext = useMemo(() => {
+    const activeFilters = [rangeLabels[range]];
+    if (game !== "all") activeFilters.push(games[game].label);
+    if (league !== "all") activeFilters.push(league.slice(0, 80));
+    if (status !== "all") activeFilters.push(statusMeta[status].label);
+    if (selectedDate) activeFilters.push(`日期 ${selectedDate}`);
+    const normalizedQuery = query.trim();
+    if (normalizedQuery) {
+      const shortenedQuery = normalizedQuery.length > 60
+        ? `${normalizedQuery.slice(0, 60)}…`
+        : normalizedQuery;
+      activeFilters.push(`搜索“${shortenedQuery}”`);
+    }
+    return activeFilters.join("、");
+  }, [game, league, query, range, selectedDate, status]);
+
+  const [announcedResult, setAnnouncedResult] = useState({ count: filtered.length, filterContext });
   useEffect(
-    () => scheduleResultAnnouncementUpdate(filtered.length, setAnnouncedMatchCount),
-    [filtered.length],
+    () => scheduleResultAnnouncementUpdate(filtered.length, filterContext, (count, context) => {
+      setAnnouncedResult({ count, filterContext: context });
+    }),
+    [filtered.length, filterContext],
   );
 
   const grouped = useMemo(() => {
@@ -342,7 +368,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt?.slice(0, 10)} max={payload.coverage.range.latestMatchAt?.slice(0, 10)} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
           </div>
 
-          <ScheduleResultStatus count={announcedMatchCount} />
+          <ScheduleResultStatus count={announcedResult.count} filterContext={announcedResult.filterContext} />
 
           <div className="match-list">
             {grouped.length > 0 ? grouped.map(([key, matches]) => (

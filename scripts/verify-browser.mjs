@@ -4,9 +4,12 @@ import { chromium } from "playwright-core";
 import { waitForElementText } from "./wait-for-element-text.mjs";
 
 const baseUrl = process.argv[2] || "http://localhost:3000";
-const resultAnnouncement = (count) => count <= 0
-  ? "没有符合条件的比赛。"
-  : `筛选结果：${count} 场比赛。`;
+const resultAnnouncement = (count, filters = []) => {
+  const context = filters.length ? `当前筛选：${filters.join("、")}。` : "";
+  return count <= 0
+    ? `没有符合条件的比赛。${context}`
+    : `筛选结果：${count} 场比赛。${context}`;
+};
 const executableCandidates = [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -92,19 +95,32 @@ for (const profile of [
     errors.push("match list must not announce every match card as a live region");
   }
   await page.getByRole("tab", { name: /全部收录/ }).click();
-  await waitForElementText(page, ".schedule-result-status", resultAnnouncement(await page.locator(".match-card").count()));
+  await waitForElementText(page, ".schedule-result-status", resultAnnouncement(await page.locator(".match-card").count(), ["全部收录"]));
+  const searchInput = page.locator(".search-field input");
+  for (const searchTerm of ["a11y_no_match_probe_01", "a11y_no_match_probe_02"]) {
+    await searchInput.fill(searchTerm);
+    await waitForElementText(
+      page,
+      ".schedule-result-status",
+      resultAnnouncement(0, ["全部收录", `搜索“${searchTerm}”`]),
+    );
+  }
+  await searchInput.fill("");
+  await waitForElementText(page, ".schedule-result-status", resultAnnouncement(await page.locator(".match-card").count(), ["全部收录"]));
   const gameSelect = page.locator(".filter-panel select").nth(0);
+  const gameLabels = { lol: "英雄联盟", valorant: "无畏契约", "honor-of-kings": "王者荣耀", cs2: "CS2", dota2: "Dota 2" };
   for (const game of ["lol", "valorant", "honor-of-kings", "cs2", "dota2"]) {
     await gameSelect.selectOption(game);
     gameFilterCounts[game] = await page.locator(".match-card").count();
-    await waitForElementText(page, ".schedule-result-status", resultAnnouncement(gameFilterCounts[game]));
+    await waitForElementText(page, ".schedule-result-status", resultAnnouncement(gameFilterCounts[game], ["全部收录", gameLabels[game]]));
   }
   await gameSelect.selectOption("all");
   const statusSelect = page.locator(".filter-panel select").nth(2);
+  const statusLabels = { running: "进行中", finished: "已结束", scheduled: "未开始" };
   for (const status of ["running", "finished", "scheduled"]) {
     await statusSelect.selectOption(status);
     statusFilterCounts[status] = await page.locator(".match-card").count();
-    await waitForElementText(page, ".schedule-result-status", resultAnnouncement(statusFilterCounts[status]));
+    await waitForElementText(page, ".schedule-result-status", resultAnnouncement(statusFilterCounts[status], ["全部收录", statusLabels[status]]));
   }
   await statusSelect.selectOption("all");
   await page.getByRole("tab", { name: /^今日/ }).click();
