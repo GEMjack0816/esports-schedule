@@ -115,24 +115,30 @@ for (const profile of [
   const todayRangeTab = page.getByRole("tab", { name: /今日/ });
   const tomorrowRangeTab = page.getByRole("tab", { name: /明日/ });
   const allRangeTab = page.getByRole("tab", { name: /全部收录/ });
-  const rangeTabIsFocusedAndSelected = () => page.evaluate(() =>
-    document.activeElement instanceof HTMLButtonElement
-      && document.activeElement.getAttribute("role") === "tab"
-      && document.activeElement.getAttribute("aria-selected") === "true",
-  );
+  const rangeTabIsFocusedAndSelected = async (tab) => {
+    const tabId = await tab.getAttribute("id");
+    const panelId = await tab.getAttribute("aria-controls");
+    if (!tabId || !panelId) return false;
+    const tabIndexes = await page.locator('.range-tabs [role="tab"]').evaluateAll((tabs) =>
+      tabs.map((item) => item.getAttribute("tabindex")),
+    );
+    const panel = page.locator(`[id="${panelId}"]`);
+    return await page.evaluate((expectedId) => document.activeElement?.id === expectedId, tabId)
+      && await tab.getAttribute("aria-selected") === "true"
+      && await tab.getAttribute("tabindex") === "0"
+      && tabIndexes.filter((value) => value === "0").length === 1
+      && await panel.getAttribute("role") === "tabpanel"
+      && await panel.getAttribute("aria-labelledby") === tabId;
+  };
   await todayRangeTab.focus();
   await page.keyboard.press("ArrowRight");
-  const arrowFocused = await rangeTabIsFocusedAndSelected()
-    && await tomorrowRangeTab.getAttribute("aria-selected") === "true";
+  const arrowFocused = await rangeTabIsFocusedAndSelected(tomorrowRangeTab);
   await page.keyboard.press("End");
-  const endFocused = await rangeTabIsFocusedAndSelected()
-    && await allRangeTab.getAttribute("aria-selected") === "true";
+  const endFocused = await rangeTabIsFocusedAndSelected(allRangeTab);
   await page.keyboard.press("ArrowRight");
-  const wrappedFocused = await rangeTabIsFocusedAndSelected()
-    && await todayRangeTab.getAttribute("aria-selected") === "true";
+  const wrappedFocused = await rangeTabIsFocusedAndSelected(todayRangeTab);
   await page.keyboard.press("Home");
-  const homeFocused = await rangeTabIsFocusedAndSelected()
-    && await todayRangeTab.getAttribute("aria-selected") === "true";
+  const homeFocused = await rangeTabIsFocusedAndSelected(todayRangeTab);
   keyboardRangeNavigationWorks = arrowFocused && endFocused && wrappedFocused && homeFocused;
   async function selectFilterAndWait(select, filterName, filterValue) {
     const responsePromise = page.waitForResponse((candidate) => {
