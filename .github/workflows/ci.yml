@@ -68,5 +68,12 @@ jobs:
       - name: Build the production bundle
         run: npm run build
 
+      - name: Install Chromium for date-bound browser regression
+        run: npx playwright-core install --with-deps chromium
+
+      - name: Verify local-timezone date bounds in a fresh browser
+        run: npm run verify:date-bounds
+
       - name: Scan client assets for server credentials
         run: npm run test:client-bundle
+
