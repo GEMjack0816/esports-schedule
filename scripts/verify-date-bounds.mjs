@@ -27,7 +27,23 @@ try {
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   assert.ok(ready, 'LOCAL_SERVER_NOT_READY');
-  browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
+  const browserPaths = [
+    ...(process.env.CHROME_PATH ? [process.env.CHROME_PATH] : []),
+    undefined,
+    ...(process.platform === 'win32' ? [
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    ] : []),
+  ];
+  for (const executablePath of browserPaths) {
+    try {
+      browser = await chromium.launch({ ...(executablePath ? { executablePath } : {}), headless: true });
+      break;
+    } catch {
+      // Try the bundled Playwright browser, then an explicitly installed local browser.
+    }
+  }
+  if (!browser) throw new Error('No supported browser executable found for date-bound verification.');
   const response = await fetch(`${base}/api/matches`, { redirect: 'error' });
   assert.equal(response.status, 200);
   const payload = await response.json();
@@ -81,3 +97,4 @@ try {
   await browser?.close();
   child.kill();
 }
+
