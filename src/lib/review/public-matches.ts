@@ -20,6 +20,7 @@ export type CachedPublicMatches = {
   matches: EsportsMatch[];
   fetchedAt: string;
   revision: number;
+  pendingCacheRevisions?: number;
 };
 
 export type DatabasePublicState = {
@@ -96,7 +97,10 @@ function isCachedPublicMatches(value: unknown): value is CachedPublicMatches {
   return typeof candidate.fetchedAt === "string"
     && Array.isArray(candidate.matches)
     && Number.isSafeInteger(candidate.revision)
-    && (candidate.revision ?? -1) >= 0;
+    && (candidate.revision ?? -1) >= 0
+    && (candidate.pendingCacheRevisions === undefined
+      || (Number.isSafeInteger(candidate.pendingCacheRevisions)
+        && (candidate.pendingCacheRevisions ?? -1) >= 0));
 }
 
 function isCacheFence(value: unknown): value is { revision: number } {
@@ -256,7 +260,9 @@ const readPublishedMatchesCached = unstable_cache(
   },
 );
 
-async function readCurrentPublishedMatches(observeRevision: (revision: number) => void): Promise<CachedPublicMatches> {
+async function readCurrentPublishedMatches(observeRevision: (revision: number) => void): Promise<
+  CachedPublicMatches & { pendingCacheRevisions: number }
+> {
   // Runtime Cache is regional and set() has no CAS or cancellation support.
   // Fence writes are awaited under the serialized mutation transaction; this
   // read still uses PostgreSQL's committed revision as the authoritative check.
@@ -280,12 +286,25 @@ async function readCurrentPublishedMatches(observeRevision: (revision: number) =
     if (refreshed.revision < publicState.cacheRevision) {
       throw new Error("manual match cache revision regressed");
     }
-    return refreshed;
+    // A concurrent mutation can enqueue a newer outbox row while this
+    // snapshot is being delivered. Read the pending count after delivery so
+    // health does not report a clean cache just because this older snapshot
+    // was written successfully.
+    let pendingCacheRevisions = cacheStatus.pendingRevisions;
+    try {
+      const currentStatus = await repository.getManualMatchCacheStatus();
+      pendingCacheRevisions = currentStatus.pendingRevisions;
+    } catch {
+      // The database snapshot already succeeded. Keep serving it if this
+      // follow-up status read fails, retaining the last known pending count.
+      console.warn("[review-db] manual cache pending status refresh failed");
+    }
+    return { ...refreshed, pendingCacheRevisions };
   }
   if (cached.revision < publicState.cacheRevision) {
     throw new Error("manual match cache revision regressed");
   }
-  return cached;
+  return { ...cached, pendingCacheRevisions: cacheStatus.pendingRevisions };
 }
 
 export async function getPublishedDatabaseMatches(): Promise<{
@@ -330,7 +349,7 @@ export async function getPublishedDatabaseMatches(): Promise<{
       lastSuccessfulReadAt: value.fetchedAt,
       cachedManualMatches: value.matches.length,
       cacheRevision: Math.max(publicState.cacheRevision, value.revision),
-      pendingCacheRevisions: 0,
+      pendingCacheRevisions: value.pendingCacheRevisions ?? 0,
     };
     return { matches: value.matches, state: publicState };
   }

@@ -61,11 +61,39 @@ describe("manual match cache authoritative version checks", () => {
   });
 
   it("returns current database results even when repairing the stale cache fails", async () => {
+    mocks.cacheStatus
+      .mockResolvedValueOnce({ revision: 5, pendingRevisions: 1 })
+      .mockResolvedValueOnce({ revision: 5, pendingRevisions: 1 });
     mocks.set.mockRejectedValue(new Error("cache unavailable"));
     const result = await getPublishedDatabaseMatches();
     expect(result.state.cacheRevision).toBe(5);
     expect(result.state.status).toBe("connected");
+    expect(result.state.pendingCacheRevisions).toBe(1);
     expect(mocks.failed).toHaveBeenCalledWith(5);
+  });
+
+  it("keeps an outbox row visible when cache delivery acknowledgement fails", async () => {
+    mocks.cacheStatus
+      .mockResolvedValueOnce({ revision: 5, pendingRevisions: 1 })
+      .mockResolvedValueOnce({ revision: 5, pendingRevisions: 1 });
+    mocks.delivered.mockRejectedValue(new Error("database unavailable"));
+
+    const result = await getPublishedDatabaseMatches();
+
+    expect(result.state.status).toBe("connected");
+    expect(result.state.pendingCacheRevisions).toBe(1);
+    expect(mocks.delivered).toHaveBeenCalledWith(5);
+  });
+
+  it("reports a newer mutation queued during cache delivery", async () => {
+    mocks.cacheStatus
+      .mockResolvedValueOnce({ revision: 5, pendingRevisions: 0 })
+      .mockResolvedValueOnce({ revision: 6, pendingRevisions: 1 });
+
+    const result = await getPublishedDatabaseMatches();
+
+    expect(result.state.cacheRevision).toBe(5);
+    expect(result.state.pendingCacheRevisions).toBe(1);
   });
 
   it("restores an evicted Runtime Cache fence so a recovered snapshot survives a later database outage", async () => {
@@ -75,6 +103,7 @@ describe("manual match cache authoritative version checks", () => {
       runtimeCache.set(key, value);
     });
     mocks.cacheStatus
+      .mockResolvedValueOnce({ revision: 5, pendingRevisions: 0 })
       .mockResolvedValueOnce({ revision: 5, pendingRevisions: 0 })
       .mockRejectedValueOnce(new Error("database unavailable"));
     mocks.snapshot.mockImplementation(async (fence?: (revision: number) => Promise<void>) => {
@@ -96,6 +125,7 @@ describe("manual match cache authoritative version checks", () => {
   });
 
   it("does not acknowledge snapshot delivery when a missing fence cannot be restored", async () => {
+    mocks.cacheStatus.mockResolvedValue({ revision: 5, pendingRevisions: 1 });
     mocks.snapshot.mockResolvedValue({
       rows: [],
       revision: 5,
@@ -106,6 +136,7 @@ describe("manual match cache authoritative version checks", () => {
     const result = await getPublishedDatabaseMatches();
 
     expect(result.state.status).toBe("connected");
+    expect(result.state.pendingCacheRevisions).toBe(1);
     expect(mocks.failed).toHaveBeenCalledWith(5);
     expect(mocks.delivered).not.toHaveBeenCalled();
   });
@@ -172,6 +203,7 @@ describe("manual match cache authoritative version checks", () => {
 
   it("does not serve an older regional fallback after this instance already returned a newer generation", async () => {
     mocks.cacheStatus
+      .mockResolvedValueOnce({ revision: 5, pendingRevisions: 0 })
       .mockResolvedValueOnce({ revision: 5, pendingRevisions: 0 })
       .mockRejectedValueOnce(new Error("database unavailable"));
     mocks.cached.mockResolvedValueOnce({ matches: [], fetchedAt: "fresh", revision: 4 });
