@@ -5,6 +5,7 @@ import { testPandaSnapshot } from "@/test/pandascore-snapshot";
 import {
   decodeRuntimeSnapshot, encodeRuntimeSnapshot, estimateSnapshotJsonBytes,
   MAX_DECODED_SNAPSHOT_BYTES, MAX_RUNTIME_SNAPSHOT_BYTES,
+  MAX_SNAPSHOT_DEPTH, MAX_SNAPSHOT_NODES,
 } from "./cache-payload";
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), set: vi.fn() }));
@@ -58,6 +59,25 @@ describe("bounded Runtime Cache snapshot codec", () => {
     expect(estimateSnapshotJsonBytes({ toJSON: () => ({}) })).toBeNull();
     const accessor = Object.defineProperty({}, "value", { enumerable: true, get: () => "unsafe" });
     expect(estimateSnapshotJsonBytes(accessor)).toBeNull();
+  });
+
+  it("accepts the maximum supported depth and rejects one level beyond it", () => {
+    const nested = (levels: number) => {
+      let value: unknown = "leaf";
+      for (let level = 0; level < levels; level += 1) value = { value };
+      return value;
+    };
+
+    expect(estimateSnapshotJsonBytes(nested(MAX_SNAPSHOT_DEPTH))).not.toBeNull();
+    expect(estimateSnapshotJsonBytes(nested(MAX_SNAPSHOT_DEPTH + 1))).toBeNull();
+  });
+
+  it("bounds traversal at the exact node budget", () => {
+    const atLimit = new Array(MAX_SNAPSHOT_NODES - 1).fill(null);
+    const overLimit = new Array(MAX_SNAPSHOT_NODES).fill(null);
+
+    expect(estimateSnapshotJsonBytes(atLimit)).not.toBeNull();
+    expect(estimateSnapshotJsonBytes(overLimit)).toBeNull();
   });
 
   it("round-trips all matches, metadata and generation above the raw cache limit", async () => {

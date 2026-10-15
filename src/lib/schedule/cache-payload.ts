@@ -13,7 +13,8 @@ export const MAX_DECODED_SNAPSHOT_BYTES = 16 * 1024 * 1024;
 const FORMAT = "pandascore-json-gzip-v1";
 const compress = promisify(gzip);
 const decompress = promisify(gunzip);
-const MAX_SNAPSHOT_NODES = 250_000;
+export const MAX_SNAPSHOT_NODES = 250_000;
+export const MAX_SNAPSHOT_DEPTH = 100;
 
 /**
  * Count the UTF-8 bytes JSON.stringify would emit without allocating the full
@@ -61,7 +62,7 @@ export function estimateSnapshotJsonBytes(
   };
   const visit = (current: unknown, depth: number): boolean => {
     nodes += 1;
-    if (nodes > MAX_SNAPSHOT_NODES || depth > 100) return false;
+    if (nodes > MAX_SNAPSHOT_NODES || depth > MAX_SNAPSHOT_DEPTH) return false;
     if (current === null) return add(4);
     if (typeof current === "string") return addString(current);
     if (typeof current === "boolean") return add(current ? 4 : 5);
