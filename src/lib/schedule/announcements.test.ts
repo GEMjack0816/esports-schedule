@@ -19,14 +19,28 @@ describe("schedule result announcements", () => {
 
   it("coalesces rapid filter changes and announces only the final count", () => {
     vi.useFakeTimers();
-    const announced: number[] = [];
+    const announced: Array<number | null> = [];
     const cancelOutdated = scheduleResultAnnouncementUpdate(8, (count) => announced.push(count));
     cancelOutdated();
     scheduleResultAnnouncementUpdate(2, (count) => announced.push(count));
 
+    vi.advanceTimersByTime(0);
+    expect(announced).toEqual([null]);
     vi.advanceTimersByTime(SCHEDULE_RESULT_ANNOUNCEMENT_DELAY_MS - 1);
-    expect(announced).toEqual([]);
+    expect(announced).toEqual([null]);
     vi.advanceTimersByTime(1);
-    expect(announced).toEqual([2]);
+    expect(announced).toEqual([null, 2]);
+  });
+
+  it("clears an identical previous count before re-announcing it", () => {
+    vi.useFakeTimers();
+    const announced: Array<number | null> = [];
+    scheduleResultAnnouncementUpdate(4, (count) => announced.push(count));
+    vi.advanceTimersByTime(SCHEDULE_RESULT_ANNOUNCEMENT_DELAY_MS);
+    scheduleResultAnnouncementUpdate(4, (count) => announced.push(count));
+    vi.advanceTimersByTime(0);
+    expect(announced).toEqual([null, 4, null]);
+    vi.advanceTimersByTime(SCHEDULE_RESULT_ANNOUNCEMENT_DELAY_MS);
+    expect(announced).toEqual([null, 4, null, 4]);
   });
 });

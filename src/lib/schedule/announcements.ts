@@ -6,9 +6,16 @@ export function scheduleResultAnnouncement(count: number): string {
 }
 
 export function scheduleResultAnnouncementUpdate(
-  count: number,
-  announce: (count: number) => void,
+  count: number | null,
+  announce: (count: number | null) => void,
 ): () => void {
-  const timer = setTimeout(() => announce(count), SCHEDULE_RESULT_ANNOUNCEMENT_DELAY_MS);
-  return () => clearTimeout(timer);
+  // Clear asynchronously so identical counts from different filters are still announced.
+  const clearTimer = setTimeout(() => announce(null), 0);
+  const publishTimer = count === null
+    ? null
+    : setTimeout(() => announce(count), SCHEDULE_RESULT_ANNOUNCEMENT_DELAY_MS);
+  return () => {
+    clearTimeout(clearTimer);
+    if (publishTimer !== null) clearTimeout(publishTimer);
+  };
 }

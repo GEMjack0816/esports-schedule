@@ -216,15 +216,13 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
   const [loadedRequestKey, setLoadedRequestKey] = useState(initialPayloadKey);
   const payloadMatchesFilters = isSchedulePageForCurrentFilters(loadedRequestKey, requestKey);
   const [announcedMatchCount, setAnnouncedMatchCount] = useState<number | null>(null);
-  useEffect(() => {
-    if (!payloadMatchesFilters) {
-      setAnnouncedMatchCount(null);
-      return;
-    }
-    // Clear first so a different filter set with the same count is announced too.
-    setAnnouncedMatchCount(null);
-    return scheduleResultAnnouncementUpdate(payload.page.total, setAnnouncedMatchCount);
-  }, [payload.page.total, payloadMatchesFilters, requestKey]);
+  useEffect(
+    () => scheduleResultAnnouncementUpdate(
+      payloadMatchesFilters ? payload.page.total : null,
+      setAnnouncedMatchCount,
+    ),
+    [payload.page.total, payloadMatchesFilters, requestKey],
+  );
   const currentRequestKey = useRef(requestKey);
   useLayoutEffect(() => {
     currentRequestKey.current = requestKey;
