@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import type { EsportsMatch, SchedulePayload } from "./types";
+import { applyManualData } from "./manual";
 import { createSchedulePage, parseSchedulePageQuery, SchedulePageQueryError } from "./server-page";
 
 function match(id: string, startTimeUtc: string | null, overrides: Partial<EsportsMatch> = {}): EsportsMatch {
@@ -126,6 +127,29 @@ describe("server-paginated schedule pages", () => {
       expect(error).toBeInstanceOf(SchedulePageQueryError);
       expect((error as SchedulePageQueryError).code).toBe("SCHEDULE_CHANGED");
     }
+  });
+
+  it("keeps a continuation cursor when only request-time freshness metadata changes", () => {
+    const firstReadAt = new Date("2026-07-01T00:00:00.000Z");
+    const nextReadAt = new Date("2026-07-01T00:00:01.000Z");
+    const initial = payload(applyManualData([], firstReadAt).matches);
+    const first = createSchedulePage(
+      initial,
+      query({ range: "all", limit: "1" }),
+      firstReadAt,
+    );
+    const refreshed = payload(applyManualData([], nextReadAt).matches);
+
+    expect(first.page.nextCursor).toBeTruthy();
+    expect(refreshed.matches[0].lastUpdatedAt).not.toBe(initial.matches[0].lastUpdatedAt);
+
+    const next = createSchedulePage(
+      refreshed,
+      query({ range: "all", limit: "1", cursor: first.page.nextCursor ?? "" }),
+      nextReadAt,
+    );
+
+    expect(next.matches.map((item) => item.id)).toEqual([initial.matches[1].id]);
   });
 
   it("returns an empty final page instead of restarting when a cursor is beyond the last row", () => {

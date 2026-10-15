@@ -274,8 +274,17 @@ export function createSchedulePage(
   }
 
   matchingEntries.sort((first, second) => compareMatchKeys(first.cursor, second.cursor, query.range));
+  // `lastUpdatedAt` is freshness metadata, not match-set identity. Static
+  // manual JSON matches receive a request-time fallback timestamp, so hashing
+  // it would invalidate every continuation cursor even when visible schedule
+  // content is unchanged.
+  const cursorMatchSet = matchingEntries.map(({ match }) => {
+    const { lastUpdatedAt: freshnessOnly, ...stableMatch } = match;
+    void freshnessOnly;
+    return stableMatch;
+  });
   const resultSetHash = createHash("sha256")
-    .update(JSON.stringify(matchingEntries.map((entry) => entry.match)))
+    .update(JSON.stringify(cursorMatchSet))
     .digest("base64url");
 
   const cursor = query.cursor
