@@ -1,3 +1,5 @@
+import { normalizeVerifierBaseUrl } from "./verification-diagnostics.mjs";
+
 const baseUrlInput = process.argv[2];
 const expectedSha = process.argv[3] || process.env.EXPECTED_GIT_COMMIT_SHA;
 
@@ -10,14 +12,12 @@ if (!expectedSha) {
   process.exit(1);
 }
 
-let baseUrl;
-try {
-  baseUrl = new URL(baseUrlInput);
-  if (!["http:", "https:"].includes(baseUrl.protocol)) throw new Error("unsupported protocol");
-} catch {
-  console.error("FAIL base URL: expected an absolute HTTP(S) URL.");
+const normalizedBaseUrl = normalizeVerifierBaseUrl(baseUrlInput);
+if (!normalizedBaseUrl) {
+  console.error("FAIL base URL: expected a safe HTTPS origin without credentials, path, query, or fragment.");
   process.exit(1);
 }
+const baseUrl = new URL(normalizedBaseUrl);
 
 const failures = [];
 function check(label, condition, detail = "") {
@@ -39,8 +39,8 @@ async function request(pathname, type) {
       headers: { Accept: type === "json" ? "application/json" : "text/html" },
       signal: AbortSignal.timeout(60_000),
     });
-  } catch (error) {
-    throw new Error(`${pathname} request failed: ${error instanceof Error ? error.name : "network error"}`);
+  } catch {
+    throw new Error(`${pathname} request failed.`);
   }
 
   let body;
@@ -122,8 +122,8 @@ try {
   for (const phrase of ["源快照时间", "提交遗漏比赛", "PandaScore 聚合数据"]) {
     check(`homepage includes “${phrase}”`, homeHtml.includes(phrase));
   }
-} catch (error) {
-  console.error(`FAIL verification request — ${error instanceof Error ? error.message : "unknown error"}`);
+} catch {
+  console.error("FAIL verification request — details redacted.");
   failures.push("verification request");
 }
 
