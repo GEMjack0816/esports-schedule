@@ -146,6 +146,7 @@ describe("published database manual matches", () => {
 
     expect(snapshot.cacheSynchronized).toBe(true);
     expect(written).not.toHaveProperty("cacheSynchronized");
+    expect(written).toHaveProperty("pendingCacheRevisions", 1);
     expect(repository.markManualMatchCacheDelivered).toHaveBeenCalledWith(9);
   });
 });

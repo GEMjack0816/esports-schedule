@@ -191,6 +191,7 @@ export async function synchronizePublishedManualMatchesSnapshot(
     matches: uniqueAndSort(snapshot.rows.map(publishedRowToMatch)),
     fetchedAt: new Date().toISOString(),
     revision: snapshot.revision,
+    pendingCacheRevisions: snapshot.pendingRevisions,
   };
   let delivered = snapshot.fenceWritten !== false;
   try {
@@ -322,6 +323,24 @@ export async function getPublishedDatabaseMatches(): Promise<{
       pendingCacheRevisions: 0,
     };
     return { matches: [], state: publicState };
+  }
+
+  // A snapshot at the Runtime Cache fence with no pending outbox delivery is
+  // already a verified last-known-good view. Serve it without making every
+  // public schedule request wait on PostgreSQL; mutations advance the fence
+  // before commit, so a newer committed view cannot be hidden by this key.
+  const runtimeSnapshot = await readLastSuccess(publicState.cacheRevision);
+  if (runtimeSnapshot?.pendingCacheRevisions === 0) {
+    observeManualMatchRevision(runtimeSnapshot.revision);
+    publicState = {
+      configured: true,
+      status: "cached",
+      lastSuccessfulReadAt: runtimeSnapshot.fetchedAt,
+      cachedManualMatches: runtimeSnapshot.matches.length,
+      cacheRevision: runtimeSnapshot.revision,
+      pendingCacheRevisions: 0,
+    };
+    return { matches: runtimeSnapshot.matches, state: publicState };
   }
 
   // A warm function instance may already have served a newer generation than

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { EsportsMatch } from "@/lib/schedule/types";
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -199,6 +200,69 @@ describe("manual match cache authoritative version checks", () => {
     expect(result.state.status).toBe("cached");
     expect(result.state.cacheRevision).toBe(5);
     expect(result.state.lastSuccessfulReadAt).toBe("generation-5");
+  });
+
+  it("serves a verified current Runtime Cache snapshot without waiting on PostgreSQL", async () => {
+    const cachedMatch: EsportsMatch = {
+      id: "manual:honor-of-kings:db-cached-match",
+      provider: "manual",
+      providerMatchId: "db-cached-match",
+      game: "honor-of-kings",
+      tournament: "KPL Finals",
+      league: "KPL",
+      stage: null,
+      homeTeam: { name: "Alpha", logo: "/team-placeholder.svg" },
+      awayTeam: { name: "Beta", logo: "/team-placeholder.svg" },
+      homeScore: null,
+      awayScore: null,
+      bestOf: 5,
+      status: "scheduled",
+      startTimeUtc: "2026-10-15T12:00:00.000Z",
+      streams: [],
+      lastUpdatedAt: "2026-10-15T11:00:00.000Z",
+    };
+    const snapshot = {
+      matches: [cachedMatch],
+      fetchedAt: "verified-cache-hit",
+      revision: 4,
+      pendingCacheRevisions: 0,
+    };
+    mocks.get.mockImplementation(async (key: string) => key === "published-manual-matches-fence-v1"
+      ? { revision: 4 }
+      : snapshot);
+    mocks.cacheStatus.mockRejectedValue(new Error("database should not be queried on a verified hit"));
+
+    const result = await getPublishedDatabaseMatches();
+
+    expect(result.state.status).toBe("cached");
+    expect(result.matches).toEqual([cachedMatch]);
+    expect(result.state.cacheRevision).toBe(4);
+    expect(result.state.lastSuccessfulReadAt).toBe("verified-cache-hit");
+    expect(mocks.cacheStatus).not.toHaveBeenCalled();
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+  });
+
+  it("does not fast-path a current snapshot while outbox delivery is pending", async () => {
+    const snapshot = {
+      matches: [],
+      fetchedAt: "pending-delivery",
+      revision: 4,
+      pendingCacheRevisions: 1,
+    };
+    mocks.get.mockImplementation(async (key: string) => key === "published-manual-matches-fence-v1"
+      ? { revision: 4 }
+      : snapshot);
+    mocks.cacheStatus
+      .mockResolvedValueOnce({ revision: 4, pendingRevisions: 1 })
+      .mockResolvedValueOnce({ revision: 5, pendingRevisions: 0 });
+
+    const result = await getPublishedDatabaseMatches();
+
+    expect(mocks.cacheStatus).toHaveBeenCalledTimes(2);
+    expect(mocks.snapshot).toHaveBeenCalledOnce();
+    expect(mocks.delivered).toHaveBeenCalledWith(5);
+    expect(result.state.cacheRevision).toBe(5);
+    expect(result.state.pendingCacheRevisions).toBe(0);
   });
 
   it("does not serve an older regional fallback after this instance already returned a newer generation", async () => {
