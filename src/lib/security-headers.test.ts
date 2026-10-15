@@ -8,6 +8,7 @@ describe("global response security headers", () => {
 
     expect(rule).toBeDefined();
     expect(Object.fromEntries(rule?.headers.map(({ key, value }) => [key, value]) ?? [])).toEqual({
+      "Content-Security-Policy": "frame-ancestors 'none'",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY",
       "Referrer-Policy": "strict-origin-when-cross-origin",
