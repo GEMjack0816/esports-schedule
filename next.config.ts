@@ -19,6 +19,19 @@ const buildGitCommitRef = process.env.VERCEL_GIT_COMMIT_REF?.trim()
   || gitMetadata("branch", "--show-current");
 
 const nextConfig: NextConfig = {
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+        ],
+      },
+    ];
+  },
   env: {
     ESPORTS_BUILD_TIMESTAMP: buildTimestamp,
     ESPORTS_BUILD_GIT_COMMIT_SHA: buildGitCommitSha,
