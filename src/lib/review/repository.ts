@@ -41,8 +41,9 @@ import {
 import type {
   AdminSummary,
   ApprovalInput,
-  LegacyImportCounts,
-  LegacySubmissionCandidate,
+  LegacyImportResult,
+  LegacyImportSourceCounts,
+  LegacySubmissionImportRecord,
   ManualMatchPage,
   PublicSubmissionResult,
   PublishedMatchWrite,
@@ -99,6 +100,11 @@ function windowRetryAfterSeconds(windowStartedAt: Date, windowMs: number, now: D
     Math.ceil((windowStartedAt.getTime() + windowMs - now.getTime()) / 1_000),
   );
 }
+
+// Each chunk stays well below PostgreSQL's bind-parameter limit. Chunks still
+// execute inside one transaction so neither imported rows nor their audit event
+// can commit partially.
+const LEGACY_IMPORT_INSERT_BATCH_SIZE = 40;
 
 function auditSubmission(row: MatchSubmissionRow) {
   return {
@@ -353,30 +359,37 @@ export class DrizzleReviewRepository {
   }
 
   async importLegacySubmissions(
-    candidates: LegacySubmissionCandidate[],
     actorId: string,
-    initialCounts: LegacyImportCounts,
-  ): Promise<LegacyImportCounts> {
+    records: LegacySubmissionImportRecord[],
+    sourceCounts: LegacyImportSourceCounts,
+  ): Promise<LegacyImportResult> {
     try {
       return await getDatabase().transaction(async (tx) => {
-        const counts = { ...initialCounts };
-        for (const candidate of candidates) {
-          const rows = await tx.insert(matchSubmissions).values({
-            ...submissionValues(candidate.input),
-            id: candidate.id,
-            submittedAt: candidate.submittedAt,
-            status: "pending",
-          }).onConflictDoNothing().returning({ id: matchSubmissions.id });
-          counts[rows.length === 1 ? "imported" : "duplicate"] += 1;
+        let imported = 0;
+        for (let start = 0; start < records.length; start += LEGACY_IMPORT_INSERT_BATCH_SIZE) {
+          const batch = records.slice(start, start + LEGACY_IMPORT_INSERT_BATCH_SIZE);
+          const rows = await tx.insert(matchSubmissions).values(batch.map((record) => ({
+            ...submissionValues(record.input),
+            id: record.id,
+            submittedAt: record.submittedAt,
+            status: "pending" as const,
+          }))).onConflictDoNothing().returning({ id: matchSubmissions.id });
+          imported += rows.length;
         }
+
+        const result: LegacyImportResult = {
+          ...sourceCounts,
+          imported,
+          duplicate: records.length - imported,
+        };
         await tx.insert(adminAuditEvents).values({
           actorId,
           action: "legacy_submissions.imported",
           entityType: "legacy_import",
           entityId: crypto.randomUUID(),
-          afterJson: counts,
+          afterJson: result,
         });
-        return counts;
+        return result;
       });
     } catch (error) {
       translateDatabaseError(error);
@@ -784,3 +797,4 @@ export function getReviewRepository(): DrizzleReviewRepository {
   defaultRepository ??= new DrizzleReviewRepository();
   return defaultRepository;
 }
+

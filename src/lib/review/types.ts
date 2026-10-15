@@ -72,17 +72,20 @@ export type SubmissionCounts = {
   publishedManualMatches: number;
 };
 
-export type LegacyImportCounts = {
-  scanned: number;
-  imported: number;
-  duplicate: number;
-  invalid: number;
-};
-
-export type LegacySubmissionCandidate = {
+export type LegacySubmissionImportRecord = {
   id: string;
   input: MatchSubmissionInput;
   submittedAt: Date;
+};
+
+export type LegacyImportSourceCounts = {
+  scanned: number;
+  invalid: number;
+};
+
+export type LegacyImportResult = LegacyImportSourceCounts & {
+  imported: number;
+  duplicate: number;
 };
 
 export type PublicSubmissionResult =
@@ -109,3 +112,4 @@ export class DuplicateSubmissionError extends Error {
 export class DatabaseUnavailableError extends Error {
   readonly code = "DATABASE_UNAVAILABLE";
 }
+

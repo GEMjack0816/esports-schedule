@@ -8,7 +8,7 @@ import {
   submissionControlWindowKey,
 } from "./submission-protection";
 import type { PublicSubmissionPolicy, SubmissionControlWindowKind } from "./submission-protection";
-import type { PublishedMatchWrite } from "./types";
+import type { LegacySubmissionImportRecord, PublishedMatchWrite } from "./types";
 import {
   preserveLastSuccessfulPublicMatches,
   synchronizePublishedManualMatchesSnapshot,
@@ -33,6 +33,7 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
   const manualMatchIds: string[] = [];
   const rateLimitSources: string[] = [];
   const rateLimitWindowKeys: string[] = [];
+  const legacyAuditActors: string[] = [];
 
   beforeAll(async () => {
     process.env.DATABASE_URL = testUrl;
@@ -53,6 +54,9 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     }
     if (auditEntityIds.length > 0) {
       await cleanup`delete from admin_audit_events where entity_id = any(${auditEntityIds}::uuid[])`;
+    }
+    if (legacyAuditActors.length > 0) {
+      await cleanup`delete from admin_audit_events where actor_id = any(${legacyAuditActors}::text[]) and action = 'legacy_submissions.imported'`;
     }
     if (submissionIds.length > 0) {
       await cleanup`delete from match_submissions where id = any(${submissionIds}::uuid[])`;
@@ -99,6 +103,12 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       streamUrl: null,
       sourceUrl: input.sourceUrl,
     };
+  }
+
+  function legacyRecord(id: string, input: MatchSubmissionInput): LegacySubmissionImportRecord {
+    const submittedAt = new Date("2026-07-01T00:00:00.000Z");
+    submissionIds.push(id);
+    return { id, input, submittedAt };
   }
 
   async function create(suffix: string) {
@@ -185,6 +195,86 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect((await repository.listManualMatches()).rows.some(
       (match) => match.sourceSubmissionId === id,
     )).toBe(false);
+  });
+
+  it("commits imported rows and their exact audit summary atomically and makes retries idempotent", async () => {
+    const existing = await create(`legacy-existing-${randomUUID()}`);
+    const newId = randomUUID();
+    const duplicateId = randomUUID();
+    const actorId = `legacy-import-${randomUUID()}`;
+    legacyAuditActors.push(actorId);
+    const records = [
+      legacyRecord(newId, submission(`legacy-new-${randomUUID()}`)),
+      legacyRecord(duplicateId, existing.input),
+    ];
+
+    const first = await repository.importLegacySubmissions(actorId, records, {
+      scanned: 3,
+      invalid: 1,
+    });
+    expect(first).toEqual({ scanned: 3, imported: 1, duplicate: 1, invalid: 1 });
+    expect((await repository.getSubmission(newId))?.submittedAt.toISOString())
+      .toBe("2026-07-01T00:00:00.000Z");
+
+    const [audit] = await cleanup`
+      select action, entity_type, after_json
+      from admin_audit_events
+      where actor_id = ${actorId} and action = 'legacy_submissions.imported'
+    `;
+    expect(audit?.action).toBe("legacy_submissions.imported");
+    expect(audit?.entity_type).toBe("legacy_import");
+    expect(audit?.after_json).toEqual(first);
+
+    const retry = await repository.importLegacySubmissions(actorId, records, {
+      scanned: 3,
+      invalid: 1,
+    });
+    expect(retry).toEqual({ scanned: 3, imported: 0, duplicate: 2, invalid: 1 });
+    expect(await repository.getSubmission(newId)).not.toBeNull();
+    const [countRow] = await cleanup`
+      select count(*)::int as count from match_submissions where id = ${newId}::uuid
+    `;
+    expect(countRow?.count).toBe(1);
+  });
+
+  it("rolls back every imported batch when the audit write fails", async () => {
+    const records = Array.from({ length: 41 }, (_, index) => legacyRecord(
+      randomUUID(),
+      submission(`legacy-rollback-${index}-${randomUUID()}`),
+    ));
+    const ids = records.map((record) => record.id);
+    await expect(repository.importLegacySubmissions(
+      null as unknown as string,
+      records,
+      { scanned: records.length, invalid: 0 },
+    )).rejects.toThrow();
+    const [countRow] = await cleanup`
+      select count(*)::int as count from match_submissions where id = any(${ids}::uuid[])
+    `;
+    expect(countRow?.count).toBe(0);
+  });
+
+  it("serializes concurrent retries through unique constraints and audits both outcomes", async () => {
+    const id = randomUUID();
+    const input = submission(`legacy-concurrent-${randomUUID()}`);
+    const record = legacyRecord(id, input);
+    const actors = [`legacy-race-a-${randomUUID()}`, `legacy-race-b-${randomUUID()}`];
+    legacyAuditActors.push(...actors);
+
+    const outcomes = await Promise.all(actors.map((actorId) => repository.importLegacySubmissions(
+      actorId,
+      [record],
+      { scanned: 1, invalid: 0 },
+    )));
+    expect(outcomes.map((outcome) => outcome.imported).sort()).toEqual([0, 1]);
+    expect(outcomes.map((outcome) => outcome.duplicate).sort()).toEqual([0, 1]);
+    expect(await repository.getSubmission(id)).not.toBeNull();
+    const [auditCount] = await cleanup`
+      select count(*)::int as count
+      from admin_audit_events
+      where actor_id = any(${actors}::text[]) and action = 'legacy_submissions.imported'
+    `;
+    expect(auditCount?.count).toBe(2);
   });
 
   it("rejects without publishing and can hide then restore a published match", async () => {
@@ -519,60 +609,5 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       (value) => value.providerMatchId === `db-${match.id}`,
     )?.league).toBe(`${pending.input.league} edited`);
   });
-
-  it("commits legacy imports and their summary audit in one transaction", async () => {
-    const firstId = randomUUID();
-    const duplicateId = randomUUID();
-    const actorId = `legacy-atomic-${randomUUID()}`;
-    submissionIds.push(firstId, duplicateId);
-    const duplicateInput = submission(`legacy-existing-${randomUUID()}`);
-    await repository.createSubmission(duplicateInput, { id: duplicateId });
-
-    const counts = await repository.importLegacySubmissions([
-      {
-        id: firstId,
-        input: submission(`legacy-new-${randomUUID()}`),
-        submittedAt: new Date("2026-07-01T00:00:00.000Z"),
-      },
-      {
-        id: duplicateId,
-        input: duplicateInput,
-        submittedAt: new Date("2026-07-01T00:00:00.000Z"),
-      },
-    ], actorId, { scanned: 3, imported: 0, duplicate: 0, invalid: 1 });
-
-    expect(counts).toEqual({ scanned: 3, imported: 1, duplicate: 1, invalid: 1 });
-    const [audit] = await cleanup`
-      select after_json from admin_audit_events
-      where actor_id = ${actorId} and action = 'legacy_submissions.imported'
-    `;
-    expect(audit.after_json).toEqual(counts);
-    await cleanup`delete from admin_audit_events where actor_id = ${actorId}`;
-  });
-
-  it("rolls back earlier legacy inserts when a later insert fails", async () => {
-    const firstId = randomUUID();
-    const invalidId = randomUUID();
-    const actorId = `legacy-rollback-${randomUUID()}`;
-    submissionIds.push(firstId, invalidId);
-    const validInput = submission(`legacy-rollback-${randomUUID()}`);
-    const invalidInput = { ...submission(`legacy-invalid-${randomUUID()}`), teamB: "Same" };
-    invalidInput.teamA = "Same";
-
-    await expect(repository.importLegacySubmissions([
-      { id: firstId, input: validInput, submittedAt: new Date() },
-      { id: invalidId, input: invalidInput, submittedAt: new Date() },
-    ], actorId, { scanned: 2, imported: 0, duplicate: 0, invalid: 0 })).rejects.toMatchObject({
-      code: "DATABASE_UNAVAILABLE",
-    });
-
-    const [inserted] = await cleanup`
-      select count(*)::int as count from match_submissions where id = ${firstId}
-    `;
-    const [audit] = await cleanup`
-      select count(*)::int as count from admin_audit_events where actor_id = ${actorId}
-    `;
-    expect(inserted.count).toBe(0);
-    expect(audit.count).toBe(0);
-  });
 });
+
