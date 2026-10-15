@@ -111,6 +111,29 @@ for (const profile of [
 
   const gameFilterCounts = {};
   const statusFilterCounts = {};
+  let keyboardRangeNavigationWorks = false;
+  const todayRangeTab = page.getByRole("tab", { name: /今日/ });
+  const tomorrowRangeTab = page.getByRole("tab", { name: /明日/ });
+  const allRangeTab = page.getByRole("tab", { name: /全部收录/ });
+  const rangeTabIsFocusedAndSelected = () => page.evaluate(() =>
+    document.activeElement instanceof HTMLButtonElement
+      && document.activeElement.getAttribute("role") === "tab"
+      && document.activeElement.getAttribute("aria-selected") === "true",
+  );
+  await todayRangeTab.focus();
+  await page.keyboard.press("ArrowRight");
+  const arrowFocused = await rangeTabIsFocusedAndSelected()
+    && await tomorrowRangeTab.getAttribute("aria-selected") === "true";
+  await page.keyboard.press("End");
+  const endFocused = await rangeTabIsFocusedAndSelected()
+    && await allRangeTab.getAttribute("aria-selected") === "true";
+  await page.keyboard.press("ArrowRight");
+  const wrappedFocused = await rangeTabIsFocusedAndSelected()
+    && await todayRangeTab.getAttribute("aria-selected") === "true";
+  await page.keyboard.press("Home");
+  const homeFocused = await rangeTabIsFocusedAndSelected()
+    && await todayRangeTab.getAttribute("aria-selected") === "true";
+  keyboardRangeNavigationWorks = arrowFocused && endFocused && wrappedFocused && homeFocused;
   async function selectFilterAndWait(select, filterName, filterValue) {
     const responsePromise = page.waitForResponse((candidate) => {
       const candidateUrl = new URL(candidate.url());
@@ -452,6 +475,7 @@ for (const profile of [
       healthResult.body.version?.gitCommitSha === versionResult.body.gitCommitSha,
     criticalRequestFailures,
     resultAnnouncementFailures,
+    keyboardRangeNavigationWorks,
     optionalResourceFailureCount: optionalResourceFailures.length,
     optionalResourceFailureSamples: optionalResourceFailures.slice(0, 5),
     browserResourceWarningCount: browserResourceWarnings.length,
@@ -498,6 +522,7 @@ for (const result of results) {
   if (!result.anonymousAdminAtLogin) failures.push(`${prefix}: anonymous admin page was not redirected to login`);
   if (result.anonymousAdminContainsPrivateData) failures.push(`${prefix}: anonymous admin page exposed private data`);
   if (result.anonymousAdminApiStatus !== 401) failures.push(`${prefix}: anonymous admin API HTTP ${result.anonymousAdminApiStatus}`);
+  if (!result.keyboardRangeNavigationWorks) failures.push(`${prefix}: keyboard range-tab navigation failed`);
   if (!result.paginationRestartWorked) failures.push(`${prefix}: stale pagination did not restart from the latest result set`);
   if (!result.refreshRestoredPagination) failures.push(`${prefix}: refresh during pagination left Load More unavailable`);
   if (!result.failedFilterRetainedResultsSafely) failures.push(`${prefix}: failed filter exposed a stale pagination cursor or ambiguous previous results`);

@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus } from "@/lib/schedule";
 import type { SchedulePageData, SchedulePageQuery, ScheduleRangeKey } from "@/lib/schedule/page-types";
 import {
@@ -14,6 +14,7 @@ import { groupScheduleMatches } from "@/lib/schedule/client-grouping";
 import { ScheduleResultStatus } from "@/components/schedule-result-status";
 import { scheduleResultAnnouncementUpdate } from "@/lib/schedule/announcements";
 import { dateKeyInTimeZone } from "@/lib/schedule/time";
+import { rangeForNavigationKey, scheduleRangeTabs } from "@/lib/schedule/range-navigation";
 
 type Theme = "dark" | "light";
 
@@ -176,6 +177,8 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
   const [status, setStatus] = useState<MatchStatus | "all">("all");
   const [query, setQuery] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
+  const rangeId = useId();
+  const rangePanelId = `${rangeId}-panel`;
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -456,8 +459,26 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
           </div>
 
           <div className="range-tabs" role="tablist" aria-label="选择时间范围">
-            {([ ["today", "今日"], ["tomorrow", "明日"], ["seven", "未来 7 天"], ["history", "历史比赛"], ["all", "全部收录"] ] as const).map(([key, label]) => (
-              <button key={key} role="tab" aria-selected={range === key} className={range === key ? "active" : ""} type="button" onClick={() => { setSelectedDate(""); setRange(key); }}>
+            {scheduleRangeTabs.map(([key, label]) => (
+              <button
+                key={key}
+                id={`${rangeId}-${key}`}
+                role="tab"
+                aria-selected={range === key}
+                aria-controls={rangePanelId}
+                tabIndex={range === key ? 0 : -1}
+                className={range === key ? "active" : ""}
+                type="button"
+                onClick={() => { setSelectedDate(""); setRange(key); }}
+                onKeyDown={(event) => {
+                  const nextRange = rangeForNavigationKey(key, event.key);
+                  if (!nextRange) return;
+                  event.preventDefault();
+                  setSelectedDate("");
+                  setRange(nextRange);
+                  document.getElementById(`${rangeId}-${nextRange}`)?.focus();
+                }}
+              >
                 <span>{label}</span><em>{payload.rangeCounts[key]}</em>
               </button>
             ))}
@@ -472,7 +493,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
           </div>
 
           <ScheduleResultStatus count={announcedMatchCount} />
-          <div className="match-list" aria-busy={loading || loadingMore}>
+          <div className="match-list" id={rangePanelId} role="tabpanel" aria-labelledby={`${rangeId}-${range}`} tabIndex={0} aria-busy={loading || loadingMore}>
             {!payloadMatchesFilters && <div className="data-notice" role={requestError ? "alert" : "status"}>
               {requestError
                 ? "当前筛选加载失败，下面显示的是上一组筛选结果；请重试。"
