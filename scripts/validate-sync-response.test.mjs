@@ -1,3 +1,8 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { validateSyncResponse } from "./validate-sync-response.mjs";
 
@@ -17,11 +22,35 @@ describe("sync workflow response validation", () => {
     expect(validateSyncResponse(success, 200).ok).toBe(true);
   });
 
-  it("accepts a clearly reported busy lock without treating it as a refresh", () => {
+  it("rejects a busy lock so scheduled automation does not report a refresh", () => {
     expect(validateSyncResponse({ status: "busy", lockAcquired: false, generation: null }, 409)).toEqual({
-      ok: true,
-      message: "sync busy: another refresh owns the lock",
+      ok: false,
+      message: "sync busy: another refresh owns the lock; this invocation did not refresh",
     });
+  });
+
+  it("exits non-zero in CLI mode when a lock-busy response is received", () => {
+    const directory = mkdtempSync(join(tmpdir(), "esports-sync-validator-"));
+    const responseFile = join(directory, "response.json");
+
+    try {
+      writeFileSync(responseFile, JSON.stringify({
+        status: "busy",
+        lockAcquired: false,
+        generation: null,
+      }));
+      const result = spawnSync(process.execPath, [
+        fileURLToPath(new URL("./validate-sync-response.mjs", import.meta.url)),
+        responseFile,
+        "409",
+      ], { encoding: "utf8" });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("this invocation did not refresh");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("accepts partial success with a valid fencing generation", () => {
