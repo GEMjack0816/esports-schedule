@@ -11,6 +11,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:check": "node scripts/check-database.mjs",
+    "verify:preview-db-target": "node scripts/verify-preview-db-target.mjs",
     "verify:browser": "node scripts/verify-browser.mjs",
     "verify:admin": "node scripts/verify-admin.mjs",
     "verify:production": "node scripts/verify-production.mjs",
