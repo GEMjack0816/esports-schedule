@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AdminNav } from "@/components/admin-nav";
+import { AdminSubmissionFilters } from "@/components/admin-submission-filters";
 import { requireAdminPage } from "@/lib/auth/admin-page";
 import { getReviewRepository } from "@/lib/review/repository";
 import { parseSubmissionFilters } from "@/lib/review/service";
@@ -20,16 +21,10 @@ export default async function AdminSubmissionsPage({
     <main className="admin-page">
       <AdminNav />
       <h1>比赛提交</h1>
-      <form className="admin-filters">
-        <select name="status" defaultValue={params.get("status") ?? ""}>
-          <option value="">全部状态</option>
-          <option value="pending">待审核</option>
-          <option value="approved">已批准</option>
-          <option value="rejected">已驳回</option>
-        </select>
-        <input name="q" defaultValue={params.get("q") ?? ""} placeholder="搜索赛事或战队" />
-        <button type="submit">筛选</button>
-      </form>
+      <AdminSubmissionFilters
+        status={params.get("status") ?? ""}
+        query={params.get("q") ?? ""}
+      />
       <div className="admin-table-wrap">
         <table>
           <thead><tr><th>提交时间</th><th>游戏</th><th>赛事</th><th>对阵</th><th>状态</th><th /></tr></thead>
