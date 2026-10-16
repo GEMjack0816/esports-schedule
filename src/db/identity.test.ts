@@ -34,6 +34,22 @@ describe("database target fingerprint", () => {
     )).not.toBe(original);
   });
 
+  it("treats Neon pooled and direct endpoint hostnames as the same target", () => {
+    const direct = fingerprintDatabaseTarget(previewUrl);
+    const pooled = fingerprintDatabaseTarget(
+      "postgresql://preview_user:preview_password@ep-preview-id-pooler.us-west-2.aws.neon.tech/neondb?sslmode=require",
+    );
+
+    expect(pooled).toBe(direct);
+  });
+
+  it("does not normalize a pooler-like hostname outside Neon", () => {
+    const direct = fingerprintDatabaseTarget("postgresql://u:p@db.example.com/neondb");
+    const poolerLike = fingerprintDatabaseTarget("postgresql://u:p@db-pooler.example.com/neondb");
+
+    expect(poolerLike).not.toBe(direct);
+  });
+
   it("does not return URL credentials or query values", () => {
     const fingerprint = fingerprintDatabaseTarget(previewUrl);
     expect(fingerprint).not.toContain("preview_user");
@@ -73,6 +89,20 @@ describe("database target fingerprint", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("verifies a pooled runtime target against the direct Neon endpoint hostname", () => {
+    const hostname = "ep-preview-id.us-west-2.aws.neon.tech";
+    const pooledFingerprint = fingerprintDatabaseTarget(
+      `postgres://u:p@ep-preview-id-pooler.us-west-2.aws.neon.tech/neondb`,
+    )!;
+    const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../scripts/verify-preview-db-target.mjs");
+    const result = spawnSync(process.execPath, [script, pooledFingerprint, hostname, "neondb"], { encoding: "utf8" });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("PASS: Preview database target matches the expected Neon endpoint/database.");
+    expect(result.stdout).not.toContain(hostname);
+    expect(result.stderr).toBe("");
+  });
+
   it("fails a mismatched fingerprint without echoing the supplied target", () => {
     const hostname = "ep-preview-id.us-west-2.aws.neon.tech";
     const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../scripts/verify-preview-db-target.mjs");
@@ -84,3 +114,4 @@ describe("database target fingerprint", () => {
     expect(result.stdout).toBe("");
   });
 });
+

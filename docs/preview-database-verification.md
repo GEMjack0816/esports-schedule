@@ -4,10 +4,12 @@
 `VERCEL_ENV=preview`. Production responses do not include this field.
 
 The fingerprint is SHA-256 over the lowercase PostgreSQL hostname, a NUL byte,
-and the decoded database name. It excludes the username, password, query
-parameters, and URL fragment. A `null` fingerprint means the URL is missing,
-malformed, or not a PostgreSQL URL; it does not imply that the database is
-unreachable. Use the separate `database.status` field for connectivity.
+and the decoded database name. For Neon hosts, the `-pooler` hostname suffix is
+normalized away because pooled and direct URIs address the same endpoint. It
+excludes the username, password, query parameters, and URL fragment. A `null`
+fingerprint means the URL is missing, malformed, or not a PostgreSQL URL; it
+does not imply that the database is unreachable. Use the separate
+`database.status` field for connectivity.
 
 To verify a protected Preview without exposing `DATABASE_URL`:
 
@@ -27,3 +29,4 @@ To verify a protected Preview without exposing `DATABASE_URL`:
 
 This is an identity comparison, not an authentication mechanism. Continue to
 rely on Deployment Protection and database credentials for access control.
+
