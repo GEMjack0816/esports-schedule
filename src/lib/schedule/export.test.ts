@@ -28,7 +28,7 @@ describe("createScheduleCsv", () => {
   it("exports visible match details using the visitor timezone", () => {
     const csv = createScheduleCsv([match()], "Asia/Shanghai");
     expect(csv.startsWith("\uFEFF\"比赛日期\"")).toBe(true);
-    expect(csv).toContain('"2026-10-17","00:30","Asia/Shanghai","英雄联盟","LPL","季后赛"');
+    expect(csv).toContain('"2026-10-17","00:30","Asia/Shanghai","英雄联盟","LPL","春季赛","季后赛"');
     expect(csv).toContain('"Team A","Team B","2 - 1","BO3","已结束"');
     expect(csv).toContain('"https://example.com/watch","pandascore:lol:123"');
     expect(csv).toContain("\r\n");
