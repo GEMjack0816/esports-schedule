@@ -34,6 +34,38 @@ describe("database target fingerprint", () => {
     )).not.toBe(original);
   });
 
+  it("includes the connection port and normalizes the PostgreSQL default", () => {
+    const defaultPort = fingerprintDatabaseTarget(previewUrl);
+    const explicitDefaultPort = fingerprintDatabaseTarget(
+      "postgresql://preview_user:preview_password@ep-preview-id.us-west-2.aws.neon.tech:5432/neondb?sslmode=require",
+    );
+    const otherPort = fingerprintDatabaseTarget(
+      "postgresql://preview_user:preview_password@ep-preview-id.us-west-2.aws.neon.tech:6432/neondb?sslmode=require",
+    );
+
+    expect(explicitDefaultPort).toBe(defaultPort);
+    expect(otherPort).not.toBe(defaultPort);
+  });
+
+  it("uses the fallback port only when the URL omits a port", () => {
+    const defaultPort = fingerprintDatabaseTarget(previewUrl);
+    const emptyFallback = fingerprintDatabaseTarget(previewUrl, "");
+    const configuredPort = fingerprintDatabaseTarget(previewUrl, "6432");
+    const explicitUrlPort = fingerprintDatabaseTarget(
+      "postgresql://preview_user:preview_password@ep-preview-id.us-west-2.aws.neon.tech:5432/neondb?sslmode=require",
+      "6432",
+    );
+
+    expect(configuredPort).not.toBe(defaultPort);
+    expect(emptyFallback).toBe(defaultPort);
+    expect(explicitUrlPort).toBe(defaultPort);
+  });
+
+  it("rejects an invalid fallback port", () => {
+    expect(fingerprintDatabaseTarget(previewUrl, "70000")).toBeNull();
+    expect(fingerprintDatabaseTarget(previewUrl, "not-a-port")).toBeNull();
+  });
+
   it("treats Neon pooled and direct endpoint hostnames as the same target", () => {
     const direct = fingerprintDatabaseTarget(previewUrl);
     const pooled = fingerprintDatabaseTarget(
@@ -77,6 +109,14 @@ describe("database target fingerprint", () => {
     expect(getPreviewDatabaseTargetFingerprint()).toBeNull();
   });
 
+  it("uses PGPORT when the Preview DATABASE_URL omits a port", () => {
+    vi.stubEnv("DATABASE_URL", previewUrl);
+    vi.stubEnv("PGPORT", "6432");
+    vi.stubEnv("VERCEL_ENV", "preview");
+
+    expect(getPreviewDatabaseTargetFingerprint()).toBe(fingerprintDatabaseTarget(previewUrl, "6432"));
+  });
+
   it("verifies a target fingerprint without echoing endpoint input", () => {
     const hostname = "ep-preview-id.us-west-2.aws.neon.tech";
     const fingerprint = fingerprintDatabaseTarget(`postgres://u:p@${hostname}/neondb`)!;
@@ -101,6 +141,30 @@ describe("database target fingerprint", () => {
     expect(result.stdout.trim()).toBe("PASS: Preview database target matches the expected Neon endpoint/database.");
     expect(result.stdout).not.toContain(hostname);
     expect(result.stderr).toBe("");
+  });
+
+  it("checks an explicitly supplied non-default port without echoing it", () => {
+    const hostname = "ep-preview-id.us-west-2.aws.neon.tech";
+    const fingerprint = fingerprintDatabaseTarget(`postgres://u:p@${hostname}:6432/neondb`)!;
+    const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../scripts/verify-preview-db-target.mjs");
+    const result = spawnSync(process.execPath, [script, fingerprint, hostname, "neondb", "6432"], { encoding: "utf8" });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("PASS: Preview database target matches the expected Neon endpoint/database.");
+    expect(result.stdout).not.toContain(hostname);
+    expect(result.stdout).not.toContain("6432");
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects invalid ports without echoing the supplied target", () => {
+    const hostname = "ep-preview-id.us-west-2.aws.neon.tech";
+    const fingerprint = "a".repeat(64);
+    const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../scripts/verify-preview-db-target.mjs");
+    const result = spawnSync(process.execPath, [script, fingerprint, hostname, "neondb", "65536"], { encoding: "utf8" });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).not.toContain(hostname);
+    expect(result.stderr).not.toContain("65536");
   });
 
   it("fails a mismatched fingerprint without echoing the supplied target", () => {

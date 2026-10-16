@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
-const [actualFingerprint, hostname, databaseName] = process.argv.slice(2);
+const [actualFingerprint, hostname, databaseName, suppliedPort] = process.argv.slice(2);
+const port = suppliedPort ?? "5432";
 
 function normalizeDatabaseHostname(value) {
   const normalized = value.toLowerCase();
@@ -21,13 +22,16 @@ if (
   || !databaseName?.trim()
   || hostname.includes("@")
   || hostname.includes("/")
+  || !/^\d{1,5}$/.test(port)
+  || Number(port) < 1
+  || Number(port) > 65535
 ) {
-  console.error("Usage: npm run verify:preview-db-target -- <fingerprint> <neon-hostname> <database-name>");
+  console.error("Usage: npm run verify:preview-db-target -- <fingerprint> <neon-hostname> <database-name> [port]");
   process.exit(2);
 }
 
 const expectedFingerprint = createHash("sha256")
-  .update(`${normalizeDatabaseHostname(hostname)}\0${databaseName}`, "utf8")
+  .update(`${normalizeDatabaseHostname(hostname)}:${Number(port)}\0${databaseName}`, "utf8")
   .digest("hex");
 
 if (actualFingerprint.toLowerCase() !== expectedFingerprint) {

@@ -19,7 +19,10 @@ function normalizeDatabaseHostname(hostname: string): string {
  * Returns a stable, non-reversible fingerprint of the database destination.
  * Credentials, query parameters, and URL fragments are intentionally excluded.
  */
-export function fingerprintDatabaseTarget(databaseUrl: string | undefined): string | null {
+export function fingerprintDatabaseTarget(
+  databaseUrl: string | undefined,
+  fallbackPort = "5432",
+): string | null {
   if (!databaseUrl?.trim()) return null;
 
   try {
@@ -33,12 +36,24 @@ export function fingerprintDatabaseTarget(databaseUrl: string | undefined): stri
     const databaseName = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
     if (!hostname || !databaseName) return null;
 
+    // PostgreSQL endpoints can expose distinct servers on different ports.
+    // Normalize an omitted port to the driver's PostgreSQL default so an
+    // explicit `:5432` and an omitted port identify the same destination.
+    const port = normalizeDatabasePort(url.port || fallbackPort || "5432");
+    if (!port) return null;
+
     return createHash("sha256")
-      .update(`${hostname}\0${databaseName}`, "utf8")
+      .update(`${hostname}:${port}\0${databaseName}`, "utf8")
       .digest("hex");
   } catch {
     return null;
   }
+}
+
+function normalizeDatabasePort(value: string): string | null {
+  if (!/^\d{1,5}$/.test(value)) return null;
+  const port = Number(value);
+  return port >= 1 && port <= 65535 ? String(port) : null;
 }
 
 /**
@@ -46,6 +61,6 @@ export function fingerprintDatabaseTarget(databaseUrl: string | undefined): stri
  */
 export function getPreviewDatabaseTargetFingerprint(): string | null {
   if (process.env.VERCEL_ENV !== "preview") return null;
-  return fingerprintDatabaseTarget(process.env.DATABASE_URL);
+  return fingerprintDatabaseTarget(process.env.DATABASE_URL, process.env.PGPORT);
 }
 
