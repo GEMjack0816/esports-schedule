@@ -72,4 +72,3 @@ describe("freshness labels", () => {
       .toBe("PandaScore 聚合数据（服务暂不可用）");
   });
 });
-
