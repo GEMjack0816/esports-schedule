@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { EsportsMatch } from "./types";
 import { createScheduleCsv } from "./export";
 
@@ -70,5 +70,19 @@ describe("createScheduleCsv", () => {
     const csv = createScheduleCsv([], "UTC");
     expect(csv.split("\r\n")).toHaveLength(1);
     expect(csv).toContain('"比赛 ID"');
+  });
+
+  it("creates one timezone formatter for a multi-match export", () => {
+    const originalFormatToParts = Intl.DateTimeFormat.prototype.formatToParts;
+    const formatters = new Set<Intl.DateTimeFormat>();
+    vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts").mockImplementation(function (
+      this: Intl.DateTimeFormat,
+      date?: Date | number,
+    ) {
+      formatters.add(this);
+      return originalFormatToParts.call(this, date);
+    });
+    createScheduleCsv([match(), match({ id: "pandascore:lol:456" }), match({ id: "pandascore:lol:789" })], "UTC");
+    expect(formatters.size).toBe(1);
   });
 });

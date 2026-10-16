@@ -42,20 +42,15 @@ function csvCell(value: string | number | null): string {
   return `"${safeText.replaceAll('"', '""')}"`;
 }
 
-function localDateParts(value: string | null, timeZone: string): { date: string; time: string } {
+function localDateParts(
+  value: string | null,
+  formatter: Intl.DateTimeFormat,
+): { date: string; time: string } {
   if (!value) return { date: "", time: "" };
   const instant = new Date(value);
   if (Number.isNaN(instant.getTime())) return { date: "", time: "" };
 
-  const parts = new Intl.DateTimeFormat("en", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(instant);
+  const parts = formatter.formatToParts(instant);
   const values = Object.fromEntries(parts.map(({ type, value: part }) => [type, part]));
   return {
     date: `${values.year}-${values.month}-${values.day}`,
@@ -65,8 +60,19 @@ function localDateParts(value: string | null, timeZone: string): { date: string;
 
 /** Creates a spreadsheet-safe CSV of the currently visible schedule matches. */
 export function createScheduleCsv(matches: EsportsMatch[], timeZone: string): string {
+  // A large schedule may contain thousands of matches; construct the locale
+  // formatter once per export rather than once per row.
+  const formatter = new Intl.DateTimeFormat("en", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
   const rows = matches.map((match) => {
-    const local = localDateParts(match.startTimeUtc, timeZone);
+    const local = localDateParts(match.startTimeUtc, formatter);
     const score = match.homeScore === null && match.awayScore === null
       ? ""
       : `${match.homeScore ?? "–"} - ${match.awayScore ?? "–"}`;
