@@ -526,9 +526,19 @@ describe("manual match cache deployment topology", () => {
   it("keeps Runtime Cache fencing single-region until cross-region revisions are shared", () => {
     const config = JSON.parse(readFileSync(resolve(process.cwd(), "vercel.json"), "utf8")) as {
       regions?: string[];
+      functionFailoverRegions?: string[];
+      functions?: Record<string, {
+        regions?: string[];
+        functionFailoverRegions?: string[];
+      }>;
     };
 
     expect(config.regions).toHaveLength(1);
+    expect(config.functionFailoverRegions ?? []).toEqual([]);
+    for (const functionConfig of Object.values(config.functions ?? {})) {
+      expect(functionConfig.regions).toBeUndefined();
+      expect(functionConfig.functionFailoverRegions).toBeUndefined();
+    }
   });
 });
 
