@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { FAILED_AFTER_MS, FRESH_FOR_MS, gameSyncStatusAt } from "./freshness";
+import {
+  FAILED_AFTER_MS,
+  FRESH_FOR_MS,
+  gameSyncStatusAt,
+  gameSyncStatusLabel,
+  scheduleSourceLabel,
+} from "./freshness";
 
 const fetchedAt = "2026-10-13T00:00:00.000Z";
 const fetchedMs = Date.parse(fetchedAt);
@@ -33,3 +39,37 @@ describe("gameSyncStatusAt", () => {
     expect(gameSyncStatusAt("2026-10-13T00:01:00.000Z", null, fetchedMs)).toBe("normal");
   });
 });
+
+describe("freshness labels", () => {
+  it("distinguishes an aged snapshot from an actual failed refresh", () => {
+    expect(gameSyncStatusLabel({ status: "failed", sourceFetchedAt: fetchedAt, lastErrorAt: null }))
+      .toBe("数据已过期");
+    expect(gameSyncStatusLabel({ status: "failed", sourceFetchedAt: fetchedAt, lastErrorAt: fetchedAt }))
+      .toBe("同步失败");
+    expect(gameSyncStatusLabel({ status: "failed", sourceFetchedAt: null, lastErrorAt: null }))
+      .toBe("暂无快照");
+  });
+
+  it("does not describe five expired game snapshots as a partial delay", () => {
+    const expired = Array.from({ length: 5 }, () => ({
+      status: "failed" as const,
+      sourceFetchedAt: fetchedAt,
+      lastErrorAt: null,
+    }));
+    expect(scheduleSourceLabel("live", expired, true))
+      .toBe("PandaScore 数据已过期（仍展示上次成功快照）");
+  });
+
+  it("reports failed refreshes, delayed games, and missing snapshots distinctly", () => {
+    const mixed = [
+      { status: "failed" as const, sourceFetchedAt: fetchedAt, lastErrorAt: fetchedAt },
+      { status: "delayed" as const, sourceFetchedAt: fetchedAt, lastErrorAt: null },
+      { status: "failed" as const, sourceFetchedAt: null, lastErrorAt: null },
+    ];
+    expect(scheduleSourceLabel("live", mixed, true))
+      .toBe("PandaScore 数据异常（1 个同步失败，1 个暂无快照，1 个数据延迟）");
+    expect(scheduleSourceLabel("unavailable", mixed, true))
+      .toBe("PandaScore 聚合数据（服务暂不可用）");
+  });
+});
+

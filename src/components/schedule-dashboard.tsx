@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
-import { gameSyncStatusAt } from "@/lib/schedule/freshness";
+import { gameSyncStatusAt, gameSyncStatusLabel, scheduleSourceLabel } from "@/lib/schedule/freshness";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -245,8 +245,15 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
 
   const liveCount = payload.matches.filter((match) => match.status === "running").length;
   const upcomingCount = payload.matches.filter((match) => match.status === "scheduled").length;
-  const scheduleIsStale = payload.stale || (freshnessNow !== null && Object.values(payload.coverage.games)
-    .some((coverage) => gameSyncStatusAt(coverage.sourceFetchedAt, coverage.lastError?.at ?? null, freshnessNow) !== "normal"));
+  const gameFreshness = Object.values(payload.coverage.games).map((coverage) => ({
+    status: freshnessNow === null
+      ? coverage.syncStatus
+      : gameSyncStatusAt(coverage.sourceFetchedAt, coverage.lastError?.at ?? null, freshnessNow),
+    sourceFetchedAt: coverage.sourceFetchedAt,
+    lastErrorAt: coverage.lastError?.at ?? null,
+  }));
+  const scheduleIsStale = payload.stale || gameFreshness.some((game) => game.status !== "normal");
+  const scheduleSourceStateLabel = scheduleSourceLabel(payload.mode, gameFreshness, scheduleIsStale);
 
   async function refreshSchedule() {
     setRefreshing(true);
@@ -309,9 +316,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <div><span className="section-index">01 / 赛程中心</span><h2 id="schedule-title">比赛日历</h2></div>
             <div className={`source-state ${payload.mode === "live" && !scheduleIsStale ? "source-live" : "source-stale"}`}>
               <i />
-              <span>{payload.mode === "live"
-                ? scheduleIsStale ? "PandaScore 聚合数据（部分延迟）" : "PandaScore 聚合数据"
-                : "PandaScore 聚合数据（服务暂不可用）"}</span>
+              <span>{scheduleSourceStateLabel}</span>
             </div>
           </div>
 
@@ -335,7 +340,11 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
               return (
                 <div className={`sync-status-card sync-${syncStatus}`} key={key}>
                   <span>{value.label}</span>
-                  <strong>{coverage?.refreshInProgress ? "同步中" : syncStatus === "normal" ? "正常" : syncStatus === "delayed" ? "延迟" : "同步失败"}</strong>
+                  <strong>{coverage?.refreshInProgress ? "同步中" : gameSyncStatusLabel({
+                    status: syncStatus,
+                    sourceFetchedAt: coverage?.sourceFetchedAt ?? null,
+                    lastErrorAt: coverage?.lastError?.at ?? null,
+                  })}</strong>
                   <small>{formatDateTime(coverage?.sourceFetchedAt ?? null, timeZone)}</small>
                 </div>
               );
@@ -379,3 +388,4 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     </div>
   );
 }
+
