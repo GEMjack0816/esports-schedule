@@ -158,6 +158,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [query, setQuery] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState(false);
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
@@ -230,9 +231,15 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
 
   async function refreshSchedule() {
     setRefreshing(true);
+    setRefreshError(false);
     try {
       const response = await fetch("/api/matches", { cache: "no-store" });
-      if (response.ok) setPayload((await response.json()) as SchedulePayload);
+      if (!response.ok) throw new Error("Schedule refresh failed");
+      setPayload((await response.json()) as SchedulePayload);
+    } catch {
+      // Keep the last rendered schedule; a transient refresh failure should
+      // not turn useful cached data into an empty or misleading view.
+      setRefreshError(true);
     } finally {
       setRefreshing(false);
     }
@@ -296,6 +303,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           </div>
 
           {payload.warning && <div className="data-notice" role="status"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" /><path d="M10 6.5v4.2M10 13.7h.01" /></svg><span>{payload.warning}</span></div>}
+          {refreshError && <div className="data-notice refresh-notice" role="status">刷新失败，仍保留当前赛程；请稍后重试。</div>}
 
           <div className="data-summary" aria-label="数据覆盖信息">
             <span>源快照时间 <strong>{formatDateTime(payload.coverage.sourceFetchedAt, timeZone)}</strong></span>

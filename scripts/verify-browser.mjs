@@ -35,12 +35,20 @@ for (const profile of [
   const criticalRequestFailures = [];
   const optionalResourceFailures = [];
   const browserResourceWarnings = [];
+  let expectedRefreshFailure = false;
+  let expectedRefreshFailureObserved = false;
   const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage"];
   const auditUrl = new URL(baseUrl);
   auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const text = message.text();
+    if (
+      expectedRefreshFailure
+      && /^Failed to load resource: the server responded with a status of 503/.test(text)
+    ) {
+      return;
+    }
     if (/^Failed to load resource: net::ERR_/.test(text)) {
       browserResourceWarnings.push(text);
       return;
@@ -67,6 +75,14 @@ for (const profile of [
       && criticalPaths.includes(candidateUrl.pathname)
       && candidate.status() >= 400
     ) {
+      if (
+        expectedRefreshFailure
+        && candidateUrl.pathname === "/api/matches"
+        && candidate.status() === 503
+      ) {
+        expectedRefreshFailureObserved = true;
+        return;
+      }
       criticalRequestFailures.push(`${candidate.request().method()} ${candidateUrl.pathname} HTTP ${candidate.status()}`);
     }
   });
@@ -116,6 +132,23 @@ for (const profile of [
       return response.json();
     });
   }
+  await page.getByRole("tab", { name: /全部收录/ }).click();
+  const matchCountBeforeFailedRefresh = await page.locator(".match-card").count();
+  expectedRefreshFailure = true;
+  await page.route("**/api/matches", (route) => route.fulfill({
+    status: 503,
+    contentType: "application/json",
+    body: JSON.stringify({ error: "simulated refresh failure" }),
+  }));
+  const failedRefreshResponsePromise = page.waitForResponse(
+    (candidate) => candidate.url().includes("/api/matches") && candidate.status() === 503,
+  );
+  await page.locator(".refresh-button").click();
+  await failedRefreshResponsePromise;
+  await page.locator(".refresh-notice").waitFor({ state: "visible" });
+  const matchCountAfterFailedRefresh = await page.locator(".match-card").count();
+  await page.unroute("**/api/matches");
+  expectedRefreshFailure = false;
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -191,6 +224,10 @@ for (const profile of [
     refreshedApiStale: apiBody.stale,
     refreshedApiDeployment: apiBody.deployment,
     apiBodyReadFallback,
+    simulatedRefreshFailureHandled: expectedRefreshFailureObserved
+      && matchCountBeforeFailedRefresh > 0
+      && matchCountBeforeFailedRefresh === matchCountAfterFailedRefresh,
+    simulatedRefreshFailurePreservedMatches: matchCountBeforeFailedRefresh,
     healthStatus: healthResult.status,
     healthMode: healthResult.body.mode,
     healthDemoMode: healthResult.body.demoMode,
@@ -237,6 +274,7 @@ for (const result of results) {
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
+  if (!result.simulatedRefreshFailureHandled) failures.push(`${prefix}: failed refresh did not preserve the current schedule`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
   if (result.versionStatus !== 200) failures.push(`${prefix}: version HTTP ${result.versionStatus}`);
