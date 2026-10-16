@@ -427,6 +427,13 @@ a { color: inherit; text-decoration: none; }
   margin: 1rem 0;
 }
 
+.admin-filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  min-width: 0;
+}
+
 .admin-edit-form fieldset {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
