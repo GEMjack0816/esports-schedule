@@ -2,8 +2,9 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
+import { gameSyncStatusAt, gameSyncStatusLabel, scheduleSourceLabel } from "@/lib/schedule/freshness";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -158,12 +159,29 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [query, setQuery] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [freshnessNow, setFreshnessNow] = useState<number | null>(null);
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
     getServerTimeZone,
   );
   const theme = useSyncExternalStore(subscribeToTheme, getBrowserTheme, getServerTheme);
+
+  useEffect(() => {
+    const updateFreshnessClock = () => setFreshnessNow(Date.now());
+    const updateWhenVisible = () => {
+      if (document.visibilityState === "visible") updateFreshnessClock();
+    };
+    updateFreshnessClock();
+    const timer = window.setInterval(updateFreshnessClock, 60_000);
+    window.addEventListener("focus", updateFreshnessClock);
+    document.addEventListener("visibilitychange", updateWhenVisible);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", updateFreshnessClock);
+      document.removeEventListener("visibilitychange", updateWhenVisible);
+    };
+  }, []);
 
   const today = addDaysKey(0, timeZone);
   const tomorrow = addDaysKey(1, timeZone);
@@ -227,6 +245,15 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
 
   const liveCount = payload.matches.filter((match) => match.status === "running").length;
   const upcomingCount = payload.matches.filter((match) => match.status === "scheduled").length;
+  const gameFreshness = Object.values(payload.coverage.games).map((coverage) => ({
+    status: freshnessNow === null
+      ? coverage.syncStatus
+      : gameSyncStatusAt(coverage.sourceFetchedAt, coverage.lastError?.at ?? null, freshnessNow),
+    sourceFetchedAt: coverage.sourceFetchedAt,
+    lastErrorAt: coverage.lastError?.at ?? null,
+  }));
+  const scheduleIsStale = payload.stale || gameFreshness.some((game) => game.status !== "normal");
+  const scheduleSourceStateLabel = scheduleSourceLabel(payload.mode, gameFreshness, scheduleIsStale);
 
   async function refreshSchedule() {
     setRefreshing(true);
@@ -287,11 +314,9 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
         <section className="schedule-section" aria-labelledby="schedule-title">
           <div className="section-heading">
             <div><span className="section-index">01 / 赛程中心</span><h2 id="schedule-title">比赛日历</h2></div>
-            <div className={`source-state ${payload.mode === "live" && !payload.stale ? "source-live" : "source-stale"}`}>
+            <div className={`source-state ${payload.mode === "live" && !scheduleIsStale ? "source-live" : "source-stale"}`}>
               <i />
-              <span>{payload.mode === "live"
-                ? payload.stale ? "PandaScore 聚合数据（部分延迟）" : "PandaScore 聚合数据"
-                : "PandaScore 聚合数据（服务暂不可用）"}</span>
+              <span>{scheduleSourceStateLabel}</span>
             </div>
           </div>
 
@@ -307,11 +332,19 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           <div className="sync-status-grid" aria-label="各游戏数据同步状态">
             {Object.entries(games).map(([key, value]) => {
               const coverage = payload.coverage.games[key as GameKey];
-              const syncStatus = coverage?.syncStatus ?? "failed";
+              const syncStatus = coverage
+                ? freshnessNow === null
+                  ? coverage.syncStatus
+                  : gameSyncStatusAt(coverage.sourceFetchedAt, coverage.lastError?.at ?? null, freshnessNow)
+                : "failed";
               return (
                 <div className={`sync-status-card sync-${syncStatus}`} key={key}>
                   <span>{value.label}</span>
-                  <strong>{coverage?.refreshInProgress ? "同步中" : syncStatus === "normal" ? "正常" : syncStatus === "delayed" ? "延迟" : "同步失败"}</strong>
+                  <strong>{coverage?.refreshInProgress ? "同步中" : gameSyncStatusLabel({
+                    status: syncStatus,
+                    sourceFetchedAt: coverage?.sourceFetchedAt ?? null,
+                    lastErrorAt: coverage?.lastError?.at ?? null,
+                  })}</strong>
                   <small>{formatDateTime(coverage?.sourceFetchedAt ?? null, timeZone)}</small>
                 </div>
               );
