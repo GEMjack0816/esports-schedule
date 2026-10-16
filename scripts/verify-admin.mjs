@@ -77,12 +77,12 @@ async function submit(context, origin, input) {
   return response.json();
 }
 
-async function cleanupRun(context, origin, runId) {
+async function cleanupRun(context, origin, runId, expectedDatabaseFingerprint) {
   let lastError;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       const response = await context.request.post(`${origin}/api/admin/verify-cleanup`, {
-        data: { runId },
+        data: { runId, expectedDatabaseFingerprint },
         headers: { Origin: origin },
         timeout: 15_000,
       });
@@ -224,7 +224,12 @@ async function runVerification() {
   } finally {
     if (testDataMayExist && verifiedDeployment && context) {
       try {
-        cleanupCounts = await cleanupRun(context, verifiedDeployment.origin, runId);
+        cleanupCounts = await cleanupRun(
+          context,
+          verifiedDeployment.origin,
+          runId,
+          target.expectedDatabaseFingerprint,
+        );
       } catch (error) {
         cleanupError = summarizeAdminVerifyFailure(error, "cleanup");
       }
