@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { checkScheduleHealth, inspectScheduleFreshness } from "./check-schedule-freshness.mjs";
 
@@ -80,6 +81,41 @@ describe("schedule freshness monitor", () => {
     await expect(checkScheduleHealth(async () => response, now)).resolves.toEqual({ ok: true, problems: [] });
     const unavailable = await checkScheduleHealth(async () => new Response("unavailable", { status: 503 }), now);
     expect(unavailable.problems).toEqual(["health endpoint returned HTTP 503"]);
+  });
+
+  it("uses only a no-store, unauthenticated GET to the public health endpoint", async () => {
+    let requestedUrl;
+    let requestOptions;
+    const response = new Response(JSON.stringify(healthyPayload()), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    await checkScheduleHealth(async (url, options) => {
+      requestedUrl = url;
+      requestOptions = options;
+      return response;
+    }, now);
+
+    expect(requestedUrl).toBe("https://esports-schedule-two.vercel.app/api/health/data-coverage");
+    expect(requestOptions.method).toBeUndefined();
+    expect(requestOptions.cache).toBe("no-store");
+    expect(requestOptions.redirect).toBe("error");
+    expect(requestOptions.headers).toEqual({ accept: "application/json" });
+    expect(requestOptions.headers.authorization).toBeUndefined();
+  });
+
+  it("keeps the scheduled monitor main-only and separate from sync triggers", () => {
+    const workflow = readFileSync(
+      new URL("../.github/workflows/check-schedule-freshness.yml", import.meta.url),
+      "utf8",
+    );
+    expect(workflow).toMatch(/cron: "12,27,42,57 \* \* \* \*"/);
+    expect(workflow).toMatch(/workflow_dispatch:/);
+    expect(workflow).toMatch(/if: github\.ref == 'refs\/heads\/main'/);
+    expect(workflow).toMatch(/permissions:\s*\n\s*contents: read/);
+    expect(workflow).not.toMatch(/^\s*(?:push|pull_request):/m);
+    expect(workflow).not.toContain("secrets.");
+    expect(workflow).not.toContain("/api/cron/sync");
   });
 
   it("fails closed on non-JSON and oversized health responses", async () => {
