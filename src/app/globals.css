@@ -356,6 +356,12 @@ a { color: inherit; text-decoration: none; }
   margin: 0 auto;
 }
 
+@media (max-width: 720px) {
+  .admin-page {
+    width: calc(100% - 2rem);
+  }
+}
+
 .admin-card {
   width: min(560px, 100%);
   padding: 2rem;
@@ -461,3 +467,4 @@ a { color: inherit; text-decoration: none; }
   border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
   border-radius: .4rem;
 }
+
