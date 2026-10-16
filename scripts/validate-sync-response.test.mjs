@@ -22,6 +22,15 @@ describe("sync workflow response validation", () => {
     expect(validateSyncResponse(success, 200).ok).toBe(true);
   });
 
+  it("rejects malformed HTTP status codes instead of accepting a successful payload", () => {
+    expect(validateSyncResponse(success, Number.NaN)).toEqual({
+      ok: false,
+      message: "sync endpoint returned an invalid HTTP status",
+    });
+    expect(validateSyncResponse(success, 99).ok).toBe(false);
+    expect(validateSyncResponse(success, 600).ok).toBe(false);
+  });
+
   it("rejects a busy lock so scheduled automation does not report a refresh", () => {
     expect(validateSyncResponse({ status: "busy", lockAcquired: false, generation: null }, 409)).toEqual({
       ok: false,

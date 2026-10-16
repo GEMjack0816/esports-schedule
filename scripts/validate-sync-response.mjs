@@ -5,6 +5,9 @@ export function validateSyncResponse(payload, httpStatus) {
   if (!payload || typeof payload !== "object") {
     return { ok: false, message: "sync endpoint returned invalid JSON" };
   }
+  if (!Number.isInteger(httpStatus) || httpStatus < 100 || httpStatus > 599) {
+    return { ok: false, message: "sync endpoint returned an invalid HTTP status" };
+  }
   if (payload.status === "busy" && payload.lockAcquired === false) {
     if (payload.generation !== null && payload.generation !== undefined) {
       return { ok: false, message: "sync busy response unexpectedly reported a generation" };
