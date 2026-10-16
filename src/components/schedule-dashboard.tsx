@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
+import { createScheduleCsv } from "@/lib/schedule/export";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -242,6 +243,21 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     setGame("all"); setLeague("all"); setStatus("all"); setQuery(""); setSelectedDate("");
   }
 
+  function exportFilteredMatches() {
+    if (filtered.length === 0) return;
+    const blob = new Blob([createScheduleCsv(grouped.flatMap(([, matches]) => matches), timeZone)], {
+      type: "text/csv;charset=utf-8",
+    });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = `esports-schedule-${today}.csv`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+  }
+
   function toggleTheme() {
     const nextTheme: Theme = theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = nextTheme;
@@ -301,6 +317,9 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <span>源快照时间 <strong>{formatDateTime(payload.coverage.sourceFetchedAt, timeZone)}</strong></span>
             <span>最近同步尝试 <strong>{formatDateTime(payload.coverage.lastAttemptAt, timeZone)}</strong></span>
             <span>当前收录范围 <strong>{formatDateTime(payload.coverage.range.earliestMatchAt, timeZone)} — {formatDateTime(payload.coverage.range.latestMatchAt, timeZone)}</strong></span>
+            <button className="export-schedule-button" type="button" onClick={exportFilteredMatches} disabled={filtered.length === 0}>
+              导出当前结果 CSV · {filtered.length}
+            </button>
             <Link href="/submit-match" prefetch={false}>提交遗漏比赛</Link>
           </div>
 
