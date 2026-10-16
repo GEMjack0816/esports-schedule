@@ -14,6 +14,7 @@
     "verify:browser": "node scripts/verify-browser.mjs",
     "verify:admin": "node scripts/verify-admin.mjs",
     "verify:production": "node scripts/verify-production.mjs",
+    "monitor:schedule-freshness": "node scripts/check-schedule-freshness.mjs",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:client-bundle"

@@ -1,0 +1,31 @@
+name: Check schedule freshness
+
+on:
+  schedule:
+    # Run five minutes after each quarter-hour slot, away from the hour boundary.
+    - cron: "12,27,42,57 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: schedule-freshness-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check out monitor
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+
+      - name: Verify public schedule freshness
+        run: npm run monitor:schedule-freshness
