@@ -1,7 +1,21 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
-export function validateSyncResponse(payload, httpStatus) {
+// The fixture workflow runs every 15 minutes; reject otherwise-successful
+// responses when the last-known-good snapshot is already outside that window.
+const MAX_SNAPSHOT_AGE_MS = 15 * 60 * 1_000;
+// Allow small runner/runtime clock skew without accepting a forged future date.
+const MAX_FUTURE_SKEW_MS = 2 * 60 * 1_000;
+
+function isFreshTimestamp(value, now) {
+  if (typeof value !== "string") return false;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return false;
+  const age = now - timestamp;
+  return age <= MAX_SNAPSHOT_AGE_MS && age >= -MAX_FUTURE_SKEW_MS;
+}
+
+export function validateSyncResponse(payload, httpStatus, now = Date.now()) {
   if (!payload || typeof payload !== "object") {
     return { ok: false, message: "sync endpoint returned invalid JSON" };
   }
@@ -38,8 +52,14 @@ export function validateSyncResponse(payload, httpStatus) {
     || payload.gamesSucceeded + payload.gamesFailed !== payload.gamesAttempted) {
     return { ok: false, message: "sync game outcome counts are inconsistent" };
   }
-  if (typeof payload.lastSuccessfulSyncAt !== "string" || Number.isNaN(Date.parse(payload.lastSuccessfulSyncAt))) {
-    return { ok: false, message: "sync did not report a valid lastSuccessfulSyncAt" };
+  if (!isFreshTimestamp(payload.sourceFetchedAt, now)) {
+    return { ok: false, message: "sync snapshot sourceFetchedAt is missing, stale, or too far in the future" };
+  }
+  if (!isFreshTimestamp(payload.lastSuccessfulSyncAt, now)) {
+    return { ok: false, message: "sync lastSuccessfulSyncAt is missing, stale, or too far in the future" };
+  }
+  if (Date.parse(payload.lastSuccessfulSyncAt) < Date.parse(payload.sourceFetchedAt)) {
+    return { ok: false, message: "sync timestamps are inconsistent" };
   }
   if (payload.status !== "success" && payload.status !== "partial") {
     return { ok: false, message: `sync reported logical status ${String(payload.status)}` };

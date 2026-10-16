@@ -2,7 +2,9 @@ name: Sync esports fixtures
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # GitHub documents elevated schedule load at minute 0; this offset reduces
+    # the chance of delays/dropped starts but does not provide a hard guarantee.
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
 
 permissions:
