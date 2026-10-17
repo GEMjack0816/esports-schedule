@@ -2,12 +2,14 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 import {
   isPandaScoreCdnLogo,
   resolveTeamLogoSource,
+  shouldRetryTeamLogoDirectly,
+  TEAM_LOGO_RETRY_DELAY_MS,
   TEAM_LOGO_PLACEHOLDER,
 } from "@/lib/schedule/team-logo";
 
@@ -101,20 +103,39 @@ function TeamRow({ team, score, winning }: {
 }) {
   const source = team.logo || TEAM_LOGO_PLACEHOLDER;
   const [failedSource, setFailedSource] = useState<string | null>(null);
-  const logoSource = resolveTeamLogoSource(source, failedSource);
+  const [retryPendingSource, setRetryPendingSource] = useState<string | null>(null);
+  const [retriedSource, setRetriedSource] = useState<string | null>(null);
+  const retryPending = retryPendingSource === source;
+  const directRetry = retriedSource === source && isPandaScoreCdnLogo(source);
+  const logoSource = resolveTeamLogoSource(source, failedSource, retryPendingSource);
+
+  useEffect(() => {
+    if (!retryPending) return;
+    const timer = setTimeout(() => {
+      setRetriedSource(source);
+      setRetryPendingSource(null);
+    }, TEAM_LOGO_RETRY_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [retryPending, source]);
 
   return (
     <div className={`team-row ${winning ? "team-winning" : ""}`}>
       <span className="team-mark" aria-hidden="true">
         <Image
+          key={`${logoSource}:${directRetry ? "direct-retry" : "optimized"}`}
           src={logoSource}
           alt=""
           width={28}
           height={28}
-          unoptimized={!isPandaScoreCdnLogo(logoSource)}
+          unoptimized={!isPandaScoreCdnLogo(logoSource) || directRetry}
           referrerPolicy="no-referrer"
           onError={() => {
-            if (logoSource !== TEAM_LOGO_PLACEHOLDER) setFailedSource(source);
+            if (logoSource === TEAM_LOGO_PLACEHOLDER) return;
+            if (shouldRetryTeamLogoDirectly(source, retriedSource)) {
+              setRetryPendingSource(source);
+              return;
+            }
+            setFailedSource(source);
           }}
         />
         <span>{team.acronym?.slice(0, 3) || initials(team.name)}</span>
@@ -367,3 +388,4 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     </div>
   );
 }
+

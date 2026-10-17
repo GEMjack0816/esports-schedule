@@ -3,6 +3,8 @@ import nextConfig from "../../../next.config";
 import {
   isPandaScoreCdnLogo,
   resolveTeamLogoSource,
+  shouldRetryTeamLogoDirectly,
+  TEAM_LOGO_RETRY_DELAY_MS,
   TEAM_LOGO_PLACEHOLDER,
 } from "./team-logo";
 
@@ -67,3 +69,25 @@ describe("resolveTeamLogoSource", () => {
     expect(resolveTeamLogoSource("", null)).toBe(TEAM_LOGO_PLACEHOLDER);
   });
 });
+
+describe("bounded team logo retry", () => {
+  const pandaScoreLogo = "https://cdn.pandascore.co/images/team/image/125063/team.png";
+
+  it("waits briefly before attempting one direct retry", () => {
+    expect(TEAM_LOGO_RETRY_DELAY_MS).toBeGreaterThanOrEqual(500);
+    expect(TEAM_LOGO_RETRY_DELAY_MS).toBeLessThanOrEqual(1_500);
+    expect(shouldRetryTeamLogoDirectly(pandaScoreLogo, null)).toBe(true);
+  });
+
+  it("does not retry an untrusted source or loop after the direct retry fails", () => {
+    expect(shouldRetryTeamLogoDirectly("https://attacker.example/logo.png", null)).toBe(false);
+    expect(shouldRetryTeamLogoDirectly(pandaScoreLogo, pandaScoreLogo)).toBe(false);
+  });
+
+  it("shows the local placeholder while waiting for retry and after both attempts fail", () => {
+    expect(resolveTeamLogoSource(pandaScoreLogo, null, pandaScoreLogo)).toBe(TEAM_LOGO_PLACEHOLDER);
+    expect(resolveTeamLogoSource(pandaScoreLogo, pandaScoreLogo, null)).toBe(TEAM_LOGO_PLACEHOLDER);
+    expect(resolveTeamLogoSource(pandaScoreLogo, null, null)).toBe(pandaScoreLogo);
+  });
+});
+
