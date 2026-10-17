@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { chromium } from "playwright-core";
 
 const baseUrl = process.argv[2] || "http://localhost:3000";
@@ -19,6 +20,53 @@ for (const executablePath of executableCandidates) {
   }
 }
 if (!browser) throw launchError || new Error("No supported browser executable found");
+
+function parseCsvRows(content) {
+  const text = content.startsWith("\uFEFF") ? content.slice(1) : content;
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (quoted) {
+      if (character === '"' && text[index + 1] === '"') {
+        cell += '"';
+        index += 1;
+      } else if (character === '"') {
+        quoted = false;
+      } else {
+        cell += character;
+      }
+    } else if (character === '"') {
+      quoted = true;
+    } else if (character === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (character === "\r" && text[index + 1] === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+      index += 1;
+    } else if (character === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+
+  if (quoted) throw new Error("CSV download contains an unterminated quoted field");
+  if (cell !== "" || row.length > 0) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows;
+}
 
 const results = [];
 for (const profile of [
@@ -96,6 +144,36 @@ for (const profile of [
     statusFilterCounts[status] = await page.locator(".match-card").count();
   }
   await statusSelect.selectOption("all");
+  await page.getByRole("tab", { name: /全部收录/ }).click();
+  await gameSelect.selectOption("honor-of-kings");
+  const expectedCsvMatchCount = await page.locator(".match-card").count();
+  let csvDownload = { status: "not-run", filename: null, rows: 0, expectedRows: expectedCsvMatchCount, onlySelectedGame: false };
+  if (expectedCsvMatchCount > 0) {
+    try {
+      const downloadPromise = page.waitForEvent("download", { timeout: 10_000 });
+      await page.locator(".export-schedule-button").click();
+      const download = await downloadPromise;
+      const downloadPath = await download.path();
+      if (!downloadPath) throw new Error("browser did not provide the completed CSV download");
+      const csvContent = await readFile(downloadPath, "utf8");
+      const rows = parseCsvRows(csvContent);
+      const dataRows = rows.slice(1);
+      csvDownload = {
+        status: "passed",
+        filename: download.suggestedFilename(),
+        rows: dataRows.length,
+        expectedRows: expectedCsvMatchCount,
+        hasUtf8Bom: csvContent.startsWith("\uFEFF"),
+        hasExpectedColumns: rows[0]?.[3] === "游戏" && rows[0]?.[13] === "比赛 ID",
+        onlySelectedGame: dataRows.every((csvRow) => csvRow[3] === "王者荣耀"),
+      };
+    } catch {
+      csvDownload.status = "failed";
+    }
+  } else {
+    csvDownload.status = "failed-no-filtered-matches";
+  }
+  await gameSelect.selectOption("all");
   await page.getByRole("tab", { name: /^今日/ }).click();
 
   const apiResponsePromise = page.waitForResponse(
@@ -184,6 +262,7 @@ for (const profile of [
     gameOptions,
     gameFilterCounts,
     statusFilterCounts,
+    csvDownload,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -236,6 +315,16 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (result.csvDownload.status !== "passed") failures.push(`${prefix}: filtered CSV download failed`);
+  if (!/^esports-schedule-\d{4}-\d{2}-\d{2}\.csv$/u.test(result.csvDownload.filename || "")) {
+    failures.push(`${prefix}: CSV download filename is invalid`);
+  }
+  if (result.csvDownload.rows !== result.csvDownload.expectedRows || !result.csvDownload.onlySelectedGame) {
+    failures.push(`${prefix}: CSV rows do not match the selected game filter`);
+  }
+  if (!result.csvDownload.hasUtf8Bom || !result.csvDownload.hasExpectedColumns) {
+    failures.push(`${prefix}: CSV encoding or columns are invalid`);
+  }
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
