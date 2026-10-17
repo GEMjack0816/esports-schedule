@@ -388,4 +388,3 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     </div>
   );
 }
-

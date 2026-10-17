@@ -46,4 +46,3 @@ export function resolveTeamLogoSource(
 export function shouldRetryTeamLogoDirectly(source: string, retriedSource: string | null): boolean {
   return source !== retriedSource && isPandaScoreCdnLogo(source);
 }
-

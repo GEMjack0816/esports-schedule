@@ -90,4 +90,3 @@ describe("bounded team logo retry", () => {
     expect(resolveTeamLogoSource(pandaScoreLogo, null, null)).toBe(pandaScoreLogo);
   });
 });
-
