@@ -2,7 +2,7 @@ name: Check schedule freshness
 
 on:
   schedule:
-    # Run five minutes after each quarter-hour slot, away from the hour boundary.
+    # Keep a 15-minute cadence, offset from quarter-hour boundaries (especially :00).
     - cron: "12,27,42,57 * * * *"
   workflow_dispatch:
 
