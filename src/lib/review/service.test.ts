@@ -6,7 +6,7 @@ vi.mock("next/cache", () => ({
   unstable_cache: (callback: unknown) => callback,
 }));
 
-import { toggleManualMatchHidden } from "./service";
+import { cleanupVerificationRun, toggleManualMatchHidden } from "./service";
 
 describe("manual match visibility service", () => {
   it("delegates the atomic toggle and invalidates the public match cache", async () => {
@@ -34,6 +34,70 @@ describe("manual match visibility service", () => {
       new Date(expectedUpdatedAt),
     );
     expect(effects.synchronize).toHaveBeenCalledWith(repository);
+    expect(effects.invalidate).toHaveBeenCalledOnce();
+  });
+});
+
+describe("verification run cleanup service", () => {
+  it("re-synchronizes the Runtime Cache even for an idempotent retry", async () => {
+    const counts = { submissions: 0, manualMatches: 0, auditEvents: 0 };
+    const repository = {
+      cleanupAdminVerificationRun: vi.fn().mockResolvedValue(counts),
+    } as unknown as DrizzleReviewRepository;
+    const effects = {
+      synchronize: vi.fn().mockResolvedValue(undefined),
+      invalidate: vi.fn(),
+    };
+
+    await expect(cleanupVerificationRun("eac53db6-16b4-4bd0-877a-e3ed5f4fe2b1", repository, effects))
+      .resolves.toBe(counts);
+
+    expect(repository.cleanupAdminVerificationRun).toHaveBeenCalledOnce();
+    expect(effects.synchronize).toHaveBeenCalledWith(repository);
+    expect(effects.invalidate).toHaveBeenCalledOnce();
+  });
+
+  it("does not report verification cleanup success when cache synchronization fails", async () => {
+    const repository = {
+      cleanupAdminVerificationRun: vi.fn().mockResolvedValue({
+        submissions: 0,
+        manualMatches: 0,
+        auditEvents: 0,
+      }),
+    } as unknown as DrizzleReviewRepository;
+    const effects = {
+      synchronize: vi.fn().mockRejectedValue(new Error("cache synchronization failed")),
+      invalidate: vi.fn(),
+    };
+
+    await expect(cleanupVerificationRun(
+      "eac53db6-16b4-4bd0-877a-e3ed5f4fe2b1",
+      repository,
+      effects,
+    )).rejects.toThrow("cache synchronization failed");
+
+    expect(effects.invalidate).toHaveBeenCalledOnce();
+  });
+
+  it("does not report verification cleanup success when the Runtime Cache delivery is pending", async () => {
+    const repository = {
+      cleanupAdminVerificationRun: vi.fn().mockResolvedValue({
+        submissions: 1,
+        manualMatches: 1,
+        auditEvents: 2,
+      }),
+    } as unknown as DrizzleReviewRepository;
+    const effects = {
+      synchronize: vi.fn().mockResolvedValue({ cacheSynchronized: false }),
+      invalidate: vi.fn(),
+    };
+
+    await expect(cleanupVerificationRun(
+      "eac53db6-16b4-4bd0-877a-e3ed5f4fe2b1",
+      repository,
+      effects,
+    )).rejects.toThrow("Runtime Cache did not confirm the verification cleanup snapshot.");
+
     expect(effects.invalidate).toHaveBeenCalledOnce();
   });
 });
