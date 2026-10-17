@@ -16,7 +16,7 @@ function getTimestampAgeSeconds(value, now) {
   if (!Number.isFinite(timestamp)) return null;
   const skewSeconds = (timestamp - now.getTime()) / 1000;
   if (skewSeconds > MAX_FUTURE_SKEW_SECONDS) return null;
-  return Math.max(0, Math.floor((now.getTime() - timestamp) / 1000));
+  return Math.max(0, (now.getTime() - timestamp) / 1000);
 }
 
 function addAgeProblem(problems, label, seconds) {

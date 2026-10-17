@@ -36,6 +36,25 @@ describe("schedule freshness monitor", () => {
     expect(inspectScheduleFreshness(payload, now).problems).toContain("sourceFetchedAt is older than 900 seconds");
   });
 
+  it("accepts exactly 15 minutes but rejects any amount beyond the threshold", () => {
+    const exactBoundary = healthyPayload();
+    const boundaryTimestamp = "2026-10-16T12:00:00.000Z";
+    exactBoundary.sourceFetchedAt = boundaryTimestamp;
+    exactBoundary.lastSuccessfulSyncAt = boundaryTimestamp;
+    exactBoundary.snapshotAgeSeconds = 900;
+    for (const coverage of Object.values(exactBoundary.games)) {
+      coverage.sourceFetchedAt = boundaryTimestamp;
+      coverage.lastSuccessfulSyncAt = boundaryTimestamp;
+      coverage.snapshotAgeSeconds = 900;
+    }
+    expect(inspectScheduleFreshness(exactBoundary, now)).toEqual({ ok: true, problems: [] });
+
+    exactBoundary.sourceFetchedAt = "2026-10-16T11:59:59.999Z";
+    expect(inspectScheduleFreshness(exactBoundary, now).problems).toContain(
+      "sourceFetchedAt is older than 900 seconds",
+    );
+  });
+
   it("fails closed on unavailable/demo/stale schedule states", () => {
     const payload = { ...healthyPayload(), mode: "unavailable", demoMode: true, stale: true };
     const result = inspectScheduleFreshness(payload, now);
