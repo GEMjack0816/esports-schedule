@@ -157,6 +157,17 @@ export async function checkScheduleHealth(fetchImpl = fetch, now = new Date()) {
     };
   }
 
+  const cacheControl = response.headers.get("cache-control") ?? "";
+  const cacheDirectives = cacheControl
+    .split(",")
+    .map((directive) => directive.trim().toLowerCase().split("=", 1)[0]);
+  if (!cacheDirectives.includes("no-store")) {
+    return {
+      ok: false,
+      problems: ["health endpoint response is missing the no-store cache directive"],
+    };
+  }
+
   let payload;
   try {
     payload = JSON.parse(await readBodyWithLimit(response));

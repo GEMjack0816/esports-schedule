@@ -95,7 +95,10 @@ describe("schedule freshness monitor", () => {
   it("accepts only an HTTP 200 JSON health response", async () => {
     const response = new Response(JSON.stringify(healthyPayload()), {
       status: 200,
-      headers: { "content-type": "application/json; charset=utf-8" },
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store, no-cache, must-revalidate",
+      },
     });
     await expect(checkScheduleHealth(async () => response, now)).resolves.toEqual({ ok: true, problems: [] });
     const unavailable = await checkScheduleHealth(async () => new Response("unavailable", { status: 503 }), now);
@@ -107,7 +110,10 @@ describe("schedule freshness monitor", () => {
     let requestOptions;
     const response = new Response(JSON.stringify(healthyPayload()), {
       status: 200,
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      },
     });
     await checkScheduleHealth(async (url, options) => {
       requestedUrl = url;
@@ -146,9 +152,28 @@ describe("schedule freshness monitor", () => {
 
     const large = await checkScheduleHealth(async () => new Response("x".repeat(128 * 1024 + 1), {
       status: 200,
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      },
     }), now);
     expect(large.problems).toEqual(["health response was unreadable or exceeded the size limit"]);
+  });
+
+  it("rejects cacheable health responses to avoid passing on stale CDN data", async () => {
+    for (const cacheControl of ["", "public, max-age=60", "public, s-maxage=900"]) {
+      const response = await checkScheduleHealth(async () => new Response(JSON.stringify(healthyPayload()), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          ...(cacheControl ? { "cache-control": cacheControl } : {}),
+        },
+      }), now);
+      expect(response).toEqual({
+        ok: false,
+        problems: ["health endpoint response is missing the no-store cache directive"],
+      });
+    }
   });
 
   it("does not echo low-level network exceptions", async () => {
