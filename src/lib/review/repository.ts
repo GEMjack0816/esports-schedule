@@ -41,7 +41,8 @@ import {
 import type {
   AdminSummary,
   ApprovalInput,
-  LegacyInsertResult,
+  LegacyImportCounts,
+  LegacySubmissionCandidate,
   ManualMatchPage,
   PublicSubmissionResult,
   PublishedMatchWrite,
@@ -351,23 +352,35 @@ export class DrizzleReviewRepository {
     }
   }
 
-  async insertLegacySubmission(
-    input: MatchSubmissionInput,
-    id: string,
-    submittedAt: Date,
-  ): Promise<LegacyInsertResult> {
+  async importLegacySubmissionsAtomically(
+    actorId: string,
+    candidates: LegacySubmissionCandidate[],
+    initialCounts: Pick<LegacyImportCounts, "scanned" | "invalid">,
+  ): Promise<LegacyImportCounts> {
     try {
-      const rows = await getDatabase()
-        .insert(matchSubmissions)
-        .values({
-          ...submissionValues(input),
-          id,
-          submittedAt,
-          status: "pending",
-        })
-        .onConflictDoNothing()
-        .returning({ id: matchSubmissions.id });
-      return rows.length === 1 ? "imported" : "duplicate";
+      return await getDatabase().transaction(async (tx) => {
+        const inserted = candidates.length === 0
+          ? []
+          : await tx.insert(matchSubmissions).values(candidates.map(({ input, id, submittedAt }) => ({
+            ...submissionValues(input),
+            id,
+            submittedAt,
+            status: "pending",
+          }))).onConflictDoNothing().returning({ id: matchSubmissions.id });
+        const counts: LegacyImportCounts = {
+          ...initialCounts,
+          imported: inserted.length,
+          duplicate: candidates.length - inserted.length,
+        };
+        await tx.insert(adminAuditEvents).values({
+          actorId,
+          action: "legacy_submissions.imported",
+          entityType: "legacy_import",
+          entityId: crypto.randomUUID(),
+          afterJson: counts,
+        });
+        return counts;
+      });
     } catch (error) {
       translateDatabaseError(error);
     }
@@ -755,20 +768,6 @@ export class DrizzleReviewRepository {
       });
     } catch (error) {
       if (error instanceof ReviewNotFoundError || error instanceof ReviewConflictError) throw error;
-      translateDatabaseError(error);
-    }
-  }
-
-  async auditLegacyImport(actorId: string, counts: Record<string, number>): Promise<void> {
-    try {
-      await getDatabase().insert(adminAuditEvents).values({
-        actorId,
-        action: "legacy_submissions.imported",
-        entityType: "legacy_import",
-        entityId: crypto.randomUUID(),
-        afterJson: counts,
-      });
-    } catch (error) {
       translateDatabaseError(error);
     }
   }

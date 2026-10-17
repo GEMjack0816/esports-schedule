@@ -36,29 +36,50 @@ describe("legacy Runtime Cache submission migration", () => {
         submittedAt: "2026-07-01T00:00:00.000Z",
       });
     }
-    const insertLegacySubmission = vi.fn(async (
-      _input: MatchSubmissionInput,
-      id: string,
-      submittedAt: Date,
+    const importLegacySubmissionsAtomically = vi.fn(async (
+      actorId: string,
+      candidates: Array<{ input: MatchSubmissionInput; id: string; submittedAt: Date }>,
+      initialCounts: { scanned: number; invalid: number },
     ) => {
-      expect(submittedAt.toISOString()).toBe("2026-07-01T00:00:00.000Z");
-      return id === importedId ? "imported" as const : "duplicate" as const;
+      expect(actorId).toBe("admin-user");
+      expect(initialCounts).toEqual({ scanned: 3, invalid: 1 });
+      expect(candidates.map((candidate) => candidate.id)).toEqual([importedId, duplicateId]);
+      expect(candidates.every((candidate) => candidate.submittedAt.toISOString()
+        === "2026-07-01T00:00:00.000Z")).toBe(true);
+      return { ...initialCounts, imported: 1, duplicate: 1 };
     });
-    const auditLegacyImport = vi.fn();
     const repository = {
-      insertLegacySubmission,
-      auditLegacyImport,
+      importLegacySubmissionsAtomically,
     } as unknown as DrizzleReviewRepository;
 
     const counts = await importLegacyRuntimeSubmissions("admin-user", repository);
 
     expect(counts).toEqual({ scanned: 3, imported: 1, duplicate: 1, invalid: 1 });
-    expect(insertLegacySubmission).toHaveBeenCalledTimes(2);
-    expect(insertLegacySubmission.mock.calls.map((call) => call[1])).toEqual([
-      importedId,
-      duplicateId,
-    ]);
-    expect(auditLegacyImport).toHaveBeenCalledWith("admin-user", counts);
+    expect(importLegacySubmissionsAtomically).toHaveBeenCalledOnce();
+    expect(cacheState.delete).not.toHaveBeenCalled();
+  });
+
+  it("does not report success or discard legacy cache when the atomic database operation fails", async () => {
+    const id = "33333333-3333-4333-8333-333333333333";
+    cacheState.values.clear();
+    cacheState.delete.mockReset();
+    cacheState.values.set("pending-index-v1", [id]);
+    cacheState.values.set(`pending:${id}`, {
+      game: "lol",
+      league: "Legacy failure case",
+      teamA: "Alpha",
+      teamB: "Beta",
+      scheduledAt: "2026-08-01T00:00:00.000Z",
+      bestOf: 3,
+      sourceUrl: "https://example.com/legacy",
+      submittedAt: "2026-07-01T00:00:00.000Z",
+    });
+    const repository = {
+      importLegacySubmissionsAtomically: vi.fn().mockRejectedValue(new Error("database unavailable")),
+    } as unknown as DrizzleReviewRepository;
+
+    await expect(importLegacyRuntimeSubmissions("admin-user", repository))
+      .rejects.toThrow("database unavailable");
     expect(cacheState.delete).not.toHaveBeenCalled();
   });
 });

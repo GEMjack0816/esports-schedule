@@ -33,6 +33,7 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
   const manualMatchIds: string[] = [];
   const rateLimitSources: string[] = [];
   const rateLimitWindowKeys: string[] = [];
+  const legacyImportActors: string[] = [];
 
   beforeAll(async () => {
     process.env.DATABASE_URL = testUrl;
@@ -62,6 +63,9 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     }
     if (rateLimitWindowKeys.length > 0) {
       await cleanup`delete from submission_rate_limit_windows where window_key = any(${rateLimitWindowKeys}::text[])`;
+    }
+    if (legacyImportActors.length > 0) {
+      await cleanup`delete from admin_audit_events where actor_id = any(${legacyImportActors}::text[])`;
     }
     await cleanup.end();
   });
@@ -467,6 +471,48 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     ]);
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+  });
+
+  it("commits legacy rows and the exact aggregate audit in one transaction", async () => {
+    const actorId = `legacy-import-${randomUUID()}`;
+    legacyImportActors.push(actorId);
+    const firstId = randomUUID();
+    const duplicateId = randomUUID();
+    submissionIds.push(firstId, duplicateId);
+    const input = submission(`legacy-atomic-${randomUUID()}`);
+    const submittedAt = new Date("2026-07-01T00:00:00.000Z");
+
+    const counts = await repository.importLegacySubmissionsAtomically(actorId, [
+      { id: firstId, input, submittedAt },
+      { id: duplicateId, input, submittedAt },
+    ], { scanned: 2, invalid: 0 });
+
+    expect(counts).toEqual({ scanned: 2, imported: 1, duplicate: 1, invalid: 0 });
+    const importedRows = await cleanup`select id, submitted_at from match_submissions
+      where id = any(${[firstId, duplicateId]}::uuid[])`;
+    expect(importedRows).toHaveLength(1);
+    expect(new Date(importedRows[0].submitted_at as string).toISOString()).toBe(submittedAt.toISOString());
+    const audits = await cleanup`select action, entity_type, after_json from admin_audit_events
+      where actor_id = ${actorId}`;
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      action: "legacy_submissions.imported",
+      entity_type: "legacy_import",
+      after_json: counts,
+    });
+  });
+
+  it("rolls back imported rows when the aggregate audit insert fails", async () => {
+    const id = randomUUID();
+    submissionIds.push(id);
+    await expect(repository.importLegacySubmissionsAtomically(
+      null as unknown as string,
+      [{ id, input: submission(`legacy-audit-rollback-${randomUUID()}`), submittedAt: new Date() }],
+      { scanned: 1, invalid: 0 },
+    )).rejects.toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+
+    const rows = await cleanup`select id from match_submissions where id = ${id}::uuid`;
+    expect(rows).toHaveLength(0);
   });
 
   it("keeps the post-mutation Runtime Cache snapshot during an immediate database outage", async () => {

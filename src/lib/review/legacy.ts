@@ -15,6 +15,12 @@ type ImportCounts = {
   invalid: number;
 };
 
+type LegacyCandidate = {
+  id: string;
+  input: ReturnType<typeof validateSubmission>;
+  submittedAt: Date;
+};
+
 function legacyCache() {
   return getCache({ namespace: "esports-schedule-submissions" });
 }
@@ -28,7 +34,8 @@ export async function importLegacyRuntimeSubmissions(
   const ids = Array.isArray(index)
     ? [...new Set(index.filter((value): value is string => typeof value === "string"))]
     : [];
-  const counts: ImportCounts = { scanned: ids.length, imported: 0, duplicate: 0, invalid: 0 };
+  const candidates: LegacyCandidate[] = [];
+  let invalid = 0;
 
   for (const id of ids) {
     try {
@@ -41,17 +48,18 @@ export async function importLegacyRuntimeSubmissions(
         : new Date(Number.NaN);
       if (Number.isNaN(submittedAt.getTime())) throw new Error("invalid time");
       const input = validateSubmission({ ...record, notes: record.notes ?? null });
-      const result = await repository.insertLegacySubmission(input, id, submittedAt);
-      counts[result] += 1;
+      candidates.push({ id, input, submittedAt });
     } catch (error) {
       if (error && typeof error === "object" && "code" in error
         && (error as { code?: string }).code === "DATABASE_UNAVAILABLE") {
         throw error;
       }
-      counts.invalid += 1;
+      invalid += 1;
     }
   }
 
-  await repository.auditLegacyImport(actorId, counts);
-  return counts;
+  return repository.importLegacySubmissionsAtomically(actorId, candidates, {
+    scanned: ids.length,
+    invalid,
+  });
 }
