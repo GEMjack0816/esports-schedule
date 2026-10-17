@@ -256,4 +256,3 @@ describe("schedule freshness monitor", () => {
     expect(JSON.stringify(result)).not.toContain("private credential");
   });
 });
-
