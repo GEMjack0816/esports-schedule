@@ -50,6 +50,9 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Verify migration files use LF line endings
+        run: npm run verify:migration-line-endings
+
       - name: Apply schema to the isolated PostgreSQL service
         run: npm run db:migrate
 
