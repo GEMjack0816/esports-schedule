@@ -147,6 +147,9 @@ for (const profile of [
   await page.getByRole("tab", { name: /全部收录/ }).click();
   await gameSelect.selectOption("honor-of-kings");
   const expectedCsvMatchCount = await page.locator(".match-card").count();
+  const expectedCsvTeams = await page.locator(".match-card").evaluateAll((cards) => cards.map((card) =>
+    Array.from(card.querySelectorAll(".team-name"), (team) => team.textContent?.trim() || ""),
+  ));
   let csvDownload = { status: "not-run", filename: null, rows: 0, expectedRows: expectedCsvMatchCount, onlySelectedGame: false };
   if (expectedCsvMatchCount > 0) {
     try {
@@ -158,6 +161,7 @@ for (const profile of [
       const csvContent = await readFile(downloadPath, "utf8");
       const rows = parseCsvRows(csvContent);
       const dataRows = rows.slice(1);
+      const exportedTeams = dataRows.map((csvRow) => [csvRow[7], csvRow[8]]);
       csvDownload = {
         status: "passed",
         filename: download.suggestedFilename(),
@@ -166,6 +170,7 @@ for (const profile of [
         hasUtf8Bom: csvContent.startsWith("\uFEFF"),
         hasExpectedColumns: rows[0]?.[3] === "游戏" && rows[0]?.[13] === "比赛 ID",
         onlySelectedGame: dataRows.every((csvRow) => csvRow[3] === "王者荣耀"),
+        matchesVisibleTeams: JSON.stringify(exportedTeams) === JSON.stringify(expectedCsvTeams),
       };
     } catch {
       csvDownload.status = "failed";
@@ -325,6 +330,7 @@ for (const result of results) {
   if (!result.csvDownload.hasUtf8Bom || !result.csvDownload.hasExpectedColumns) {
     failures.push(`${prefix}: CSV encoding or columns are invalid`);
   }
+  if (!result.csvDownload.matchesVisibleTeams) failures.push(`${prefix}: exported teams differ from visible matches`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
