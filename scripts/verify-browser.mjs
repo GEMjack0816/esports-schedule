@@ -34,11 +34,32 @@ async function tabToAndReadFocusIndicator(page, selector) {
     if (await target.evaluate((element) => document.activeElement === element)) {
       return target.evaluate((element) => {
         const style = getComputedStyle(element);
+        const backgroundColor = getComputedStyle(document.body).backgroundColor;
+        const colorChannels = (color) => {
+          const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+          if (!channels || channels.length !== 3) return null;
+          return channels.map((channel) => {
+            const normalized = channel / 255;
+            return normalized <= 0.04045
+              ? normalized / 12.92
+              : ((normalized + 0.055) / 1.055) ** 2.4;
+          });
+        };
+        const ringLuminance = colorChannels(style.outlineColor);
+        const backgroundLuminance = colorChannels(backgroundColor);
+        const relativeLuminance = (channels) =>
+          channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+        const luminanceContrast = ringLuminance && backgroundLuminance
+          ? (Math.max(relativeLuminance(ringLuminance), relativeLuminance(backgroundLuminance)) + 0.05) /
+            (Math.min(relativeLuminance(ringLuminance), relativeLuminance(backgroundLuminance)) + 0.05)
+          : null;
         return {
           focusVisible: element.matches(":focus-visible"),
           outlineStyle: style.outlineStyle,
           outlineWidth: style.outlineWidth,
           outlineColor: style.outlineColor,
+          backgroundColor,
+          luminanceContrast,
         };
       });
     }
@@ -274,7 +295,9 @@ for (const result of results) {
       !focus ||
       focus.focusVisible !== true ||
       focus.outlineStyle !== "solid" ||
-      Number.parseFloat(focus.outlineWidth) < 2
+      Number.parseFloat(focus.outlineWidth) < 2 ||
+      focus.luminanceContrast === null ||
+      focus.luminanceContrast < 3
     ) {
       failures.push(`${prefix}: ${control} has no visible keyboard focus indicator`);
     }
