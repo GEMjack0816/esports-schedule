@@ -39,7 +39,9 @@ function csvCell(value: string | number | null): string {
   const text = value === null ? "" : String(value);
   // Spreadsheet applications may evaluate untrusted text as a formula even
   // when it is quoted as a CSV cell. Prefix formula-leading values as text.
-  const safeText = /^[\s\uFEFF]*[=+\-@]/u.test(text) ? `'${text}` : text;
+  // Some spreadsheet parsers ignore leading ASCII control characters before
+  // deciding whether a cell is a formula. Treat those as ignorable prefixes too.
+  const safeText = /^[\s\u0000-\u001F\u007F\uFEFF]*[=+\-@]/u.test(text) ? `'${text}` : text;
   return `"${safeText.replaceAll('"', '""')}"`;
 }
 

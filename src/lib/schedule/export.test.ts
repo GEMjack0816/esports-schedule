@@ -52,6 +52,17 @@ describe("createScheduleCsv", () => {
     expect(csv).toContain('"\'+SUM(1,1)"');
   });
 
+  it("neutralizes formulas after leading ASCII control characters", () => {
+    const csv = createScheduleCsv([match({
+      league: "\u0000=1+1",
+      stage: "\u001B+SUM(1,1)",
+      tournament: "\u007F@SUM(1,1)",
+    })], "UTC");
+    expect(csv).toContain('"\'\u0000=1+1"');
+    expect(csv).toContain('"\'\u001B+SUM(1,1)"');
+    expect(csv).toContain('"\'\u007F@SUM(1,1)"');
+  });
+
   it("handles unscheduled matches and partial scores without throwing", () => {
     const csv = createScheduleCsv([match({
       game: "honor-of-kings",
