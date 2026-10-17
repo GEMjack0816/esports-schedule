@@ -12,6 +12,7 @@
   --cyan: #45d6ff;
   --cyan-dim: rgba(69, 214, 255, 0.12);
   --danger: #ff5964;
+  --focus-ring: #45d6ff;
   --header-bg: rgba(9, 11, 15, 0.78);
   --control-bg: rgba(17, 20, 26, 0.76);
   --card-bg: rgba(17, 20, 26, 0.82);
@@ -34,6 +35,7 @@
   --cyan: #087e9e;
   --cyan-dim: rgba(8, 126, 158, 0.11);
   --danger: #c62f3b;
+  --focus-ring: #005f78;
   --header-bg: rgba(244, 247, 249, 0.86);
   --control-bg: rgba(255, 255, 255, 0.88);
   --card-bg: rgba(255, 255, 255, 0.92);
@@ -185,7 +187,7 @@ a { color: inherit; text-decoration: none; }
 
 .filter-panel { display: grid; grid-template-columns: minmax(180px, 1.4fr) repeat(4, minmax(120px, .75fr)); gap: 8px; margin-bottom: 34px; }
 .filter-panel label { min-width: 0; }
-.filter-panel input, .filter-panel select { width: 100%; height: 43px; outline: 0; color: var(--muted-bright); background-color: var(--surface); border: 1px solid var(--line); padding: 0 13px; font-size: 12px; transition: .2s ease; }
+.filter-panel input, .filter-panel select { width: 100%; height: 43px; outline: 0; color: var(--muted-bright); background-color: var(--surface); border: 1px solid var(--line); padding: 0 13px; font-size: 12px; transition: border-color .2s ease, box-shadow .2s ease; }
 .filter-panel input:focus, .filter-panel select:focus { color: var(--foreground); border-color: rgba(69,214,255,.65); box-shadow: 0 0 0 3px rgba(69,214,255,.06); }
 .filter-panel input::placeholder { color: #626b76; }
 .filter-panel select { appearance: none; background-image: linear-gradient(45deg, transparent 50%, #69727e 50%), linear-gradient(135deg, #69727e 50%, transparent 50%); background-position: calc(100% - 15px) 18px, calc(100% - 11px) 18px; background-size: 4px 4px; background-repeat: no-repeat; padding-right: 28px; }
@@ -333,6 +335,17 @@ a { color: inherit; text-decoration: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+body :is(a, button, input, select, textarea, [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.filter-panel :is(input, select):focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
 .submission-honeypot {
   position: absolute !important;
   width: 1px;

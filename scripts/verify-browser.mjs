@@ -21,6 +21,32 @@ for (const executablePath of executableCandidates) {
 if (!browser) throw launchError || new Error("No supported browser executable found");
 
 const results = [];
+
+async function tabToAndReadFocusIndicator(page, selector) {
+  const target = page.locator(selector);
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    window.scrollTo(0, 0);
+  });
+
+  for (let index = 0; index < 80; index += 1) {
+    await page.keyboard.press("Tab");
+    if (await target.evaluate((element) => document.activeElement === element)) {
+      return target.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          focusVisible: element.matches(":focus-visible"),
+          outlineStyle: style.outlineStyle,
+          outlineWidth: style.outlineWidth,
+          outlineColor: style.outlineColor,
+        };
+      });
+    }
+  }
+
+  return null;
+}
+
 for (const profile of [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile-390", width: 390, height: 844 },
@@ -78,6 +104,7 @@ for (const profile of [
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+  const scheduleFilterFocus = await tabToAndReadFocusIndicator(page, ".search-field input");
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
 
@@ -154,6 +181,7 @@ for (const profile of [
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
+  const submitInputFocus = await tabToAndReadFocusIndicator(page, '.submit-form input[name="league"]');
   const adminResponse = await page.goto(`${baseUrl}/admin`, {
     waitUntil: "networkidle",
     timeout: 120_000,
@@ -185,6 +213,8 @@ for (const profile of [
     gameFilterCounts,
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
+    scheduleFilterFocus,
+    submitInputFocus,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
@@ -236,6 +266,19 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  for (const [control, focus] of Object.entries({
+    scheduleFilter: result.scheduleFilterFocus,
+    submissionInput: result.submitInputFocus,
+  })) {
+    if (
+      !focus ||
+      focus.focusVisible !== true ||
+      focus.outlineStyle !== "solid" ||
+      Number.parseFloat(focus.outlineWidth) < 2
+    ) {
+      failures.push(`${prefix}: ${control} has no visible keyboard focus indicator`);
+    }
+  }
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
