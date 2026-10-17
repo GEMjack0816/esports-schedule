@@ -9,10 +9,11 @@ export function fingerprintDatabaseTarget(databaseUrl: string | undefined): stri
     const url = new URL(databaseUrl.trim());
     if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") return null;
     const hostname = url.hostname.toLowerCase();
+    const port = url.port || "5432";
     const databaseName = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
     if (!hostname || !databaseName) return null;
     return createHash("sha256")
-      .update(`${hostname}\0${databaseName}`, "utf8")
+      .update(`${hostname}\0${port}\0${databaseName}`, "utf8")
       .digest("hex");
   } catch {
     return null;

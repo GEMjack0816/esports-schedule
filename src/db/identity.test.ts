@@ -13,12 +13,16 @@ describe("Preview database identity fingerprint", () => {
     expect(fingerprintDatabaseTarget(previewUrl)).toBe(
       fingerprintDatabaseTarget("postgres://other:credentials@ep-preview-id.us-west-2.aws.neon.tech/neondb?sslmode=verify-full"),
     );
+    expect(fingerprintDatabaseTarget(previewUrl)).toBe(
+      fingerprintDatabaseTarget("postgres://other:credentials@ep-preview-id.us-west-2.aws.neon.tech:5432/neondb"),
+    );
   });
 
   it("changes when the endpoint hostname or database name changes", () => {
     const fingerprint = fingerprintDatabaseTarget(previewUrl);
     expect(fingerprintDatabaseTarget("postgres://u:p@ep-other-id.us-west-2.aws.neon.tech/neondb")).not.toBe(fingerprint);
     expect(fingerprintDatabaseTarget("postgres://u:p@ep-preview-id.us-west-2.aws.neon.tech/otherdb")).not.toBe(fingerprint);
+    expect(fingerprintDatabaseTarget("postgres://u:p@ep-preview-id.us-west-2.aws.neon.tech:5433/neondb")).not.toBe(fingerprint);
   });
 
   it("rejects malformed, unsupported, and incomplete values without exposing them", () => {
@@ -44,6 +48,22 @@ describe("Preview database identity fingerprint", () => {
     expect(result.stdout.trim()).toBe(fingerprintDatabaseTarget(previewUrl));
     expect(result.stdout).not.toContain(hostname);
     expect(result.stderr).toBe("");
+
+    const explicitDefaultPort = spawnSync(process.execPath, [script, hostname, "neondb", "5432"], { encoding: "utf8" });
+    expect(explicitDefaultPort.status).toBe(0);
+    expect(explicitDefaultPort.stdout.trim()).toBe(result.stdout.trim());
+
+    const differentPort = spawnSync(process.execPath, [script, hostname, "neondb", "5433"], { encoding: "utf8" });
+    expect(differentPort.status).toBe(0);
+    expect(differentPort.stdout.trim()).not.toBe(result.stdout.trim());
+  });
+
+  it("rejects an invalid port without printing the supplied value", () => {
+    const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../scripts/fingerprint-preview-db-target.mjs");
+    const result = spawnSync(process.execPath, [script, "db.example", "neondb", "70000"], { encoding: "utf8" });
+    expect(result.status).toBe(2);
+    expect(result.stderr).not.toContain("70000");
+    expect(result.stdout).toBe("");
   });
 
   it("rejects a connection URL instead of accepting or echoing credentials", () => {
