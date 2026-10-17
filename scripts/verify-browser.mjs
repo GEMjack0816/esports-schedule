@@ -125,6 +125,15 @@ for (const profile of [
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+  await page.keyboard.press("Tab");
+  const skipLinkFirstTab = await page.evaluate(() => ({
+    focused: document.activeElement?.classList.contains("skip-link") ?? false,
+    focusVisible: document.activeElement?.matches(":focus-visible") ?? false,
+  }));
+  await page.keyboard.press("Enter");
+  const skipNavigationWorks = await page.evaluate(() =>
+    document.activeElement?.id === "main-content" && window.location.hash === "#main-content",
+  );
   const scheduleFilterFocus = await tabToAndReadFocusIndicator(page, ".search-field input");
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -234,6 +243,8 @@ for (const profile of [
     gameFilterCounts,
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
+    skipLinkFirstTab,
+    skipNavigationWorks,
     scheduleFilterFocus,
     submitInputFocus,
     refreshedApiUrl: apiResponse.url(),
@@ -287,6 +298,10 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (!result.skipLinkFirstTab.focused || !result.skipLinkFirstTab.focusVisible) {
+    failures.push(`${prefix}: first Tab does not reveal the skip link`);
+  }
+  if (!result.skipNavigationWorks) failures.push(`${prefix}: skip link does not focus the main content`);
   for (const [control, focus] of Object.entries({
     scheduleFilter: result.scheduleFilterFocus,
     submissionInput: result.submitInputFocus,

@@ -59,6 +59,25 @@
 
 html { scroll-behavior: smooth; }
 
+.skip-link {
+  position: fixed;
+  z-index: 1000;
+  top: 1rem;
+  left: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface-raised);
+  color: var(--foreground);
+  font-weight: 700;
+  text-decoration: none;
+  transform: translateY(calc(-100% - 2rem));
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
 body {
   min-width: 320px;
   margin: 0;
