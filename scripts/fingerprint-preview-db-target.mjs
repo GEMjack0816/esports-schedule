@@ -14,7 +14,7 @@ if (
   || hostname.includes("..")
   || !databaseName
   || databaseName.includes("\0")
-  || !/^\\d+$/.test(port)
+  || !/^\d+$/.test(port)
   || !Number.isInteger(numericPort)
   || numericPort < 1
   || numericPort > 65_535
