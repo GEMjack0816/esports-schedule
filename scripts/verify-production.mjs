@@ -1,3 +1,8 @@
+import {
+  EXPECTED_SECURITY_HEADERS,
+  getSecurityHeaderFailures,
+} from "./lib/security-response-headers.mjs";
+
 const baseUrlInput = process.argv[2];
 const expectedSha = process.argv[3] || process.env.EXPECTED_GIT_COMMIT_SHA;
 
@@ -75,6 +80,16 @@ try {
   const homeHtml = home.body;
   const versionCacheControl = versionResult.response.headers.get("cache-control");
   const healthCacheControl = healthResult.response.headers.get("cache-control");
+  for (const [pathname, response] of [
+    ["homepage", home.response],
+    ["/api/version", versionResult.response],
+    ["/api/health/data-coverage", healthResult.response],
+  ]) {
+    const failures = new Set(getSecurityHeaderFailures(response.headers));
+    for (const header of Object.keys(EXPECTED_SECURITY_HEADERS)) {
+      check(`${pathname} ${header}`, !failures.has(header));
+    }
+  }
   const allowedVersionKeys = [
     "buildTimestamp",
     "deploymentId",
