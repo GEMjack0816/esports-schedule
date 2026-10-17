@@ -6,6 +6,12 @@ const MAX_AGE_SECONDS = 15 * 60;
 const MAX_FUTURE_SKEW_SECONDS = 2 * 60;
 const MAX_RESPONSE_BYTES = 128 * 1024;
 const GAME_KEYS = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"];
+const MAX_REQUEST_ATTEMPTS = 3;
+const RETRY_DELAYS_MS = [500, 1_000];
+
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -124,20 +130,37 @@ async function readBodyWithLimit(response) {
   return new TextDecoder("utf-8", { fatal: true }).decode(all);
 }
 
-export async function checkScheduleHealth(fetchImpl = fetch, now = new Date()) {
+export async function checkScheduleHealth(fetchImpl = fetch, now = new Date(), waitImpl = wait) {
   let response;
-  try {
-    response = await fetchImpl(HEALTH_URL, {
-      headers: { accept: "application/json" },
-      cache: "no-store",
-      redirect: "error",
-      signal: AbortSignal.timeout(10_000),
-    });
-  } catch {
-    return {
-      ok: false,
-      problems: ["health endpoint request failed or timed out"],
-    };
+  for (let attempt = 0; attempt < MAX_REQUEST_ATTEMPTS; attempt += 1) {
+    try {
+      response = await fetchImpl(HEALTH_URL, {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+        redirect: "error",
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch {
+      if (attempt < RETRY_DELAYS_MS.length) {
+        await waitImpl(RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      return {
+        ok: false,
+        problems: ["health endpoint request failed or timed out"],
+      };
+    }
+
+    if (response.status < 500 || attempt === MAX_REQUEST_ATTEMPTS - 1) break;
+
+    // Release the failed response before retrying so a transient upstream
+    // error cannot hold a connection for the duration of the backoff.
+    try {
+      await response.body?.cancel();
+    } catch {
+      // The retry remains bounded even if the response body cannot be canceled.
+    }
+    await waitImpl(RETRY_DELAYS_MS[attempt]);
   }
 
   if (response.status !== 200) {
@@ -195,3 +218,4 @@ if (
     );
   }
 }
+

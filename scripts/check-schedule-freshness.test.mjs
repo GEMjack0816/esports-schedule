@@ -101,8 +101,63 @@ describe("schedule freshness monitor", () => {
       },
     });
     await expect(checkScheduleHealth(async () => response, now)).resolves.toEqual({ ok: true, problems: [] });
-    const unavailable = await checkScheduleHealth(async () => new Response("unavailable", { status: 503 }), now);
+    const unavailable = await checkScheduleHealth(
+      async () => new Response("unavailable", { status: 503 }),
+      now,
+      async () => {},
+    );
     expect(unavailable.problems).toEqual(["health endpoint returned HTTP 503"]);
+  });
+
+  it("retries a transient network failure once before accepting a healthy response", async () => {
+    let attempts = 0;
+    const delays = [];
+    const result = await checkScheduleHealth(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("sensitive transport details");
+      return new Response(JSON.stringify(healthyPayload()), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+        },
+      });
+    }, now, async (milliseconds) => delays.push(milliseconds));
+
+    expect(result).toEqual({ ok: true, problems: [] });
+    expect(attempts).toBe(2);
+    expect(delays).toEqual([500]);
+  });
+
+  it("retries bounded 5xx responses with backoff and succeeds when the endpoint recovers", async () => {
+    let attempts = 0;
+    const delays = [];
+    const result = await checkScheduleHealth(async () => {
+      attempts += 1;
+      if (attempts < 3) return new Response("temporary server error", { status: 503 });
+      return new Response(JSON.stringify(healthyPayload()), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+        },
+      });
+    }, now, async (milliseconds) => delays.push(milliseconds));
+
+    expect(result).toEqual({ ok: true, problems: [] });
+    expect(attempts).toBe(3);
+    expect(delays).toEqual([500, 1_000]);
+  });
+
+  it("does not retry client or protocol failures", async () => {
+    let attempts = 0;
+    const result = await checkScheduleHealth(async () => {
+      attempts += 1;
+      return new Response("forbidden", { status: 403 });
+    }, now, async () => {});
+
+    expect(result.problems).toEqual(["health endpoint returned HTTP 403"]);
+    expect(attempts).toBe(1);
   });
 
   it("uses only a no-store, unauthenticated GET to the public health endpoint", async () => {
@@ -201,3 +256,4 @@ describe("schedule freshness monitor", () => {
     expect(JSON.stringify(result)).not.toContain("private credential");
   });
 });
+
