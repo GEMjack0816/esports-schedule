@@ -126,10 +126,37 @@ for (const profile of [
   const syncStatusCards = await page.locator('.sync-status-card').count();
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   await page.keyboard.press("Tab");
-  const skipLinkFirstTab = await page.evaluate(() => ({
-    focused: document.activeElement?.classList.contains("skip-link") ?? false,
-    focusVisible: document.activeElement?.matches(":focus-visible") ?? false,
-  }));
+  const skipLinkFirstTab = await page.evaluate(() => {
+    const link = document.querySelector(".skip-link");
+    const focused = document.activeElement === link;
+    const focusVisible = document.activeElement?.matches(":focus-visible") ?? false;
+    const originalTheme = document.documentElement.dataset.theme;
+    const luminance = (color) => {
+      const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+      if (!channels || channels.length !== 3) return null;
+      const linear = channels.map((channel) => {
+        const normalized = channel / 255;
+        return normalized <= 0.04045
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4;
+      });
+      return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+    };
+    const contrastByTheme = {};
+    for (const theme of ["dark", "light"]) {
+      document.documentElement.dataset.theme = theme;
+      const style = getComputedStyle(link);
+      const textLuminance = luminance(style.color);
+      const backgroundLuminance = luminance(style.backgroundColor);
+      contrastByTheme[theme] = textLuminance === null || backgroundLuminance === null
+        ? null
+        : (Math.max(textLuminance, backgroundLuminance) + 0.05) /
+          (Math.min(textLuminance, backgroundLuminance) + 0.05);
+    }
+    if (originalTheme) document.documentElement.dataset.theme = originalTheme;
+    else delete document.documentElement.dataset.theme;
+    return { focused, focusVisible, contrastByTheme };
+  });
   await page.keyboard.press("Enter");
   const skipNavigation = await page.evaluate(() => {
     const main = document.querySelector("#main-content");
@@ -307,6 +334,11 @@ for (const result of results) {
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (!result.skipLinkFirstTab.focused || !result.skipLinkFirstTab.focusVisible) {
     failures.push(`${prefix}: first Tab does not reveal the skip link`);
+  }
+  for (const [theme, contrast] of Object.entries(result.skipLinkFirstTab.contrastByTheme)) {
+    if (contrast === null || contrast < 4.5) {
+      failures.push(`${prefix}: skip link text contrast is below 4.5:1 in ${theme} theme`);
+    }
   }
   if (
     !result.skipNavigation.focused ||
