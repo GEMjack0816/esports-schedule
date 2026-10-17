@@ -160,7 +160,7 @@ export async function checkScheduleHealth(fetchImpl = fetch, now = new Date()) {
   const cacheControl = response.headers.get("cache-control") ?? "";
   const cacheDirectives = cacheControl
     .split(",")
-    .map((directive) => directive.trim().toLowerCase().split("=", 1)[0]);
+    .map((directive) => directive.trim().toLowerCase());
   if (!cacheDirectives.includes("no-store")) {
     return {
       ok: false,

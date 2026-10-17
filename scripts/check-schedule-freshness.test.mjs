@@ -161,7 +161,13 @@ describe("schedule freshness monitor", () => {
   });
 
   it("rejects cacheable health responses to avoid passing on stale CDN data", async () => {
-    for (const cacheControl of ["", "public, max-age=60", "public, s-maxage=900"]) {
+    for (const cacheControl of [
+      "",
+      "public, max-age=60",
+      "public, s-maxage=900",
+      "no-store=false",
+      "private, no-store=0",
+    ]) {
       const response = await checkScheduleHealth(async () => new Response(JSON.stringify(healthyPayload()), {
         status: 200,
         headers: {
@@ -174,6 +180,17 @@ describe("schedule freshness monitor", () => {
         problems: ["health endpoint response is missing the no-store cache directive"],
       });
     }
+  });
+
+  it("accepts the exact no-store directive with surrounding whitespace and case differences", async () => {
+    const response = await checkScheduleHealth(async () => new Response(JSON.stringify(healthyPayload()), {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        "cache-control": "private,  No-Store , max-age=0",
+      },
+    }), now);
+    expect(response).toEqual({ ok: true, problems: [] });
   });
 
   it("does not echo low-level network exceptions", async () => {
