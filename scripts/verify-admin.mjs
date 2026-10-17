@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { assertVerificationScheduleMatch } from "./verify-admin-public-match.mjs";
 import { existsSync } from "node:fs";
 import { chromium } from "playwright-core";
 import {
@@ -75,6 +76,24 @@ async function submit(context, origin, input) {
     throw new Error(`public submission returned HTTP ${response.status()}`);
   }
   return response.json();
+}
+
+async function waitForPublicMatchState(context, origin, expected) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      const response = await context.request.get(`${origin}/api/matches`, {
+        headers: { "Cache-Control": "no-cache" },
+        timeout: 15_000,
+      });
+      if (response.status() !== 200) throw new Error("public schedule request failed");
+      const payload = await response.json();
+      return assertVerificationScheduleMatch(payload, expected);
+    } catch {
+      if (attempt === 9) break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+  throw new Error("public schedule did not reach the expected verification state");
 }
 
 async function cleanupRun(context, origin, runId, expectedDatabaseFingerprint) {
@@ -171,27 +190,34 @@ async function runVerification() {
     await page.getByRole("button", { name: "批准并发布" }).click();
     await page.waitForURL(/status=approved/);
 
-    let publicMatch;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      const response = await context.request.get(`${verifiedOrigin}/api/matches`, {
-        headers: { "Cache-Control": "no-cache" },
-      });
-      const payload = await response.json();
-      publicMatch = payload.matches?.find(
-        (match) => match.homeTeam?.name === approvedTeams[0] && match.awayTeam?.name === approvedTeams[1],
-      );
-      if (publicMatch) break;
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-    if (!publicMatch) throw new Error("approved match did not appear in the public schedule");
+    const publicMatch = await waitForPublicMatchState(context, verifiedOrigin, {
+      teamA: approvedTeams[0],
+      teamB: approvedTeams[1],
+      shouldExist: true,
+    });
 
     await page.goto(`${verifiedOrigin}/admin/matches`, { waitUntil: "networkidle" });
     const approvedRow = page.getByRole("row").filter({ hasText: approvedTeams[0] });
     await approvedRow.getByRole("link", { name: "编辑" }).click();
-    await page.getByLabel("赛事").fill(`${league} edited`);
+    const editedLeague = `${league} edited`;
+    await page.getByLabel("赛事").fill(editedLeague);
     await page.getByRole("button", { name: "保存并刷新公开赛程" }).click();
+    await waitForPublicMatchState(context, verifiedOrigin, {
+      matchId: publicMatch.id,
+      shouldExist: true,
+      league: editedLeague,
+    });
     await page.getByRole("button", { name: "隐藏比赛" }).click();
+    await waitForPublicMatchState(context, verifiedOrigin, {
+      matchId: publicMatch.id,
+      shouldExist: false,
+    });
     await page.getByRole("button", { name: "恢复公开" }).click();
+    await waitForPublicMatchState(context, verifiedOrigin, {
+      matchId: publicMatch.id,
+      shouldExist: true,
+      league: editedLeague,
+    });
 
     const rejectedSubmission = await submit(context, verifiedOrigin, {
       game: "honor-of-kings",
@@ -265,9 +291,9 @@ async function runVerification() {
       "public submission",
       "approve transaction",
       "public merge",
-      "edit",
-      "hide",
-      "restore",
+      "edit is visible in the public schedule",
+      "hide removes the match from the public schedule",
+      "restore republishes the same match",
       "reject without publish",
       "audit summary",
       "finally cleanup of isolated verification data",
