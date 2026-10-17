@@ -149,6 +149,23 @@ describe("schedule freshness monitor", () => {
     expect(delays).toEqual([500, 1_000]);
   });
 
+  it("stops after the bounded network retry budget and hides transport details", async () => {
+    let attempts = 0;
+    const delays = [];
+    const result = await checkScheduleHealth(async () => {
+      attempts += 1;
+      throw new Error("private host and transport details");
+    }, now, async (milliseconds) => delays.push(milliseconds));
+
+    expect(result).toEqual({
+      ok: false,
+      problems: ["health endpoint request failed or timed out"],
+    });
+    expect(attempts).toBe(3);
+    expect(delays).toEqual([500, 1_000]);
+    expect(JSON.stringify(result)).not.toContain("private host");
+  });
+
   it("does not retry client or protocol failures", async () => {
     let attempts = 0;
     const result = await checkScheduleHealth(async () => {
