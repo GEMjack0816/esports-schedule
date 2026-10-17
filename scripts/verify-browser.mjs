@@ -131,9 +131,16 @@ for (const profile of [
     focusVisible: document.activeElement?.matches(":focus-visible") ?? false,
   }));
   await page.keyboard.press("Enter");
-  const skipNavigationWorks = await page.evaluate(() =>
-    document.activeElement?.id === "main-content" && window.location.hash === "#main-content",
-  );
+  const skipNavigation = await page.evaluate(() => {
+    const main = document.querySelector("#main-content");
+    const header = document.querySelector(".site-header");
+    return {
+      focused: document.activeElement?.id === "main-content",
+      hash: window.location.hash,
+      mainTop: main?.getBoundingClientRect().top ?? null,
+      headerBottom: header?.getBoundingClientRect().bottom ?? null,
+    };
+  });
   const scheduleFilterFocus = await tabToAndReadFocusIndicator(page, ".search-field input");
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -244,7 +251,7 @@ for (const profile of [
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
     skipLinkFirstTab,
-    skipNavigationWorks,
+    skipNavigation,
     scheduleFilterFocus,
     submitInputFocus,
     refreshedApiUrl: apiResponse.url(),
@@ -301,7 +308,15 @@ for (const result of results) {
   if (!result.skipLinkFirstTab.focused || !result.skipLinkFirstTab.focusVisible) {
     failures.push(`${prefix}: first Tab does not reveal the skip link`);
   }
-  if (!result.skipNavigationWorks) failures.push(`${prefix}: skip link does not focus the main content`);
+  if (
+    !result.skipNavigation.focused ||
+    result.skipNavigation.hash !== "#main-content" ||
+    result.skipNavigation.mainTop === null ||
+    result.skipNavigation.headerBottom === null ||
+    result.skipNavigation.mainTop < result.skipNavigation.headerBottom
+  ) {
+    failures.push(`${prefix}: skip link does not reveal and focus main content below the sticky header`);
+  }
   for (const [control, focus] of Object.entries({
     scheduleFilter: result.scheduleFilterFocus,
     submissionInput: result.submitInputFocus,
