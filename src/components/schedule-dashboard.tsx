@@ -11,6 +11,7 @@ import {
   visibleMatchLimit,
   windowMatches,
 } from "@/lib/schedule/client-list-window";
+import { groupMatchesByDate } from "@/lib/schedule/grouping";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -237,16 +238,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   }, [filtered.length, visibleMatches.length]);
 
   const grouped = useMemo(() => {
-    const groups = new Map<string, EsportsMatch[]>();
-    for (const match of visibleMatches) {
-      const key = matchDateKey(match, timeZone);
-      groups.set(key, [...(groups.get(key) ?? []), match]);
-    }
-    return [...groups.entries()].sort(([a], [b]) => {
-      if (a === "unscheduled") return 1;
-      if (b === "unscheduled") return -1;
-      return range === "history" ? b.localeCompare(a) : a.localeCompare(b);
-    });
+    return groupMatchesByDate(visibleMatches, timeZone, range === "history" ? "descending" : "ascending");
   }, [range, timeZone, visibleMatches]);
 
   const liveCount = payload.matches.filter((match) => match.status === "running").length;
