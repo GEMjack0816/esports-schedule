@@ -56,6 +56,15 @@ describe("GET /api/health/freshness", () => {
     ["expired age", schedule({ coverage: { ...schedule().coverage, snapshotAgeSeconds: 901 } })],
     ["missing age", schedule({ coverage: { ...schedule().coverage, snapshotAgeSeconds: null } })],
     ["missing timestamp", schedule({ coverage: { ...schedule().coverage, sourceFetchedAt: null } })],
+    ["stale source timestamp despite a fresh reported age", schedule({ coverage: {
+      ...schedule().coverage,
+      sourceFetchedAt: new Date(Date.now() - 901_000).toISOString(),
+      snapshotAgeSeconds: 0,
+    } })],
+    ["stale successful-sync timestamp despite a fresh snapshot", schedule({ coverage: {
+      ...schedule().coverage,
+      lastSuccessfulSyncAt: new Date(Date.now() - 901_000).toISOString(),
+    } })],
     ["future source timestamp", schedule({ coverage: {
       ...schedule().coverage,
       sourceFetchedAt: new Date(Date.now() + 61_000).toISOString(),
@@ -72,6 +81,20 @@ describe("GET /api/health/freshness", () => {
     const response = await GET();
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toMatchObject({ status: "stale" });
+  });
+
+  it("accepts source and successful-sync timestamps just inside the freshness boundary", async () => {
+    const boundary = new Date(Date.now() - 899_000).toISOString();
+    getSchedule.mockResolvedValue(schedule({ coverage: {
+      ...schedule().coverage,
+      sourceFetchedAt: boundary,
+      lastSuccessfulSyncAt: boundary,
+      snapshotAgeSeconds: 899,
+    } }));
+
+    const response = await GET();
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ status: "fresh" });
   });
 
   it("reports unavailable snapshots as 503", async () => {
