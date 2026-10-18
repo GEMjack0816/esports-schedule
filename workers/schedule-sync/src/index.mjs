@@ -18,6 +18,23 @@ class SyncInvocationError extends Error {
   }
 }
 
+function retryDelayFor(response, attempt, now) {
+  if (response.status !== 429) return RETRY_DELAYS_MS[attempt];
+
+  const retryAfter = response.headers.get("retry-after")?.trim();
+  if (!retryAfter) return RETRY_DELAYS_MS[attempt];
+
+  if (/^\d+$/.test(retryAfter)) {
+    const seconds = Number(retryAfter);
+    return Number.isSafeInteger(seconds) ? seconds * 1_000 : Number.POSITIVE_INFINITY;
+  }
+
+  const retryAt = Date.parse(retryAfter);
+  return Number.isFinite(retryAt)
+    ? Math.max(0, retryAt - now)
+    : RETRY_DELAYS_MS[attempt];
+}
+
 async function readJsonBody(response) {
   const contentType = response.headers.get("content-type") ?? "";
   if (!/^application\/json(?:\s*;|$)/i.test(contentType)) {
@@ -156,7 +173,7 @@ export async function invokeScheduleSync({
       } catch {
         // Retrying is bounded even if the response stream cannot be released.
       }
-      const delay = RETRY_DELAYS_MS[attempt];
+      const delay = retryDelayFor(response, attempt, nowImpl());
       if (deadline - nowImpl() <= delay) throw new SyncInvocationError("retry_budget_exhausted");
       await waitImpl(delay);
       continue;
