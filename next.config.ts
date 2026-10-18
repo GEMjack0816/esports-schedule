@@ -19,6 +19,26 @@ const buildGitCommitRef = process.env.VERCEL_GIT_COMMIT_REF?.trim()
   || gitMetadata("branch", "--show-current");
 
 const nextConfig: NextConfig = {
+  images: {
+    // Retain successful responses for PandaScore's dedicated logo CDN through
+    // short upstream interruptions; URL paths are unique per logo revision.
+    minimumCacheTTL: 86_400,
+    // `remotePatterns` constrain the initial URL only. Do not follow an
+    // allowlisted CDN redirect to an untrusted host, and cap optimizer memory
+    // use because team logos are small assets.
+    maximumRedirects: 0,
+    maximumResponseBody: 5_000_000,
+    dangerouslyAllowLocalIP: false,
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "cdn.pandascore.co",
+        port: "",
+        pathname: "/images/team/image/**",
+        search: "",
+      },
+    ],
+  },
   env: {
     ESPORTS_BUILD_TIMESTAMP: buildTimestamp,
     ESPORTS_BUILD_GIT_COMMIT_SHA: buildGitCommitSha,

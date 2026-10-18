@@ -2,9 +2,17 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import {
+  isPandaScoreCdnLogo,
+  resolveTeamLogoSource,
+  shouldRetryTeamLogoDirectly,
+  TEAM_LOGO_DIRECT_RETRY_TIMEOUT_MS,
+  TEAM_LOGO_RETRY_DELAY_MS,
+  TEAM_LOGO_PLACEHOLDER,
+} from "@/lib/schedule/team-logo";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -94,16 +102,65 @@ function TeamRow({ team, score, winning }: {
   score: number | null;
   winning: boolean;
 }) {
+  const source = team.logo || TEAM_LOGO_PLACEHOLDER;
+  const [failedSource, setFailedSource] = useState<string | null>(null);
+  const [retryPendingSource, setRetryPendingSource] = useState<string | null>(null);
+  const [retriedSource, setRetriedSource] = useState<string | null>(null);
+  const directRetryTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const imageElement = useRef<HTMLImageElement | null>(null);
+  const retryPending = retryPendingSource === source;
+  const directRetry = retriedSource === source && isPandaScoreCdnLogo(source);
+  const logoSource = resolveTeamLogoSource(source, failedSource, retryPendingSource);
+
+  useEffect(() => {
+    if (!retryPending) return;
+    const timer = setTimeout(() => {
+      setRetriedSource(source);
+      setRetryPendingSource(null);
+    }, TEAM_LOGO_RETRY_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [retryPending, source]);
+
+  useEffect(() => {
+    if (!directRetry) return;
+    directRetryTimeout.current = setTimeout(() => {
+      directRetryTimeout.current = null;
+      const image = imageElement.current;
+      if (!image?.complete || image.naturalWidth === 0) setFailedSource(source);
+    }, TEAM_LOGO_DIRECT_RETRY_TIMEOUT_MS);
+    return () => {
+      if (directRetryTimeout.current) clearTimeout(directRetryTimeout.current);
+      directRetryTimeout.current = null;
+    };
+  }, [directRetry, source]);
+
   return (
     <div className={`team-row ${winning ? "team-winning" : ""}`}>
       <span className="team-mark" aria-hidden="true">
         <Image
-          src={team.logo || "/team-placeholder.svg"}
+          key={`${logoSource}:${directRetry ? "direct-retry" : "optimized"}`}
+          src={logoSource}
           alt=""
           width={28}
           height={28}
-          unoptimized
-          onError={(event) => { event.currentTarget.src = "/team-placeholder.svg"; }}
+          ref={imageElement}
+          unoptimized={!isPandaScoreCdnLogo(logoSource) || directRetry}
+          referrerPolicy="no-referrer"
+          onLoad={() => {
+            if (!directRetry) return;
+            if (directRetryTimeout.current) clearTimeout(directRetryTimeout.current);
+            directRetryTimeout.current = null;
+          }}
+          onError={() => {
+            if (logoSource === TEAM_LOGO_PLACEHOLDER) return;
+            if (shouldRetryTeamLogoDirectly(source, retriedSource)) {
+              setRetryPendingSource(source);
+              return;
+            }
+            if (directRetryTimeout.current) clearTimeout(directRetryTimeout.current);
+            directRetryTimeout.current = null;
+            setFailedSource(source);
+          }}
         />
         <span>{team.acronym?.slice(0, 3) || initials(team.name)}</span>
       </span>

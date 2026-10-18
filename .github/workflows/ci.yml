@@ -68,5 +68,11 @@ jobs:
       - name: Build the production bundle
         run: npm run build
 
+      - name: Install Chromium for the logo fallback browser regression
+        run: npx playwright-core install --with-deps chromium
+
+      - name: Verify bounded team logo retries in desktop and mobile viewports
+        run: npm run verify:logo-fallback
+
       - name: Scan client assets for server credentials
         run: npm run test:client-bundle
