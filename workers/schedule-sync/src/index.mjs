@@ -3,6 +3,9 @@ const MAX_BODY_BYTES = 32 * 1024;
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [500, 1_000];
 const REQUEST_TIMEOUT_MS = 300_000;
+// Cloudflare Cron invocations have a 15-minute wall-time ceiling. Keep an
+// explicit total budget below it so retries cannot be cut off by the platform.
+const INVOCATION_BUDGET_MS = 14 * 60_000;
 
 const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -111,12 +114,19 @@ export async function invokeScheduleSync({
   fetchImpl = fetch,
   secret,
   waitImpl = pause,
+  nowImpl = Date.now,
+  timeoutSignalImpl = (milliseconds) => AbortSignal.timeout(milliseconds),
 }) {
   if (typeof secret !== "string" || secret.length === 0) {
     throw new SyncInvocationError("missing_configuration");
   }
 
+  const deadline = nowImpl() + INVOCATION_BUDGET_MS;
+
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    const remainingBudget = deadline - nowImpl();
+    if (remainingBudget <= 0) throw new SyncInvocationError("retry_budget_exhausted");
+
     let response;
     try {
       response = await fetchImpl(SYNC_URL, {
@@ -127,11 +137,13 @@ export async function invokeScheduleSync({
           "cache-control": "no-store",
         },
         redirect: "error",
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: timeoutSignalImpl(Math.min(REQUEST_TIMEOUT_MS, remainingBudget)),
       });
     } catch {
       if (attempt < RETRY_DELAYS_MS.length) {
-        await waitImpl(RETRY_DELAYS_MS[attempt]);
+        const delay = RETRY_DELAYS_MS[attempt];
+        if (deadline - nowImpl() <= delay) throw new SyncInvocationError("retry_budget_exhausted");
+        await waitImpl(delay);
         continue;
       }
       throw new SyncInvocationError("network_failure");
@@ -144,7 +156,9 @@ export async function invokeScheduleSync({
       } catch {
         // Retrying is bounded even if the response stream cannot be released.
       }
-      await waitImpl(RETRY_DELAYS_MS[attempt]);
+      const delay = RETRY_DELAYS_MS[attempt];
+      if (deadline - nowImpl() <= delay) throw new SyncInvocationError("retry_budget_exhausted");
+      await waitImpl(delay);
       continue;
     }
 

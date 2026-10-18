@@ -126,6 +126,33 @@ describe("schedule sync Worker client", () => {
     expect(waits).toEqual([500, 1_000]);
   });
 
+  it("caps all retries to a total budget below the Cron invocation wall-time limit", async () => {
+    let now = 0;
+    let attempts = 0;
+    const timeoutBudgets = [];
+    const result = await invokeScheduleSync({
+      secret: syncSecret,
+      nowImpl: () => now,
+      timeoutSignalImpl: (milliseconds) => {
+        timeoutBudgets.push(milliseconds);
+        return new AbortController().signal;
+      },
+      waitImpl: async (milliseconds) => {
+        // Simulate elapsed wall time between retries without sleeping.
+        now += milliseconds === 500 ? 9 * 60_000 : 4 * 60_000;
+      },
+      fetchImpl: async () => {
+        attempts += 1;
+        return attempts < 3 ? response({}, 503) : response();
+      },
+    });
+
+    expect(result.outcome).toBe("success");
+    expect(attempts).toBe(3);
+    expect(timeoutBudgets).toEqual([300_000, 300_000, 60_000]);
+    expect(timeoutBudgets.reduce((total, timeout) => total + timeout, 0)).toBeLessThan(14 * 60_000);
+  });
+
   it("stops after three network failures without exposing transport details", async () => {
     const log = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const worker = createScheduleSyncWorker({
