@@ -50,6 +50,9 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Install Chromium for desktop and mobile browser verification
+        run: npx playwright-core install --with-deps chromium
+
       - name: Apply schema to the isolated PostgreSQL service
         run: npm run db:migrate
 
@@ -70,3 +73,21 @@ jobs:
 
       - name: Scan client assets for server credentials
         run: npm run test:client-bundle
+
+      - name: Verify built application in desktop and 390px mobile browsers
+        run: |
+          npm run start -- --hostname 127.0.0.1 > "$RUNNER_TEMP/esports-schedule-next.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3000/api/version > /dev/null; then
+              npm run verify:browser -- http://127.0.0.1:3000
+              exit $?
+            fi
+            sleep 2
+          done
+
+          cat "$RUNNER_TEMP/esports-schedule-next.log"
+          echo "Built application did not become ready for browser verification."
+          exit 1

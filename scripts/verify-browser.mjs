@@ -4,13 +4,20 @@ import { chromium } from "playwright-core";
 
 const baseUrl = process.argv[2] || "http://localhost:3000";
 const executableCandidates = [
-  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+  chromium.executablePath(),
+  ...(process.platform === "win32"
+    ? [
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    ]
+    : []),
 ];
 
 let browser;
 let launchError;
 for (const executablePath of executableCandidates) {
+  if (!executablePath) continue;
   try {
     browser = await chromium.launch({ executablePath, headless: true });
     break;
