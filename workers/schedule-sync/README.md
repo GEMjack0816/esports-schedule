@@ -6,6 +6,8 @@ The schedule is `5,20,35,50 * * * *` UTC, intentionally offset from the current 
 
 The Worker has no public HTTP route (`workers_dev` is disabled). Its only configuration is a Cron Trigger. It sends an authenticated `GET` to the existing production sync endpoint with the bearer secret in the `Authorization` header, never in the URL. Logs contain only a sanitized result summary and never the response body, request headers, or secret.
 
+Retries are bounded. A completed structured `failed` or `not-configured` response is terminal for that invocation and is not immediately resubmitted, avoiding amplification of provider throttling or database outages. Unstructured transient 5xx responses retain the bounded retry policy.
+
 ## Not deployed by this repository change
 
 Do not deploy until an operator has confirmed a Cloudflare account and can securely configure the exact existing Production `CRON_SECRET` from its authorized source. Vercel does not reveal Sensitive values. Do not retrieve, print, copy into chat, or place the value in a file. If the existing value is unavailable, stop and obtain explicit authorization for a coordinated secret update; do not rotate it as part of this Worker change.

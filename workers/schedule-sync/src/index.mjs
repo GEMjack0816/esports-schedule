@@ -127,6 +127,14 @@ function validateSyncPayload(payload, httpStatus) {
   };
 }
 
+function isCompletedSyncFailure(payload) {
+  return payload && typeof payload === "object" && !Array.isArray(payload)
+    && payload.ok === false
+    && (payload.status === "failed" || payload.status === "not-configured")
+    && typeof payload.lockAcquired === "boolean"
+    && Array.isArray(payload.errors);
+}
+
 export async function invokeScheduleSync({
   fetchImpl = fetch,
   secret,
@@ -164,6 +172,34 @@ export async function invokeScheduleSync({
         continue;
       }
       throw new SyncInvocationError("network_failure");
+    }
+
+    if (response.status === 503
+      && /^application\/json(?:\s*;|$)/i.test(response.headers.get("content-type") ?? "")) {
+      let payload;
+      try {
+        payload = await readJsonBody(response);
+      } catch (error) {
+        if (attempt === MAX_ATTEMPTS - 1) throw error;
+        const delay = retryDelayFor(response, attempt, nowImpl());
+        if (deadline - nowImpl() <= delay) throw new SyncInvocationError("retry_budget_exhausted");
+        await waitImpl(delay);
+        continue;
+      }
+
+      // The sync endpoint uses structured 503 responses for a completed
+      // failed/not-configured run. Repeating that whole run immediately can
+      // amplify provider throttling and database outages; let the next
+      // scheduled trigger retry instead.
+      if (isCompletedSyncFailure(payload)) {
+        throw new SyncInvocationError("sync_failed", response.status);
+      }
+
+      if (attempt === MAX_ATTEMPTS - 1) return validateSyncPayload(payload, response.status);
+      const delay = retryDelayFor(response, attempt, nowImpl());
+      if (deadline - nowImpl() <= delay) throw new SyncInvocationError("retry_budget_exhausted");
+      await waitImpl(delay);
+      continue;
     }
 
     if ((response.status >= 500 || response.status === 429)

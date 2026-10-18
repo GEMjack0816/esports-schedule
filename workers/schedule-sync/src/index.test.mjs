@@ -91,17 +91,48 @@ describe("schedule sync Worker client", () => {
     })).resolves.toEqual({ outcome: "skipped_busy", generation: null });
   });
 
-  it("fails closed for all-provider-failure responses and inconsistent snapshot counts", async () => {
+  it("does not immediately repeat a completed all-provider-failure sync", async () => {
+    let attempts = 0;
+    const waits = [];
     await expect(invokeScheduleSync({
       secret: syncSecret,
-      fetchImpl: async () => response({
-        ok: false,
-        status: "failed",
-        gamesSucceeded: 0,
-        gamesFailed: 5,
-        snapshotsPersisted: 0,
-      }, 503),
-    })).rejects.toMatchObject({ code: "http_failure", httpStatus: 503 });
+      waitImpl: async (milliseconds) => waits.push(milliseconds),
+      fetchImpl: async () => {
+        attempts += 1;
+        return response({
+          ok: false,
+          status: "failed",
+          gamesSucceeded: 0,
+          gamesFailed: 5,
+          snapshotsPersisted: 0,
+          errors: [{ game: "lol", code: "PANDASCORE_RATE_LIMITED", httpStatus: 429 }],
+        }, 503);
+      },
+    })).rejects.toMatchObject({ code: "sync_failed", httpStatus: 503 });
+    expect(attempts).toBe(1);
+    expect(waits).toEqual([]);
+
+    attempts = 0;
+    await expect(invokeScheduleSync({
+      secret: syncSecret,
+      waitImpl: async (milliseconds) => waits.push(milliseconds),
+      fetchImpl: async () => {
+        attempts += 1;
+        return response({
+          ok: false,
+          status: "not-configured",
+          lockAcquired: false,
+          generation: null,
+          gamesAttempted: 0,
+          gamesSucceeded: 0,
+          gamesFailed: 0,
+          snapshotsPersisted: 0,
+          errors: [{ game: null, code: "PANDASCORE_NOT_CONFIGURED", httpStatus: null }],
+        }, 503);
+      },
+    })).rejects.toMatchObject({ code: "sync_failed", httpStatus: 503 });
+    expect(attempts).toBe(1);
+    expect(waits).toEqual([]);
 
     await expect(invokeScheduleSync({
       secret: syncSecret,
