@@ -13,7 +13,12 @@ describe("production sync workflow security contract", () => {
     );
 
     expect(triggers).toEqual(["schedule", "workflow_dispatch"]);
-    expect(workflow).toMatch(/^permissions:\r?\n  contents: read\r?\n/m);
+    const permissionBlock = workflow.match(
+      /^permissions:\r?\n((?:[ \t]+[^\r\n]*\r?\n|[ \t]*\r?\n)*)/m,
+    )?.[1];
+    const permissions = [...(permissionBlock ?? "").matchAll(/^  ([A-Za-z_][A-Za-z0-9_-]*):\s*(\S+)/gm)]
+      .map((match) => [match[1], match[2]]);
+    expect(permissions).toEqual([["contents", "read"]]);
   });
 
   it("pins checkout to a full commit SHA and does not persist its token", () => {
