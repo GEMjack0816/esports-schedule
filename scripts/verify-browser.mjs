@@ -161,8 +161,11 @@ for (const profile of [
   const skipNavigation = await page.evaluate(() => {
     const main = document.querySelector("#main-content");
     const header = document.querySelector(".site-header");
+    const mainStyle = getComputedStyle(main);
     return {
       focused: document.activeElement?.id === "main-content",
+      focusVisible: document.activeElement?.matches(":focus-visible") ?? false,
+      focusIndicator: mainStyle.boxShadow,
       hash: window.location.hash,
       mainTop: main?.getBoundingClientRect().top ?? null,
       headerBottom: header?.getBoundingClientRect().bottom ?? null,
@@ -342,6 +345,8 @@ for (const result of results) {
   }
   if (
     !result.skipNavigation.focused ||
+    !result.skipNavigation.focusVisible ||
+    result.skipNavigation.focusIndicator === "none" ||
     result.skipNavigation.hash !== "#main-content" ||
     result.skipNavigation.mainTop === null ||
     result.skipNavigation.headerBottom === null ||
