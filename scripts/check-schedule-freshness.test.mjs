@@ -1,6 +1,14 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkScheduleHealth, inspectScheduleFreshness } from "./check-schedule-freshness.mjs";
+import {
+  checkScheduleHealth,
+  formatFreshnessSummary,
+  inspectScheduleFreshness,
+  summarizeScheduleHealth,
+  writeFreshnessSummary,
+} from "./check-schedule-freshness.mjs";
 
 const now = new Date("2026-10-16T12:15:00.000Z");
 const gameKeys = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"];
@@ -26,6 +34,57 @@ function healthyPayload() {
 describe("schedule freshness monitor", () => {
   it("accepts live, non-demo data with all five games inside the freshness window", () => {
     expect(inspectScheduleFreshness(healthyPayload(), now)).toEqual({ ok: true, problems: [] });
+  });
+
+  it("creates an actionable per-game summary with normalized timestamps", () => {
+    const payload = healthyPayload();
+    payload.games.cs2.syncStatus = "failed";
+    payload.games.cs2.snapshotAgeSeconds = 1_201;
+    payload.games.cs2.sourceFetchedAt = "2026-10-16T07:04:59.000-05:00";
+    const summary = summarizeScheduleHealth(payload, now);
+    const markdown = formatFreshnessSummary(inspectScheduleFreshness(payload, now), summary);
+
+    expect(summary.games).toHaveLength(5);
+    expect(summary.games.find((game) => game.game === "cs2")).toEqual({
+      game: "cs2",
+      syncStatus: "failed",
+      snapshotAgeSeconds: 1_201,
+      sourceFetchedAt: "2026-10-16T12:04:59.000Z",
+      lastSuccessfulSyncAt: "2026-10-16T12:10:00.000Z",
+    });
+    expect(markdown).toContain("**Result:** FAIL");
+    expect(markdown).toContain("| cs2 | failed | 1201 | 2026-10-16T12:04:59.000Z |");
+    expect(markdown).toContain("Last successful sync (UTC)");
+  });
+
+  it("allowlists summary fields so unexpected health data cannot inject Markdown or secrets", () => {
+    const payload = healthyPayload();
+    payload.games.lol.syncStatus = "token=private-value";
+    payload.games.lol.sourceFetchedAt = "client_secret=private-value";
+    payload.database = { targetFingerprint: "private-fingerprint" };
+    const markdown = formatFreshnessSummary(
+      inspectScheduleFreshness(payload, now),
+      summarizeScheduleHealth(payload, now),
+    );
+
+    expect(markdown).toContain("| lol | unknown | 300 |");
+    expect(markdown).not.toContain("private-value");
+    expect(markdown).not.toContain("private-fingerprint");
+    expect(markdown).not.toContain("client_secret");
+  });
+
+  it("appends the report to the GitHub Actions step-summary file when provided", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "schedule-freshness-summary-"));
+    const summaryPath = join(directory, "step-summary.md");
+    const report = formatFreshnessSummary({ ok: false, problems: ["schedule is marked stale"] });
+    try {
+      await expect(writeFreshnessSummary(report, summaryPath)).resolves.toBe(true);
+      expect(readFileSync(summaryPath, "utf8")).toBe(report);
+      await expect(writeFreshnessSummary("\nSecond report\n", summaryPath)).resolves.toBe(true);
+      expect(readFileSync(summaryPath, "utf8")).toBe(`${report}\nSecond report\n`);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("fails when the last successful snapshot is stale even if other fields look fresh", () => {
@@ -279,3 +338,4 @@ describe("schedule freshness monitor", () => {
     expect(JSON.stringify(result)).not.toContain("private credential");
   });
 });
+
