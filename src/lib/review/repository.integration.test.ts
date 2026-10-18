@@ -699,6 +699,79 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect(status.pendingRevisions).toBe(1);
   });
 
+  it("limits delivered outbox cleanup to one bounded batch and preserves newer pending rows", async () => {
+    const historicalEventIds = Array.from({ length: 150 }, () => randomUUID());
+    const currentEventId = randomUUID();
+    const newerPendingEventId = randomUUID();
+    const testEventIds = [...historicalEventIds, currentEventId, newerPendingEventId];
+
+    try {
+      await cleanup`
+        insert into manual_match_cache_outbox (event_id, created_at, delivered_at, attempt_count)
+        select event_id, now() - interval '1 day', now() - interval '1 day', 1
+        from unnest(${historicalEventIds}::uuid[]) as input(event_id)
+      `;
+      const [current] = await cleanup`
+        insert into manual_match_cache_outbox (event_id)
+        values (${currentEventId}::uuid)
+        returning revision
+      `;
+      const [newerPending] = await cleanup`
+        insert into manual_match_cache_outbox (event_id)
+        values (${newerPendingEventId}::uuid)
+        returning revision
+      `;
+      // Normalize any pending rows from earlier integration cases so the
+      // delivered-row count measures only bounded cleanup, not acknowledgments.
+      await cleanup`
+        update manual_match_cache_outbox
+        set delivered_at = now()
+        where revision < ${Number(current.revision)} and delivered_at is null
+      `;
+      const [beforeCleanup] = await cleanup`
+        select count(*)::int as count
+        from manual_match_cache_outbox
+        where revision < ${Number(current.revision)} and delivered_at is not null
+      `;
+      expect(beforeCleanup.count).toBeGreaterThan(100);
+
+      await repository.markManualMatchCacheDelivered(Number(current.revision));
+
+      const [afterCleanup] = await cleanup`
+        select count(*)::int as count
+        from manual_match_cache_outbox
+        where revision < ${Number(current.revision)} and delivered_at is not null
+      `;
+      const [historical] = await cleanup`
+        select count(*)::int as count
+        from manual_match_cache_outbox
+        where event_id = any(${historicalEventIds}::uuid[])
+          and delivered_at is not null
+      `;
+      const [currentDelivery] = await cleanup`
+        select delivered_at
+        from manual_match_cache_outbox
+        where event_id = ${currentEventId}::uuid
+      `;
+      const [pendingDelivery] = await cleanup`
+        select delivered_at, revision
+        from manual_match_cache_outbox
+        where event_id = ${newerPendingEventId}::uuid
+      `;
+
+      expect(beforeCleanup.count - afterCleanup.count).toBe(100);
+      // Even if older integration-test deliveries precede these rows, one
+      // cleanup attempt cannot remove more than its fixed 100-row batch.
+      expect(historical.count).toBeGreaterThanOrEqual(50);
+      expect(currentDelivery.delivered_at).toBeInstanceOf(Date);
+      expect(pendingDelivery.delivered_at).toBeNull();
+      expect(Number(pendingDelivery.revision)).toBeGreaterThan(Number(current.revision));
+      expect(Number(newerPending.revision)).toBe(Number(pendingDelivery.revision));
+    } finally {
+      await cleanup`delete from manual_match_cache_outbox where event_id = any(${testEventIds}::uuid[])`;
+    }
+  });
+
   it("makes manual match creation retries idempotent without allocating another revision", async () => {
     const input = submission(`idempotent-create-${randomUUID()}`);
     const operationKey = randomUUID();
