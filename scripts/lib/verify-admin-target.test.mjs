@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { assertIsolatedPreviewTarget, parseAllowedPreviewHosts } from "./verify-admin-target.mjs";
+import {
+  assertIsolatedPreviewTarget,
+  parseAllowedPreviewHosts,
+  parsePreviewBaseUrl,
+} from "./verify-admin-target.mjs";
 
 const version = {
   service: "esports-schedule",
@@ -11,6 +15,10 @@ const version = {
 };
 
 it("accepts only an explicitly allowlisted Preview at the expected ref and SHA", () => {
+  expect(parsePreviewBaseUrl(
+    "https://preview.example.vercel.app",
+    parseAllowedPreviewHosts("preview.example.vercel.app"),
+  ).origin).toBe("https://preview.example.vercel.app");
   expect(() => assertIsolatedPreviewTarget({
     baseUrl: "https://preview.example.vercel.app",
     expectedSha: "a".repeat(40),
@@ -47,4 +55,16 @@ describe.each([
 it("rejects empty and wildcard host allowlists", () => {
   expect(() => parseAllowedPreviewHosts("")).toThrow();
   expect(() => parseAllowedPreviewHosts("*.vercel.app")).toThrow();
+  expect(() => parseAllowedPreviewHosts("esports-schedule-two.vercel.app")).toThrow();
+});
+
+it.each([
+  ["non-allowlisted host", "https://evil.vercel.app", "preview.example.vercel.app"],
+  ["Production host", "https://esports-schedule-two.vercel.app", "esports-schedule-two.vercel.app"],
+  ["non-HTTPS target", "http://preview.example.vercel.app", "preview.example.vercel.app"],
+  ["nonstandard port", "https://preview.example.vercel.app:8443", "preview.example.vercel.app"],
+  ["target path", "https://preview.example.vercel.app/admin", "preview.example.vercel.app"],
+])("rejects %s during preflight before any authenticated request", (_label, baseUrl, allowlist) => {
+  const allowedHosts = new Set([allowlist]);
+  expect(() => parsePreviewBaseUrl(baseUrl, allowedHosts)).toThrow();
 });

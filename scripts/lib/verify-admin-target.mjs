@@ -1,3 +1,5 @@
+const PRODUCTION_HOST = "esports-schedule-two.vercel.app";
+
 export function parseAllowedPreviewHosts(value) {
   const hosts = new Set(
     (value ?? "")
@@ -12,8 +14,40 @@ export function parseAllowedPreviewHosts(value) {
     if (host.includes("*") || host.includes(":") || host.includes("/") || host.includes("@")) {
       throw new Error("Preview host allowlist entries must be exact hostnames without wildcards.");
     }
+    if (host === PRODUCTION_HOST) {
+      throw new Error("Production hostname cannot be included in the Preview allowlist.");
+    }
   }
   return hosts;
+}
+
+export function parsePreviewBaseUrl(baseUrl, allowedHosts) {
+  let target;
+  try {
+    target = new URL(baseUrl);
+  } catch {
+    throw new Error("Target must be a valid HTTPS Preview origin.");
+  }
+  const host = target.hostname.toLowerCase();
+
+  if (
+    target.protocol !== "https:"
+    || target.username
+    || target.password
+    || target.port
+    || target.pathname !== "/"
+    || target.search
+    || target.hash
+  ) {
+    throw new Error("Target must be an HTTPS origin without credentials, path, query, or hash.");
+  }
+  if (host === PRODUCTION_HOST) {
+    throw new Error("verify:admin refuses to contact the Production hostname.");
+  }
+  if (!allowedHosts.has(host)) {
+    throw new Error("Target host is not in ADMIN_VERIFY_ALLOWED_PREVIEW_HOSTS.");
+  }
+  return target;
 }
 
 export function assertIsolatedPreviewTarget({
@@ -24,22 +58,7 @@ export function assertIsolatedPreviewTarget({
   allowedHosts,
   version,
 }) {
-  const target = new URL(baseUrl);
-  const host = target.hostname.toLowerCase();
-
-  if (
-    target.protocol !== "https:"
-    || target.username
-    || target.password
-    || target.pathname !== "/"
-    || target.search
-    || target.hash
-  ) {
-    throw new Error("Target must be an HTTPS origin without credentials, path, query, or hash.");
-  }
-  if (!allowedHosts.has(host)) {
-    throw new Error("Target host is not in ADMIN_VERIFY_ALLOWED_PREVIEW_HOSTS.");
-  }
+  parsePreviewBaseUrl(baseUrl, allowedHosts);
   if (version?.service !== "esports-schedule" || version?.environment !== "preview") {
     throw new Error("Target did not identify itself as an esports-schedule Preview deployment.");
   }
@@ -55,8 +74,5 @@ export function assertIsolatedPreviewTarget({
     || !version.deploymentUrl
   ) {
     throw new Error("Target deployment metadata is incomplete.");
-  }
-  if (host === "esports-schedule-two.vercel.app") {
-    throw new Error("verify:admin refuses to mutate Production.");
   }
 }

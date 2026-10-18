@@ -1,6 +1,10 @@
 import { existsSync } from "node:fs";
 import { chromium } from "playwright-core";
-import { assertIsolatedPreviewTarget, parseAllowedPreviewHosts } from "./lib/verify-admin-target.mjs";
+import {
+  assertIsolatedPreviewTarget,
+  parseAllowedPreviewHosts,
+  parsePreviewBaseUrl,
+} from "./lib/verify-admin-target.mjs";
 
 const baseUrl = process.argv[2];
 const expectedSha = process.argv[3] ?? process.env.EXPECTED_GIT_SHA;
@@ -11,6 +15,9 @@ const allowedHosts = parseAllowedPreviewHosts(process.env.ADMIN_VERIFY_ALLOWED_P
 if (!baseUrl || !expectedSha || !expectedRef || !expectedDeploymentId) {
   throw new Error("Usage: npm run verify:admin -- <isolated-preview-url> <expected-sha> <expected-ref> <expected-deployment-id>");
 }
+// Validate the exact destination before loading authenticated storage state or
+// making any request; otherwise the initial version check could leak cookies.
+const targetUrl = parsePreviewBaseUrl(baseUrl, allowedHosts);
 if (process.env.ALLOW_ISOLATED_ADMIN_VERIFY !== "1") {
   throw new Error("Set ALLOW_ISOLATED_ADMIN_VERIFY=1 only for an isolated Preview database.");
 }
@@ -43,11 +50,12 @@ const startTime = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 let version;
 
 function endpoint(pathname) {
-  return new URL(pathname, baseUrl).toString();
+  return new URL(pathname, targetUrl).toString();
 }
 
 async function submit(teams) {
   const response = await context.request.post(endpoint("/api/submissions"), {
+    maxRedirects: 0,
     data: {
       game: "honor-of-kings",
       league,
@@ -70,6 +78,7 @@ let passed = false;
 try {
 const versionResponse = await context.request.get(endpoint("/api/version"), {
   headers: { "Cache-Control": "no-cache" },
+  maxRedirects: 0,
 });
 if (!versionResponse.ok()) {
   throw new Error(`Preview identity endpoint returned HTTP ${versionResponse.status()}.`);
@@ -92,7 +101,7 @@ const adminUrl = new URL(page.url());
 const adminText = await page.locator("body").innerText();
 if (
   adminResponse?.status() !== 200
-  || adminUrl.origin !== new URL(baseUrl).origin
+  || adminUrl.origin !== targetUrl.origin
   || adminUrl.pathname !== "/admin"
   || !adminText.includes("审核概览")
 ) {
@@ -111,6 +120,7 @@ await page.waitForURL(/status=approved/);
 for (let attempt = 0; attempt < 10; attempt += 1) {
   const response = await context.request.get(endpoint("/api/matches"), {
     headers: { "Cache-Control": "no-cache" },
+    maxRedirects: 0,
   });
   const payload = await response.json();
   publicMatch = payload.matches?.find(
@@ -136,7 +146,9 @@ await page.getByLabel("驳回原因").fill("Automated isolated Preview rejection
 await page.getByRole("button", { name: "驳回" }).click();
 await page.waitForURL(/status=rejected/);
 
-const rejectedPayload = await (await context.request.get(endpoint("/api/matches"))).json();
+const rejectedPayload = await (await context.request.get(endpoint("/api/matches"), {
+  maxRedirects: 0,
+})).json();
 if (rejectedPayload.matches?.some(
   (match) => match.homeTeam?.name === rejectedTeams[0] || match.awayTeam?.name === rejectedTeams[1],
 )) {
@@ -152,7 +164,8 @@ passed = true;
   try {
     if (createdSubmissionIds.length > 0) {
       const cleanupResponse = await context.request.post(endpoint("/api/admin/verification-cleanup"), {
-        headers: { Origin: new URL(baseUrl).origin },
+        maxRedirects: 0,
+        headers: { Origin: targetUrl.origin },
         data: {
           submissionIds: createdSubmissionIds,
           league,
