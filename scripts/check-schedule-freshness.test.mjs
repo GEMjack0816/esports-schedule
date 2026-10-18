@@ -208,6 +208,44 @@ describe("schedule freshness monitor", () => {
     expect(delays).toEqual([500, 1_000]);
   });
 
+  it("retries a transient 5xx without waiting for a stalled body cancellation", async () => {
+    let attempts = 0;
+    let cancellationStarted = false;
+    const delays = [];
+    const pendingCheck = checkScheduleHealth(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        const body = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("temporary failure"));
+          },
+          cancel() {
+            cancellationStarted = true;
+            return new Promise(() => {});
+          },
+        });
+        return new Response(body, {
+          status: 503,
+          headers: { "content-type": "text/plain" },
+        });
+      }
+      return new Response(JSON.stringify(healthyPayload()), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+        },
+      });
+    }, now, async (milliseconds) => delays.push(milliseconds));
+    const timeout = new Promise((resolve) => setTimeout(() => resolve(null), 100));
+    const result = await Promise.race([pendingCheck, timeout]);
+
+    expect(result).toEqual({ ok: true, problems: [] });
+    expect(cancellationStarted).toBe(true);
+    expect(attempts).toBe(2);
+    expect(delays).toEqual([500]);
+  });
+
   it("stops after the bounded network retry budget and hides transport details", async () => {
     let attempts = 0;
     const delays = [];

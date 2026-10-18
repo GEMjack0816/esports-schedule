@@ -261,12 +261,13 @@ export async function checkScheduleHealth(
 
     if (response.status < 500 || attempt === MAX_REQUEST_ATTEMPTS - 1) break;
 
-    // Release the failed response before retrying so a transient upstream
-    // error cannot hold a connection for the duration of the backoff.
+    // Release the failed response best-effort. Do not await cancellation:
+    // some response streams can leave that promise pending indefinitely.
     try {
-      await response.body?.cancel();
+      const cancellation = response.body?.cancel();
+      void cancellation?.catch(() => {});
     } catch {
-      // The retry remains bounded even if the response body cannot be canceled.
+      // Preserve bounded retry if the body source throws during cancellation.
     }
     await waitImpl(RETRY_DELAYS_MS[attempt]);
   }
