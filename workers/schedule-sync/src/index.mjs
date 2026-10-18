@@ -19,7 +19,9 @@ class SyncInvocationError extends Error {
 }
 
 function retryDelayFor(response, attempt, now) {
-  if (response.status !== 429) return RETRY_DELAYS_MS[attempt];
+  // 429 rate limits and 503 service-unavailable responses may both ask the
+  // client to wait; respect that signal before applying the bounded fallback.
+  if (response.status !== 429 && response.status !== 503) return RETRY_DELAYS_MS[attempt];
 
   const retryAfter = response.headers.get("retry-after")?.trim();
   if (!retryAfter) return RETRY_DELAYS_MS[attempt];

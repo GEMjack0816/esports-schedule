@@ -157,33 +157,37 @@ describe("schedule sync Worker client", () => {
     expect(waits).toEqual([500, 1_000]);
   });
 
-  it("honors Retry-After seconds and HTTP dates for rate-limited responses", async () => {
-    for (const retryAfter of ["12", new Date(12_000).toUTCString()]) {
-      const waits = [];
-      let attempts = 0;
-      await expect(invokeScheduleSync({
-        secret: syncSecret,
-        nowImpl: () => 0,
-        waitImpl: async (milliseconds) => waits.push(milliseconds),
-        fetchImpl: async () => {
-          attempts += 1;
-          return attempts === 1 ? response({}, 429, { "retry-after": retryAfter }) : response();
-        },
-      })).resolves.toMatchObject({ outcome: "success" });
+  it("honors Retry-After seconds and HTTP dates for 429 and transient 503 responses", async () => {
+    for (const status of [429, 503]) {
+      for (const retryAfter of ["12", new Date(12_000).toUTCString()]) {
+        const waits = [];
+        let attempts = 0;
+        await expect(invokeScheduleSync({
+          secret: syncSecret,
+          nowImpl: () => 0,
+          waitImpl: async (milliseconds) => waits.push(milliseconds),
+          fetchImpl: async () => {
+            attempts += 1;
+            return attempts === 1 ? response({}, status, { "retry-after": retryAfter }) : response();
+          },
+        })).resolves.toMatchObject({ outcome: "success" });
 
-      expect(attempts).toBe(2);
-      expect(waits).toEqual([12_000]);
+        expect(attempts).toBe(2);
+        expect(waits).toEqual([12_000]);
+      }
     }
   });
 
   it("does not retry before an upstream Retry-After that exceeds the total budget", async () => {
-    const fetchImpl = vi.fn(async () => response({}, 429, { "retry-after": "900" }));
-    const waitImpl = vi.fn();
-    await expect(invokeScheduleSync({ secret: syncSecret, fetchImpl, waitImpl })).rejects.toMatchObject({
-      code: "retry_budget_exhausted",
-    });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(waitImpl).not.toHaveBeenCalled();
+    for (const status of [429, 503]) {
+      const fetchImpl = vi.fn(async () => response({}, status, { "retry-after": "900" }));
+      const waitImpl = vi.fn();
+      await expect(invokeScheduleSync({ secret: syncSecret, fetchImpl, waitImpl })).rejects.toMatchObject({
+        code: "retry_budget_exhausted",
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(waitImpl).not.toHaveBeenCalled();
+    }
   });
 
   it("caps all retries to a total budget below the Cron invocation wall-time limit", async () => {
