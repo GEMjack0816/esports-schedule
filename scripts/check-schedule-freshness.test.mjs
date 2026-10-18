@@ -268,7 +268,19 @@ describe("schedule freshness monitor", () => {
     expect(workflow).toMatch(/cron: "12,27,42,57 \* \* \* \*"/);
     expect(workflow).toMatch(/workflow_dispatch:/);
     expect(workflow).toMatch(/if: github\.ref == 'refs\/heads\/main'/);
-    expect(workflow).toMatch(/permissions:\s*\n\s*contents: read/);
+    const triggerBlock = workflow.match(
+      /^on:\r?\n((?:[ \t]+[^\r\n]*\r?\n|[ \t]*\r?\n)*)/m,
+    )?.[1];
+    const triggers = [...(triggerBlock ?? "").matchAll(/^  ([A-Za-z_][A-Za-z0-9_-]*):/gm)]
+      .map((match) => match[1]);
+    expect(triggers).toEqual(["schedule", "workflow_dispatch"]);
+
+    const permissionBlock = workflow.match(
+      /^permissions:\r?\n((?:[ \t]+[^\r\n]*\r?\n|[ \t]*\r?\n)*)/m,
+    )?.[1];
+    const permissions = [...(permissionBlock ?? "").matchAll(/^  ([A-Za-z_][A-Za-z0-9_-]*):\s*(\S+)/gm)]
+      .map((match) => [match[1], match[2]]);
+    expect(permissions).toEqual([["contents", "read"]]);
     expect(workflow).not.toMatch(/^\s*(?:push|pull_request):/m);
     expect(workflow).not.toContain("secrets.");
     expect(workflow).not.toContain("/api/cron/sync");
@@ -338,4 +350,5 @@ describe("schedule freshness monitor", () => {
     expect(JSON.stringify(result)).not.toContain("private credential");
   });
 });
+
 
