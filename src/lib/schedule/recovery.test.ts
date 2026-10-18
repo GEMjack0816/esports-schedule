@@ -5,6 +5,7 @@ import {
   deriveGameCoverage,
   persistPandaScoreSyncBatch,
   recoverScheduleParts,
+  stateAfterFailure,
 } from "./index";
 import type { PandaGameSnapshot, PandaScoreSyncBatch } from "./pandascore";
 import type { EsportsMatch, GameCoverage, PandaGameKey } from "./types";
@@ -190,6 +191,32 @@ describe("persistent schedule recovery", () => {
     expect(payload.mode).toBe("live");
     expect(payload.providers.pandascore).toBe("not-configured");
     expect(payload.coverage.totals.finalPandaScore).toBe(5);
+  });
+
+  it("marks the full schedule stale when one game fails despite a fresh aggregate snapshot time", async () => {
+    const fetchedAt = "2026-08-30T00:04:00.000Z";
+    const snapshots = Object.fromEntries(pandaGameKeys.map((game) => [game, snapshot(game, fetchedAt)]));
+    const states = Object.fromEntries(pandaGameKeys.map((game) => [game, state(game, fetchedAt)]));
+    states.lol = stateAfterFailure(
+      "lol",
+      states.lol,
+      snapshots.lol,
+      { code: "UPSTREAM", status: 503 },
+      new Date("2026-08-30T00:04:30.000Z"),
+    );
+
+    const payload = await buildScheduleFromParts({
+      snapshots,
+      states,
+      snapshotSources: {},
+      refreshInProgress: false,
+    }, "configured-token", new Date("2026-08-30T00:05:00.000Z"));
+
+    expect(payload.coverage.snapshotAgeSeconds).toBe(60);
+    expect(payload.coverage.games.lol.syncStatus).toBe("failed");
+    expect(payload.coverage.games.valorant.syncStatus).toBe("normal");
+    expect(payload.stale).toBe(true);
+    expect(payload.providers.pandascore).toBe("stale-cache");
   });
 });
 
