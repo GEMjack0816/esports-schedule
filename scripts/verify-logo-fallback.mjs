@@ -135,8 +135,8 @@ try {
     await page.getByRole("tab", { name: /全部收录/ }).click();
     await page.locator(".match-card").first().waitFor();
 
-    const logoImage = (index) => page.locator(".team-mark img").nth(index);
-    await logoImage(0).scrollIntoViewIfNeeded();
+    const logoMark = (index) => page.locator(".team-mark").nth(index);
+    await logoMark(0).scrollIntoViewIfNeeded();
     await page.waitForFunction((url) => {
       const image = document.querySelector(".team-mark img");
       return image?.currentSrc === url && image.complete && image.naturalWidth > 0;
@@ -144,7 +144,7 @@ try {
     assert.equal(requestCounts.get(`optimized:${transientLogo}`), 1);
     assert.equal(requestCounts.get(`direct:${transientLogo}`), 1);
 
-    await logoImage(1).scrollIntoViewIfNeeded();
+    await logoMark(1).scrollIntoViewIfNeeded();
     await page.waitForFunction(() => {
       const image = document.querySelectorAll(".team-mark img")[1];
       if (!image?.complete || !image.currentSrc) return false;
@@ -153,7 +153,7 @@ try {
     assert.equal(requestCounts.get(`optimized:${persistentLogo}`), 1);
     assert.equal(requestCounts.get(`direct:${persistentLogo}`), 1, "a failed direct retry must not loop");
 
-    await logoImage(2).scrollIntoViewIfNeeded();
+    await logoMark(2).scrollIntoViewIfNeeded();
     try {
       await page.waitForFunction(() => {
         const image = document.querySelectorAll(".team-mark img")[2];
