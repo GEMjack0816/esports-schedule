@@ -48,6 +48,10 @@ describe("GET /api/health/freshness", () => {
 
   it.each([
     ["stale snapshot", schedule({ stale: true })],
+    ["partial game sync failure with a fresh aggregate timestamp", schedule({
+      stale: true,
+      providers: { pandascore: "stale-cache" },
+    })],
     ["expired age", schedule({ coverage: { ...schedule().coverage, snapshotAgeSeconds: 901 } })],
     ["missing age", schedule({ coverage: { ...schedule().coverage, snapshotAgeSeconds: null } })],
     ["missing timestamp", schedule({ coverage: { ...schedule().coverage, sourceFetchedAt: null } })],
