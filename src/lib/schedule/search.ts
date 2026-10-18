@@ -11,15 +11,20 @@ export function normalizeScheduleSearchText(value: string): string {
 }
 
 export function scheduleSearchMatches(query: string, values: readonly string[]): boolean {
-  return scheduleSearchMatchesNormalized(normalizeScheduleSearchText(query), values);
+  return matchesNormalizedScheduleSearchText(
+    normalizeScheduleSearchText(query),
+    normalizeScheduleSearchValues(values),
+  );
 }
 
-export function scheduleSearchMatchesNormalized(
+export function normalizeScheduleSearchValues(values: readonly string[]): string {
+  return normalizeScheduleSearchText(values.join(" "));
+}
+
+export function matchesNormalizedScheduleSearchText(
   normalizedQuery: string,
-  values: readonly string[],
+  normalizedSearchText: string,
 ): boolean {
   if (!normalizedQuery) return true;
-
-  const normalizedValues = normalizeScheduleSearchText(values.join(" "));
-  return normalizedValues.includes(normalizedQuery);
+  return normalizedSearchText.includes(normalizedQuery);
 }

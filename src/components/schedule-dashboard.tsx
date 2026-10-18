@@ -4,7 +4,11 @@ import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
-import { normalizeScheduleSearchText, scheduleSearchMatchesNormalized } from "@/lib/schedule/search";
+import {
+  matchesNormalizedScheduleSearchText,
+  normalizeScheduleSearchText,
+  normalizeScheduleSearchValues,
+} from "@/lib/schedule/search";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -188,6 +192,20 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     [payload.matches],
   );
 
+  const normalizedSearchIndex = useMemo(
+    () => new Map(payload.matches.map((match) => [
+      match,
+      normalizeScheduleSearchValues([
+        match.homeTeam.name,
+        match.awayTeam.name,
+        match.league,
+        match.tournament || "",
+        match.stage || "",
+      ]),
+    ])),
+    [payload.matches],
+  );
+
   const filtered = useMemo(() => {
     const normalizedQuery = normalizeScheduleSearchText(query);
     return payload.matches.filter((match) => {
@@ -207,15 +225,12 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
         && (game === "all" || match.game === game)
         && (league === "all" || match.league === league)
         && (status === "all" || match.status === status)
-        && scheduleSearchMatchesNormalized(normalizedQuery, [
-          match.homeTeam.name,
-          match.awayTeam.name,
-          match.league,
-          match.tournament || "",
-          match.stage || "",
-        ]);
+        && matchesNormalizedScheduleSearchText(
+          normalizedQuery,
+          normalizedSearchIndex.get(match) ?? "",
+        );
     });
-  }, [game, league, payload.matches, query, range, selectedDate, sevenDaysOut, status, timeZone, today, tomorrow]);
+  }, [game, league, normalizedSearchIndex, payload.matches, query, range, selectedDate, sevenDaysOut, status, timeZone, today, tomorrow]);
 
   const grouped = useMemo(() => {
     const groups = new Map<string, EsportsMatch[]>();

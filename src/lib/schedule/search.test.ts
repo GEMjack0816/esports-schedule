@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { normalizeScheduleSearchText, scheduleSearchMatches } from "./search";
+import {
+  matchesNormalizedScheduleSearchText,
+  normalizeScheduleSearchText,
+  normalizeScheduleSearchValues,
+  scheduleSearchMatches,
+} from "./search";
 
 describe("schedule search normalization", () => {
   it("uses locale-independent casing for Turkish I variants", () => {
@@ -20,5 +25,15 @@ describe("schedule search normalization", () => {
 
   it("treats an empty query as a match", () => {
     expect(scheduleSearchMatches("   ", ["Any match"])).toBe(true);
+  });
+
+  it("matches a pre-normalized search index without re-folding candidate text", () => {
+    const indexedMatch = normalizeScheduleSearchValues([
+      "São Paulo Esports",
+      "İstanbul Wildcats",
+      "League 1",
+    ]);
+    expect(matchesNormalizedScheduleSearchText("sao paulo", indexedMatch)).toBe(true);
+    expect(matchesNormalizedScheduleSearchText("istanbul", indexedMatch)).toBe(true);
   });
 });
