@@ -2,6 +2,7 @@ import { getSchedule } from "@/lib/schedule";
 import { getPublicVersionSummary } from "@/lib/version";
 import { getDatabaseHealth } from "@/lib/review/public-matches";
 import { getPreviewDatabaseTargetFingerprint } from "@/db/identity";
+import { requireAdminApi } from "@/lib/auth/admin-page";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -11,9 +12,13 @@ export async function GET() {
     getSchedule({ cachedOnly: true }),
     getDatabaseHealth(),
   ]);
-  const databaseHealth = process.env.VERCEL_ENV === "preview"
-    ? { ...database, targetFingerprint: getPreviewDatabaseTargetFingerprint() }
-    : database;
+  let databaseHealth: typeof database | (typeof database & { targetFingerprint: string | null }) = database;
+  if (process.env.VERCEL_ENV === "preview") {
+    const admin = await requireAdminApi();
+    if (admin.ok) {
+      databaseHealth = { ...database, targetFingerprint: getPreviewDatabaseTargetFingerprint() };
+    }
+  }
 
   return Response.json({
     demoMode: schedule.demoMode,
