@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   assertIsolatedPreviewTarget,
   parseAllowedPreviewHosts,
@@ -67,4 +69,29 @@ it.each([
 ])("rejects %s during preflight before any authenticated request", (_label, baseUrl, allowlist) => {
   const allowedHosts = new Set([allowlist]);
   expect(() => parsePreviewBaseUrl(baseUrl, allowedHosts)).toThrow();
+});
+
+it("rejects an unallowlisted target before the verifier checks authenticated browser state", () => {
+  const verifierPath = fileURLToPath(new URL("../verify-admin.mjs", import.meta.url));
+  const result = spawnSync(process.execPath, [
+    verifierPath,
+    "https://not-allowlisted.example",
+    "a".repeat(40),
+    "fix/isolated-preview",
+    "dpl_preview123",
+  ], {
+    encoding: "utf8",
+    env: {
+      PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
+      WINDIR: process.env.WINDIR,
+      ADMIN_VERIFY_ALLOWED_PREVIEW_HOSTS: "preview.example.vercel.app",
+      ALLOW_ISOLATED_ADMIN_VERIFY: "1",
+      ADMIN_STORAGE_STATE: "C:\\nonexistent\\must-not-be-read.json",
+    },
+  });
+
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain("Target host is not in ADMIN_VERIFY_ALLOWED_PREVIEW_HOSTS.");
+  expect(result.stderr).not.toContain("ADMIN_STORAGE_STATE must point to an authenticated");
 });
