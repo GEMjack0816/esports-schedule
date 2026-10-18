@@ -31,6 +31,15 @@ function cancelReaderWithoutBlocking(reader) {
   }
 }
 
+function cancelResponseBodyWithoutBlocking(response) {
+  try {
+    const cancellation = response.body?.cancel();
+    void cancellation?.catch(() => {});
+  } catch {
+    // Response cleanup is best-effort and must not hold up a bounded retry.
+  }
+}
+
 function retryDelayFor(response, attempt, now) {
   // 429 rate limits and 503 service-unavailable responses may both ask the
   // client to wait; respect that signal before applying the bounded fallback.
@@ -225,11 +234,7 @@ export async function invokeScheduleSync({
 
     if ((response.status >= 500 || response.status === 429)
       && attempt < RETRY_DELAYS_MS.length) {
-      try {
-        await response.body?.cancel();
-      } catch {
-        // Retrying is bounded even if the response stream cannot be released.
-      }
+      cancelResponseBodyWithoutBlocking(response);
       const delay = retryDelayFor(response, attempt, nowImpl());
       if (deadline - nowImpl() <= delay) throw new SyncInvocationError("retry_budget_exhausted");
       await waitImpl(delay);

@@ -157,6 +157,32 @@ describe("schedule sync Worker client", () => {
     expect(waits).toEqual([500, 1_000]);
   });
 
+  it("retries a transient non-JSON response when body cancellation never settles", async () => {
+    const cancel = vi.fn(() => new Promise(() => {}));
+    let attempts = 0;
+    const result = await Promise.race([
+      invokeScheduleSync({
+        secret: syncSecret,
+        waitImpl: async () => {},
+        fetchImpl: async () => {
+          attempts += 1;
+          if (attempts > 1) return response();
+          return {
+            status: 503,
+            headers: new Headers({ "content-type": "text/plain" }),
+            body: { cancel },
+          };
+        },
+      }).then((value) => ({ kind: "result", value })),
+      new Promise((resolve) => setTimeout(() => resolve({ kind: "timeout" }), 100)),
+    ]);
+
+    expect(result.kind).toBe("result");
+    expect(result.value).toMatchObject({ outcome: "success", generation: 12 });
+    expect(attempts).toBe(2);
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("honors Retry-After seconds and HTTP dates for 429 and transient 503 responses", async () => {
     for (const status of [429, 503]) {
       for (const retryAfter of ["12", new Date(12_000).toUTCString()]) {
