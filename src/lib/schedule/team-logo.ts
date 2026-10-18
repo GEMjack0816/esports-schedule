@@ -2,6 +2,7 @@ const PANDASCORE_CDN_HOST = "cdn.pandascore.co";
 const PANDASCORE_TEAM_IMAGE_PATH = "/images/team/image/";
 export const TEAM_LOGO_PLACEHOLDER = "/team-placeholder.svg";
 export const TEAM_LOGO_RETRY_DELAY_MS = 800;
+export const TEAM_LOGO_DIRECT_RETRY_TIMEOUT_MS = 5_000;
 
 /**
  * Only PandaScore's documented image CDN is sent through Next's image optimizer.

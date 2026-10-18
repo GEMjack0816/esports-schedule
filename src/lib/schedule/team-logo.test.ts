@@ -4,6 +4,7 @@ import {
   isPandaScoreCdnLogo,
   resolveTeamLogoSource,
   shouldRetryTeamLogoDirectly,
+  TEAM_LOGO_DIRECT_RETRY_TIMEOUT_MS,
   TEAM_LOGO_RETRY_DELAY_MS,
   TEAM_LOGO_PLACEHOLDER,
 } from "./team-logo";
@@ -77,6 +78,11 @@ describe("bounded team logo retry", () => {
     expect(TEAM_LOGO_RETRY_DELAY_MS).toBeGreaterThanOrEqual(500);
     expect(TEAM_LOGO_RETRY_DELAY_MS).toBeLessThanOrEqual(1_500);
     expect(shouldRetryTeamLogoDirectly(pandaScoreLogo, null)).toBe(true);
+  });
+
+  it("bounds a stalled direct retry and eventually restores the local placeholder", () => {
+    expect(TEAM_LOGO_DIRECT_RETRY_TIMEOUT_MS).toBeGreaterThanOrEqual(3_000);
+    expect(TEAM_LOGO_DIRECT_RETRY_TIMEOUT_MS).toBeLessThanOrEqual(8_000);
   });
 
   it("does not retry an untrusted source or loop after the direct retry fails", () => {
