@@ -2,22 +2,33 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { containsCarriageReturn } from "./migration-line-endings-core.mjs";
 
-const result = spawnSync("git", ["ls-files", "-z", "--", "drizzle"], {
-  encoding: "buffer",
-});
+function listGitFiles(args) {
+  const result = spawnSync("git", args, { encoding: "buffer" });
+  if (result.error || result.status !== 0) return null;
+  return result.stdout.toString("utf8").split("\0").filter(Boolean);
+}
 
-if (result.error || result.status !== 0) {
-  console.error("Unable to enumerate tracked Drizzle migration files.");
+const trackedFiles = listGitFiles(["ls-files", "-z", "--", "drizzle"]);
+const untrackedFiles = listGitFiles([
+  "ls-files",
+  "--others",
+  "--exclude-standard",
+  "-z",
+  "--",
+  "drizzle",
+]);
+
+if (!trackedFiles || !untrackedFiles) {
+  console.error("Unable to enumerate Drizzle migration files.");
   process.exit(1);
 }
 
-const files = result.stdout
-  .toString("utf8")
-  .split("\0")
-  .filter(Boolean);
+// Include generated migrations before `git add`: they can be applied locally
+// before entering the index, so checking tracked files alone is too late.
+const files = [...new Set([...trackedFiles, ...untrackedFiles])];
 
 if (files.length === 0) {
-  console.error("No tracked files found under drizzle/.");
+  console.error("No files found under drizzle/.");
   process.exit(1);
 }
 
@@ -47,7 +58,7 @@ const filesWithoutLfPolicy = files.filter((file) => {
 });
 
 if (filesWithoutLfPolicy.length > 0) {
-  console.error("Git LF attributes are missing for tracked Drizzle files:");
+  console.error("Git LF attributes are missing for Drizzle files:");
   for (const file of filesWithoutLfPolicy) console.error(`- ${file}`);
   process.exit(1);
 }
@@ -57,9 +68,9 @@ const filesWithCr = files.filter((file) =>
 );
 
 if (filesWithCr.length > 0) {
-  console.error("Carriage return bytes found in tracked Drizzle files:");
+  console.error("Carriage return bytes found in Drizzle files:");
   for (const file of filesWithCr) console.error(`- ${file}`);
   process.exit(1);
 }
 
-console.log(`Verified LF line endings in ${files.length} tracked Drizzle files.`);
+console.log(`Verified LF line endings in ${files.length} Drizzle files.`);
