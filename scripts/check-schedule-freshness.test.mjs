@@ -309,6 +309,38 @@ describe("schedule freshness monitor", () => {
     expect(large.problems).toEqual(["health response was unreadable or exceeded the size limit"]);
   });
 
+  it("bounds endless empty chunks and does not wait for a stalled stream cancellation", async () => {
+    let pulls = 0;
+    let cancellationStarted = false;
+    const body = new ReadableStream({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(new Uint8Array());
+      },
+      cancel() {
+        cancellationStarted = true;
+        return new Promise(() => {});
+      },
+    });
+    const response = new Response(body, {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      },
+    });
+    const startedAt = Date.now();
+    const result = await checkScheduleHealth(async () => response, now);
+
+    expect(result).toEqual({
+      ok: false,
+      problems: ["health response was unreadable or exceeded the size limit"],
+    });
+    expect(cancellationStarted).toBe(true);
+    expect(pulls).toBeLessThanOrEqual(1_026);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  });
+
   it("rejects cacheable health responses to avoid passing on stale CDN data", async () => {
     for (const cacheControl of [
       "",

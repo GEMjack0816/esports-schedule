@@ -6,6 +6,7 @@ const HEALTH_URL =
 const MAX_AGE_SECONDS = 15 * 60;
 const MAX_FUTURE_SKEW_SECONDS = 2 * 60;
 const MAX_RESPONSE_BYTES = 128 * 1024;
+const MAX_RESPONSE_CHUNKS = 1_024;
 const GAME_KEYS = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"];
 const MAX_REQUEST_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [500, 1_000];
@@ -191,13 +192,31 @@ async function readBodyWithLimit(response) {
   const reader = response.body.getReader();
   const chunks = [];
   let bytes = 0;
+  let chunkCount = 0;
+
+  function cancelBestEffort() {
+    try {
+      // Do not await cancellation: a custom or broken stream source may never
+      // settle its cancel promise, which must not extend the monitor run.
+      void reader.cancel().catch(() => {});
+    } catch {
+      // Cancellation is only a resource-release hint; the bounded read fails
+      // closed even if the source rejects or throws while being cancelled.
+    }
+  }
+
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      chunkCount += 1;
+      if (chunkCount > MAX_RESPONSE_CHUNKS) {
+        cancelBestEffort();
+        throw new Error("too many body chunks");
+      }
       bytes += value.byteLength;
       if (bytes > MAX_RESPONSE_BYTES) {
-        await reader.cancel();
+        cancelBestEffort();
         throw new Error("body too large");
       }
       chunks.push(value);
