@@ -1,3 +1,4 @@
+import { appendFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 const HEALTH_URL =
@@ -33,6 +34,89 @@ function addAgeProblem(problems, label, seconds) {
   } else if (seconds > MAX_AGE_SECONDS) {
     problems.push(`${label} is older than ${MAX_AGE_SECONDS} seconds`);
   }
+}
+
+function validAgeSeconds(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function safeTimestamp(value, now) {
+  const ageSeconds = getTimestampAgeSeconds(value, now);
+  return ageSeconds === null ? null : new Date(Date.parse(value)).toISOString();
+}
+
+/** Build a deliberately allowlisted, non-sensitive view for the Actions summary. */
+export function summarizeScheduleHealth(payload, now = new Date()) {
+  if (!isRecord(payload)) return null;
+  const games = isRecord(payload.games) ? payload.games : {};
+  return {
+    mode: payload.mode === "live" ? "live" : "not-live",
+    demoMode: payload.demoMode === false ? "false" : payload.demoMode === true ? "true" : "unknown",
+    stale: payload.stale === false ? "false" : payload.stale === true ? "true" : "unknown",
+    snapshotAgeSeconds: validAgeSeconds(payload.snapshotAgeSeconds),
+    sourceFetchedAt: safeTimestamp(payload.sourceFetchedAt, now),
+    lastSuccessfulSyncAt: safeTimestamp(payload.lastSuccessfulSyncAt, now),
+    games: GAME_KEYS.map((game) => {
+      const coverage = games[game];
+      if (!isRecord(coverage)) {
+        return {
+          game,
+          syncStatus: "missing",
+          snapshotAgeSeconds: null,
+          sourceFetchedAt: null,
+          lastSuccessfulSyncAt: null,
+        };
+      }
+      return {
+        game,
+        syncStatus: coverage.syncStatus === "normal"
+          ? "normal"
+          : coverage.syncStatus === "failed" ? "failed" : "unknown",
+        snapshotAgeSeconds: validAgeSeconds(coverage.snapshotAgeSeconds),
+        sourceFetchedAt: safeTimestamp(coverage.sourceFetchedAt, now),
+        lastSuccessfulSyncAt: safeTimestamp(coverage.lastSuccessfulSyncAt, now),
+      };
+    }),
+  };
+}
+
+function display(value) {
+  return value === null || value === undefined ? "n/a" : String(value);
+}
+
+export function formatFreshnessSummary(result, healthSummary = null) {
+  const lines = [
+    "## Schedule freshness",
+    `**Result:** ${result.ok ? "PASS" : "FAIL"}`,
+  ];
+
+  if (healthSummary) {
+    lines.push(
+      `**Aggregate:** mode=${healthSummary.mode}; demoMode=${healthSummary.demoMode}; stale=${healthSummary.stale}; snapshotAgeSeconds=${display(healthSummary.snapshotAgeSeconds)}`,
+      `**Aggregate timestamps (UTC):** sourceFetchedAt=${display(healthSummary.sourceFetchedAt)}; lastSuccessfulSyncAt=${display(healthSummary.lastSuccessfulSyncAt)}`,
+      "",
+      "| Game | Sync | Snapshot age (s) | Source fetched at (UTC) | Last successful sync (UTC) |",
+      "| --- | --- | ---: | --- | --- |",
+    );
+    for (const game of healthSummary.games) {
+      lines.push(
+        `| ${game.game} | ${game.syncStatus} | ${display(game.snapshotAgeSeconds)} | ${display(game.sourceFetchedAt)} | ${display(game.lastSuccessfulSyncAt)} |`,
+      );
+    }
+  } else {
+    lines.push("Health details are unavailable because the endpoint did not return a valid JSON payload.");
+  }
+
+  if (result.problems.length > 0) {
+    lines.push("", "### Findings", ...result.problems.map((problem) => `- ${problem}`));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export async function writeFreshnessSummary(markdown, summaryPath = process.env.GITHUB_STEP_SUMMARY) {
+  if (!summaryPath) return false;
+  await appendFile(summaryPath, markdown, { encoding: "utf8" });
+  return true;
 }
 
 export function inspectScheduleFreshness(payload, now = new Date()) {
@@ -130,7 +214,12 @@ async function readBodyWithLimit(response) {
   return new TextDecoder("utf-8", { fatal: true }).decode(all);
 }
 
-export async function checkScheduleHealth(fetchImpl = fetch, now = new Date(), waitImpl = wait) {
+export async function checkScheduleHealth(
+  fetchImpl = fetch,
+  now = new Date(),
+  waitImpl = wait,
+  onHealthPayload = undefined,
+) {
   let response;
   for (let attempt = 0; attempt < MAX_REQUEST_ATTEMPTS; attempt += 1) {
     try {
@@ -200,6 +289,7 @@ export async function checkScheduleHealth(fetchImpl = fetch, now = new Date(), w
       problems: ["health response was unreadable or exceeded the size limit"],
     };
   }
+  onHealthPayload?.(payload);
   return inspectScheduleFreshness(payload, now);
 }
 
@@ -207,14 +297,19 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  const result = await checkScheduleHealth();
+  let healthSummary = null;
+  const result = await checkScheduleHealth(fetch, new Date(), wait, (payload) => {
+    healthSummary = summarizeScheduleHealth(payload);
+  });
+  const markdown = formatFreshnessSummary(result, healthSummary);
+  await writeFreshnessSummary(markdown);
   if (!result.ok) {
     console.error("Schedule freshness check FAILED:");
     for (const problem of result.problems) console.error(`- ${problem}`);
+    console.log(markdown);
     process.exitCode = 1;
   } else {
-    console.log(
-      "Schedule freshness check PASS: all five game snapshots are live and within the 15-minute freshness window.",
-    );
+    console.log(markdown);
   }
 }
+
