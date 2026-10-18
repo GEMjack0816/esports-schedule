@@ -10,14 +10,15 @@ vi.mock("@/lib/schedule", () => ({
 import { dynamic, GET } from "./route";
 
 function schedule(overrides: Record<string, unknown> = {}) {
+  const recent = new Date(Date.now() - 300_000).toISOString();
   return {
     mode: "live",
     demoMode: false,
     stale: false,
     coverage: {
       snapshotAgeSeconds: 300,
-      sourceFetchedAt: "2026-10-19T12:10:00.000Z",
-      lastSuccessfulSyncAt: "2026-10-19T12:10:00.000Z",
+      sourceFetchedAt: recent,
+      lastSuccessfulSyncAt: recent,
       refreshInProgress: false,
     },
     providers: { pandascore: "connected" },
@@ -55,6 +56,15 @@ describe("GET /api/health/freshness", () => {
     ["expired age", schedule({ coverage: { ...schedule().coverage, snapshotAgeSeconds: 901 } })],
     ["missing age", schedule({ coverage: { ...schedule().coverage, snapshotAgeSeconds: null } })],
     ["missing timestamp", schedule({ coverage: { ...schedule().coverage, sourceFetchedAt: null } })],
+    ["future source timestamp", schedule({ coverage: {
+      ...schedule().coverage,
+      sourceFetchedAt: new Date(Date.now() + 61_000).toISOString(),
+      snapshotAgeSeconds: 0,
+    } })],
+    ["future successful-sync timestamp", schedule({ coverage: {
+      ...schedule().coverage,
+      lastSuccessfulSyncAt: new Date(Date.now() + 61_000).toISOString(),
+    } })],
     ["demo payload", schedule({ demoMode: true })],
   ])("returns 503 for %s", async (_label, value) => {
     getSchedule.mockResolvedValue(value);
