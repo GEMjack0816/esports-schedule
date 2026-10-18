@@ -4,13 +4,20 @@ import { chromium } from "playwright-core";
 
 const baseUrl = process.argv[2] || "http://localhost:3000";
 const executableCandidates = [
-  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+  chromium.executablePath(),
+  ...(process.platform === "win32"
+    ? [
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    ]
+    : []),
 ];
 
 let browser;
 let launchError;
 for (const executablePath of executableCandidates) {
+  if (!executablePath) continue;
   try {
     browser = await chromium.launch({ executablePath, headless: true });
     break;
@@ -76,6 +83,7 @@ for (const profile of [
   const html = await page.content();
   const homepageCommit = await page.locator("#esports-schedule-version").getAttribute("data-git-commit");
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
+  const scheduleSearchAccessibleName = await page.getByRole("textbox", { name: "搜索战队或赛事" }).count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
@@ -182,6 +190,7 @@ for (const profile of [
       .filter((phrase) => html.includes(phrase)),
     syncStatusCards,
     gameOptions,
+    scheduleSearchAccessibleName,
     gameFilterCounts,
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
@@ -235,6 +244,7 @@ for (const result of results) {
   if (result.forbiddenHtmlPhrases.length > 0) failures.push(`${prefix}: demo text in HTML`);
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
+  if (result.scheduleSearchAccessibleName !== 1) failures.push(`${prefix}: schedule search has no accessible name`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
