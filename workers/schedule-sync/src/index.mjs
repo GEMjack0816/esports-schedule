@@ -1,5 +1,8 @@
 const SYNC_URL = "https://esports-schedule-two.vercel.app/api/cron/sync";
 const MAX_BODY_BYTES = 32 * 1024;
+// A byte limit alone does not bound streams that yield arbitrarily many empty
+// or tiny chunks. Cap parser work and per-chunk bookkeeping as well.
+const MAX_BODY_CHUNKS = 1_024;
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [500, 1_000];
 const REQUEST_TIMEOUT_MS = 300_000;
@@ -15,6 +18,16 @@ class SyncInvocationError extends Error {
     this.name = "SyncInvocationError";
     this.code = code;
     this.httpStatus = httpStatus;
+  }
+}
+
+function cancelReaderWithoutBlocking(reader) {
+  try {
+    // Some stream implementations may never settle cancellation. The caller
+    // must fail immediately once its parsing budget is exceeded.
+    void reader.cancel().catch(() => {});
+  } catch {
+    // Cancellation is best-effort; preserve the bounded parser failure.
   }
 }
 
@@ -47,13 +60,19 @@ async function readJsonBody(response) {
   const reader = response.body.getReader();
   const chunks = [];
   let byteLength = 0;
+  let chunkCount = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      chunkCount += 1;
+      if (chunkCount > MAX_BODY_CHUNKS) {
+        cancelReaderWithoutBlocking(reader);
+        throw new SyncInvocationError("response_too_many_chunks", response.status);
+      }
       byteLength += value.byteLength;
       if (byteLength > MAX_BODY_BYTES) {
-        await reader.cancel();
+        cancelReaderWithoutBlocking(reader);
         throw new SyncInvocationError("response_too_large", response.status);
       }
       chunks.push(value);

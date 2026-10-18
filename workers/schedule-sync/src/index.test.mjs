@@ -305,4 +305,32 @@ describe("schedule sync Worker client", () => {
       }),
     })).rejects.toMatchObject({ code: "response_too_large" });
   });
+
+  it("bounds response chunk count even when the stream emits empty chunks", async () => {
+    let pullCount = 0;
+    let canceled = false;
+    const body = new ReadableStream({
+      pull(controller) {
+        pullCount += 1;
+        controller.enqueue(new Uint8Array());
+      },
+      cancel() {
+        canceled = true;
+        return new Promise(() => {});
+      },
+    });
+
+    await expect(invokeScheduleSync({
+      secret: syncSecret,
+      fetchImpl: async () => new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    })).rejects.toMatchObject({ code: "response_too_many_chunks", httpStatus: 200 });
+
+    // ReadableStream may prefetch one additional chunk into its internal queue.
+    expect(pullCount).toBeGreaterThan(1_024);
+    expect(pullCount).toBeLessThanOrEqual(1_026);
+    expect(canceled).toBe(true);
+  });
 });
