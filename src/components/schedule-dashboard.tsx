@@ -238,7 +238,12 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     setRefreshError(false);
     try {
       const result = await requestScheduleRefresh();
-      if (result.ok && canReplaceSchedulePayload(payload.mode, result.payload.mode)) setPayload(result.payload);
+      if (result.ok && canReplaceSchedulePayload(
+        payload.mode,
+        result.payload.mode,
+        payload.coverage.games,
+        result.payload.coverage.games,
+      )) setPayload(result.payload);
       else setRefreshError(true);
     } finally {
       refreshInFlight.current = false;

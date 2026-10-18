@@ -89,6 +89,9 @@ describe("schedule refresh transport", () => {
     { ...payload, matches: [{ ...payload.matches[0], homeTeam: null }] },
     { ...payload, matches: [{ ...payload.matches[0], streams: [{ label: "bad", url: "javascript:alert(1)" }] }] },
     { ...payload, coverage: { ...payload.coverage, games: {} } },
+    { ...payload, coverage: { ...payload.coverage, games: Object.fromEntries(
+      Object.entries(payload.coverage.games).map(([game, value]) => [game, { ...value, syncGeneration: 0 }]),
+    ) } },
   ])("rejects render-unsafe successful JSON without replacing prior data", async unsafePayload => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(unsafePayload));
     expect(await requestScheduleRefresh(fetcher)).toEqual({ ok: false });
@@ -112,6 +115,39 @@ describe("schedule refresh transport", () => {
   it("retains a live schedule when the endpoint has no usable snapshot", () => {
     expect(canReplaceSchedulePayload("live", "unavailable")).toBe(false);
     expect(canReplaceSchedulePayload("live", "live")).toBe(true);
+  });
+
+  it("rejects a live response whose per-game snapshot generation regresses", () => {
+    expect(canReplaceSchedulePayload(
+      "live",
+      "live",
+      { lol: { syncGeneration: 12 } },
+      { lol: { syncGeneration: 11 } },
+    )).toBe(false);
+  });
+
+  it("accepts equal or newer generations and ignores games without a current snapshot", () => {
+    expect(canReplaceSchedulePayload(
+      "live",
+      "live",
+      { lol: { syncGeneration: 12 }, cs2: { syncGeneration: null } },
+      { lol: { syncGeneration: 12 }, cs2: { syncGeneration: 3 } },
+    )).toBe(true);
+    expect(canReplaceSchedulePayload(
+      "live",
+      "live",
+      { lol: { syncGeneration: 12 } },
+      { lol: { syncGeneration: 13 } },
+    )).toBe(true);
+  });
+
+  it("fails closed when a previously versioned game loses its generation", () => {
+    expect(canReplaceSchedulePayload(
+      "live",
+      "live",
+      { lol: { syncGeneration: 12 } },
+      { lol: { syncGeneration: null } },
+    )).toBe(false);
   });
 
   it("allows an unavailable page to receive a later usable schedule", () => {

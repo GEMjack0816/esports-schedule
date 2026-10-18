@@ -25,6 +25,12 @@ function isNullableNumber(value: unknown): value is number | null {
   return value === null || (typeof value === "number" && Number.isFinite(value));
 }
 
+function isOptionalNullableGeneration(value: unknown): boolean {
+  return value === undefined
+    || value === null
+    || (typeof value === "number" && Number.isSafeInteger(value) && value > 0);
+}
+
 function hasJsonContentType(response: Response): boolean {
   const mediaType = response.headers.get("content-type")
     ?.split(";", 1)[0]
@@ -89,7 +95,8 @@ function hasRenderSafeCoverage(value: unknown): boolean {
     return isRecord(coverage)
       && (coverage.syncStatus === "normal" || coverage.syncStatus === "delayed" || coverage.syncStatus === "failed")
       && typeof coverage.refreshInProgress === "boolean"
-      && isNullableDate(coverage.sourceFetchedAt);
+      && isNullableDate(coverage.sourceFetchedAt)
+      && isOptionalNullableGeneration(coverage.syncGeneration);
   });
 }
 
@@ -115,12 +122,28 @@ function isClientSchedulePayload(value: unknown): value is SchedulePayload {
     && (value.warning === undefined || typeof value.warning === "string");
 }
 
-/** Do not replace a usable live schedule with an unavailable fallback. */
+type GameGenerationView = Partial<Record<
+  (typeof gameKeys)[number],
+  { syncGeneration?: number | null }
+>>;
+
+/** Reject unavailable fallbacks and live responses older than any rendered game's snapshot. */
 export function canReplaceSchedulePayload(
   currentMode: SchedulePayload["mode"],
   refreshedMode: SchedulePayload["mode"],
+  currentGames?: GameGenerationView,
+  refreshedGames?: GameGenerationView,
 ): boolean {
-  return currentMode !== "live" || refreshedMode !== "unavailable";
+  if (currentMode !== "live") return true;
+  if (refreshedMode !== "live") return false;
+
+  return gameKeys.every((game) => {
+    const currentGeneration = currentGames?.[game]?.syncGeneration;
+    if (typeof currentGeneration !== "number") return true;
+
+    const refreshedGeneration = refreshedGames?.[game]?.syncGeneration;
+    return typeof refreshedGeneration === "number" && refreshedGeneration >= currentGeneration;
+  });
 }
 
 export async function requestScheduleRefresh(fetcher: typeof fetch = fetch): Promise<
