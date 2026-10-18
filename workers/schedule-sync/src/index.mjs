@@ -1,0 +1,189 @@
+const SYNC_URL = "https://esports-schedule-two.vercel.app/api/cron/sync";
+const MAX_BODY_BYTES = 32 * 1024;
+const MAX_ATTEMPTS = 3;
+const RETRY_DELAYS_MS = [500, 1_000];
+const REQUEST_TIMEOUT_MS = 300_000;
+
+const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+class SyncInvocationError extends Error {
+  constructor(code, httpStatus = null) {
+    super(code);
+    this.name = "SyncInvocationError";
+    this.code = code;
+    this.httpStatus = httpStatus;
+  }
+}
+
+async function readJsonBody(response) {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!/^application\/json(?:\s*;|$)/i.test(contentType)) {
+    throw new SyncInvocationError("invalid_content_type", response.status);
+  }
+  if (!response.body) throw new SyncInvocationError("missing_response_body", response.status);
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let byteLength = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > MAX_BODY_BYTES) {
+        await reader.cancel();
+        throw new SyncInvocationError("response_too_large", response.status);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch (error) {
+    if (error instanceof SyncInvocationError) throw error;
+    throw new SyncInvocationError("invalid_json", response.status);
+  }
+}
+
+function validateSyncPayload(payload, httpStatus) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new SyncInvocationError("invalid_payload", httpStatus);
+  }
+
+  if (httpStatus === 409 && payload.status === "busy" && payload.lockAcquired === false) {
+    if (payload.generation !== null && payload.generation !== undefined) {
+      throw new SyncInvocationError("invalid_busy_response", httpStatus);
+    }
+    return { outcome: "skipped_busy", generation: null };
+  }
+
+  if (httpStatus < 200 || httpStatus >= 300) {
+    throw new SyncInvocationError("http_failure", httpStatus);
+  }
+  if (payload.ok !== true || payload.lockAcquired !== true) {
+    throw new SyncInvocationError("sync_not_acquired", httpStatus);
+  }
+  if (!Number.isSafeInteger(payload.generation) || payload.generation < 1) {
+    throw new SyncInvocationError("invalid_generation", httpStatus);
+  }
+  if (!Number.isInteger(payload.gamesAttempted) || payload.gamesAttempted < 1
+    || !Number.isInteger(payload.gamesSucceeded) || payload.gamesSucceeded < 1
+    || !Number.isInteger(payload.gamesFailed) || payload.gamesFailed < 0
+    || payload.gamesSucceeded + payload.gamesFailed !== payload.gamesAttempted) {
+    throw new SyncInvocationError("invalid_game_counts", httpStatus);
+  }
+  if (!Number.isInteger(payload.snapshotsPersisted)
+    || payload.snapshotsPersisted !== payload.gamesSucceeded) {
+    throw new SyncInvocationError("snapshot_persistence_mismatch", httpStatus);
+  }
+  if (typeof payload.lastSuccessfulSyncAt !== "string"
+    || !Number.isFinite(Date.parse(payload.lastSuccessfulSyncAt))) {
+    throw new SyncInvocationError("invalid_success_timestamp", httpStatus);
+  }
+  if ((payload.status === "success" && payload.gamesFailed !== 0)
+    || (payload.status === "partial" && payload.gamesFailed === 0)
+    || (payload.status !== "success" && payload.status !== "partial")) {
+    throw new SyncInvocationError("invalid_sync_status", httpStatus);
+  }
+
+  return {
+    outcome: payload.status,
+    generation: payload.generation,
+    gamesAttempted: payload.gamesAttempted,
+    gamesSucceeded: payload.gamesSucceeded,
+    gamesFailed: payload.gamesFailed,
+    snapshotsPersisted: payload.snapshotsPersisted,
+    lastSuccessfulSyncAt: payload.lastSuccessfulSyncAt,
+  };
+}
+
+export async function invokeScheduleSync({
+  fetchImpl = fetch,
+  secret,
+  waitImpl = pause,
+}) {
+  if (typeof secret !== "string" || secret.length === 0) {
+    throw new SyncInvocationError("missing_configuration");
+  }
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    let response;
+    try {
+      response = await fetchImpl(SYNC_URL, {
+        method: "GET",
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${secret}`,
+          "cache-control": "no-store",
+        },
+        redirect: "error",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch {
+      if (attempt < RETRY_DELAYS_MS.length) {
+        await waitImpl(RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      throw new SyncInvocationError("network_failure");
+    }
+
+    if ((response.status >= 500 || response.status === 429)
+      && attempt < RETRY_DELAYS_MS.length) {
+      try {
+        await response.body?.cancel();
+      } catch {
+        // Retrying is bounded even if the response stream cannot be released.
+      }
+      await waitImpl(RETRY_DELAYS_MS[attempt]);
+      continue;
+    }
+
+    const payload = await readJsonBody(response);
+    return validateSyncPayload(payload, response.status);
+  }
+
+  throw new SyncInvocationError("retry_budget_exhausted");
+}
+
+export function createScheduleSyncWorker({ fetchImpl = fetch, log = console, waitImpl = pause } = {}) {
+  return {
+    async fetch() {
+      return new Response("Not Found", { status: 404 });
+    },
+
+    async scheduled(controller, env) {
+      // Do not let the platform replay a failed sync outside our bounded retry
+      // policy. The application lock and fencing generation remain authoritative.
+      controller.noRetry?.();
+      const scheduledTime = Number.isFinite(controller.scheduledTime)
+        ? new Date(controller.scheduledTime).toISOString()
+        : null;
+
+      try {
+        const result = await invokeScheduleSync({ fetchImpl, secret: env.CRON_SECRET, waitImpl });
+        const summary = { event: "schedule_sync", scheduledTime, ...result };
+        if (result.outcome === "skipped_busy") log.warn(JSON.stringify(summary));
+        else log.log(JSON.stringify(summary));
+        return result;
+      } catch (error) {
+        const code = error instanceof SyncInvocationError ? error.code : "internal_failure";
+        const httpStatus = error instanceof SyncInvocationError ? error.httpStatus : null;
+        log.error(JSON.stringify({ event: "schedule_sync", outcome: "failed", code, httpStatus, scheduledTime }));
+        // Never propagate provider bodies, URLs, headers, or transport details.
+        throw new Error("schedule sync invocation failed");
+      }
+    },
+  };
+}
+
+export default createScheduleSyncWorker();
