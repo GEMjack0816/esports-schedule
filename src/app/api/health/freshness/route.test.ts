@@ -72,6 +72,26 @@ describe("GET /api/health/freshness", () => {
     });
   });
 
+  it("returns a sanitized 503 when schedule lookup throws", async () => {
+    const internalError = "internal schedule lookup failure";
+    getSchedule.mockImplementationOnce(async () => {
+      throw new Error(internalError);
+    });
+
+    const response = await GET();
+    const body = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store, no-cache, must-revalidate");
+    expect(JSON.parse(body)).toMatchObject({
+      service: "esports-schedule",
+      status: "unavailable",
+      mode: "unavailable",
+      stale: true,
+    });
+    expect(body).not.toContain(internalError);
+  });
+
   it("does not expose unallowlisted schedule fields", async () => {
     getSchedule.mockResolvedValue(schedule({
       databaseUrl: "private-database-url",
