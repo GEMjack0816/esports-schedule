@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { containsCarriageReturn } from "./migration-line-endings-core.mjs";
 
 const result = spawnSync("git", ["ls-files", "-z", "--", "drizzle"], {
   encoding: "buffer",
@@ -51,13 +52,13 @@ if (filesWithoutLfPolicy.length > 0) {
   process.exit(1);
 }
 
-const filesWithCrLf = files.filter((file) =>
-  readFileSync(file).includes(Buffer.from("\r\n")),
+const filesWithCr = files.filter((file) =>
+  containsCarriageReturn(readFileSync(file)),
 );
 
-if (filesWithCrLf.length > 0) {
-  console.error("CRLF line endings found in tracked Drizzle files:");
-  for (const file of filesWithCrLf) console.error(`- ${file}`);
+if (filesWithCr.length > 0) {
+  console.error("Carriage return bytes found in tracked Drizzle files:");
+  for (const file of filesWithCr) console.error(`- ${file}`);
   process.exit(1);
 }
 
