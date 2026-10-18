@@ -2,6 +2,11 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import { addDaysKey, dateKeyInTimeZone } from "./time";
+import {
+  matchesNormalizedScheduleSearchText,
+  normalizeScheduleSearchText,
+  normalizeScheduleSearchValues,
+} from "./search";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "./types";
 import type {
   SchedulePageData,
@@ -108,7 +113,7 @@ function normalizedQuery(filters: SchedulePageQueryFilters): string {
     filters.game,
     filters.league,
     filters.status,
-    filters.query.trim().toLocaleLowerCase("zh-CN"),
+    normalizeScheduleSearchText(filters.query),
     filters.selectedDate,
   ]);
 }
@@ -146,9 +151,13 @@ function isInRange(key: string, filters: SchedulePageQueryFilters, dates: Return
 }
 
 function searchText(match: EsportsMatch): string {
-  return [match.homeTeam.name, match.awayTeam.name, match.league, match.tournament ?? "", match.stage ?? ""]
-    .join(" ")
-    .toLocaleLowerCase("zh-CN");
+  return normalizeScheduleSearchValues([
+    match.homeTeam.name,
+    match.awayTeam.name,
+    match.league,
+    match.tournament ?? "",
+    match.stage ?? "",
+  ]);
 }
 
 function compareMatchKeys(
@@ -249,6 +258,7 @@ export function createSchedulePage(
   let upcomingCount = 0;
 
   const matchingEntries: Array<{ match: EsportsMatch; cursor: MatchOrderKey }> = [];
+  const normalizedSearchQuery = normalizeScheduleSearchText(filters.query);
   const legacySignature = normalizedQuery(filters);
   const signature = querySignature(filters);
   for (const match of payload.matches) {
@@ -264,7 +274,7 @@ export function createSchedulePage(
       && (filters.game === "all" || match.game === filters.game)
       && (filters.league === "all" || match.league === filters.league)
       && (filters.status === "all" || match.status === filters.status)
-      && (!filters.query.trim() || searchText(match).includes(filters.query.trim().toLocaleLowerCase("zh-CN")));
+      && matchesNormalizedScheduleSearchText(normalizedSearchQuery, searchText(match));
     if (matchesFilters) {
       matchingEntries.push({
         match,

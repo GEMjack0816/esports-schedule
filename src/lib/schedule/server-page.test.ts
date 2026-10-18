@@ -68,6 +68,48 @@ describe("server-paginated schedule pages", () => {
     expect(page.leagues).toEqual(["ESL", "LCK"]);
   });
 
+  it("uses locale-independent normalized search before paginating matches", () => {
+    const schedule = payload([
+      match("istanbul", "2026-03-08T12:00:00.000Z", {
+        homeTeam: { name: "İstanbul Wolves", logo: "" },
+      }),
+      match("street", "2026-03-08T13:00:00.000Z", {
+        tournament: "Straße Cup",
+      }),
+      match("sao-paulo", "2026-03-08T14:00:00.000Z", {
+        league: "São Paulo League",
+      }),
+    ]);
+
+    expect(createSchedulePage(schedule, query({ q: "ISTANBUL" }), new Date("2026-03-08T00:00:00.000Z"))
+      .matches.map((item) => item.id)).toEqual(["istanbul"]);
+    expect(createSchedulePage(schedule, query({ q: "STRASSE" }), new Date("2026-03-08T00:00:00.000Z"))
+      .matches.map((item) => item.id)).toEqual(["street"]);
+    expect(createSchedulePage(schedule, query({ q: "SAO PAULO" }), new Date("2026-03-08T00:00:00.000Z"))
+      .matches.map((item) => item.id)).toEqual(["sao-paulo"]);
+  });
+
+  it("keeps pagination cursors stable for equivalent normalized search queries", () => {
+    const schedule = payload([
+      match("street-1", "2026-03-08T12:00:00.000Z", { tournament: "Straße Cup" }),
+      match("street-2", "2026-03-08T13:00:00.000Z", { tournament: "Straße Finals" }),
+    ]);
+    const first = createSchedulePage(
+      schedule,
+      query({ q: "STRASSE", limit: "1" }),
+      new Date("2026-03-08T00:00:00.000Z"),
+    );
+
+    const second = createSchedulePage(
+      schedule,
+      query({ q: "Straße", limit: "1", cursor: first.page.nextCursor ?? "" }),
+      new Date("2026-03-08T00:00:00.000Z"),
+    );
+
+    expect(first.matches.map((item) => item.id)).toEqual(["street-1"]);
+    expect(second.matches.map((item) => item.id)).toEqual(["street-2"]);
+  });
+
   it("returns stable cursor pages without duplicate or missing matches", () => {
     const schedule = payload(Array.from({ length: 7 }, (_, index) => match(
       `m${index}`,
