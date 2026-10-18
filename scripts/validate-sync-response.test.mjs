@@ -92,6 +92,19 @@ describe("sync workflow response validation", () => {
     expect(validateSyncResponse({ ...success, snapshotsPersisted: 0 }, 200).ok).toBe(false);
   });
 
+  it("rejects impossible game counts and statuses that contradict the counts", () => {
+    const invalidPayloads = [
+      { ...success, gamesAttempted: 4, gamesSucceeded: 5, gamesFailed: -1 },
+      { ...success, gamesFailed: -1, gamesAttempted: 4 },
+      { ...success, status: "success", gamesSucceeded: 4, gamesFailed: 1 },
+      { ...success, status: "partial", gamesSucceeded: 5, gamesFailed: 0 },
+    ];
+
+    for (const payload of invalidPayloads) {
+      expect(validateSyncResponse(payload, 200).ok).toBe(false);
+    }
+  });
+
   it("rejects a busy payload returned with an unexpected HTTP status", () => {
     expect(validateSyncResponse({ status: "busy", lockAcquired: false, generation: null }, 500).ok).toBe(false);
   });

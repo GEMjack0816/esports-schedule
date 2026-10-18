@@ -28,7 +28,9 @@ export function validateSyncResponse(payload, httpStatus) {
   if (!Number.isInteger(payload.gamesAttempted) || payload.gamesAttempted < 1) {
     return { ok: false, message: "sync did not report attempted games" };
   }
-  if (!Number.isInteger(payload.gamesSucceeded) || payload.gamesSucceeded < 1) {
+  if (!Number.isInteger(payload.gamesSucceeded)
+    || payload.gamesSucceeded < 1
+    || payload.gamesSucceeded > payload.gamesAttempted) {
     return { ok: false, message: "sync did not update any game" };
   }
   if (!Number.isInteger(payload.snapshotsPersisted) || payload.snapshotsPersisted < 1) {
@@ -38,6 +40,7 @@ export function validateSyncResponse(payload, httpStatus) {
     return { ok: false, message: "sync success count does not match persisted snapshots" };
   }
   if (!Number.isInteger(payload.gamesFailed)
+    || payload.gamesFailed < 0
     || payload.gamesSucceeded + payload.gamesFailed !== payload.gamesAttempted) {
     return { ok: false, message: "sync game outcome counts are inconsistent" };
   }
@@ -46,6 +49,10 @@ export function validateSyncResponse(payload, httpStatus) {
   }
   if (payload.status !== "success" && payload.status !== "partial") {
     return { ok: false, message: `sync reported logical status ${String(payload.status)}` };
+  }
+  if ((payload.status === "success" && payload.gamesFailed !== 0)
+    || (payload.status === "partial" && payload.gamesFailed === 0)) {
+    return { ok: false, message: "sync status does not match game outcome counts" };
   }
   return {
     ok: true,
