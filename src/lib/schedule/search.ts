@@ -6,6 +6,7 @@ export function normalizeScheduleSearchText(value: string): string {
     .replace(/[\u0131\u0130]/g, "i")
     .toLowerCase()
     .replace(/\u00df/g, "ss")
+    .replace(/\u03c2/g, "\u03c3")
     .trim()
     .replace(/\s+/g, " ");
 }

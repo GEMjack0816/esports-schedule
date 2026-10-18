@@ -18,6 +18,11 @@ describe("schedule search normalization", () => {
     expect(scheduleSearchMatches("strasse", ["Straße Esports"])).toBe(true);
   });
 
+  it("matches Greek final and medial sigma independent of word position", () => {
+    expect(scheduleSearchMatches("ΟΣ", ["οσ esports"])).toBe(true);
+    expect(scheduleSearchMatches("οσ", ["ος esports"])).toBe(true);
+  });
+
   it("preserves non-Latin text and collapses incidental whitespace", () => {
     expect(normalizeScheduleSearchText("  王者荣耀　赛事  ")).toBe("王者荣耀 赛事");
     expect(scheduleSearchMatches("王者荣耀  赛事", ["王者荣耀", "赛事"])).toBe(true);
