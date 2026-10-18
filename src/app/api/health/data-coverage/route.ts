@@ -14,9 +14,13 @@ export async function GET() {
   ]);
   let databaseHealth: typeof database | (typeof database & { targetFingerprint: string | null }) = database;
   if (process.env.VERCEL_ENV === "preview") {
-    const admin = await requireAdminApi();
-    if (admin.ok) {
-      databaseHealth = { ...database, targetFingerprint: getPreviewDatabaseTargetFingerprint() };
+    try {
+      const admin = await requireAdminApi();
+      if (admin.ok) {
+        databaseHealth = { ...database, targetFingerprint: getPreviewDatabaseTargetFingerprint() };
+      }
+    } catch {
+      // Keep public health available; an auth failure must never expose target metadata.
     }
   }
 

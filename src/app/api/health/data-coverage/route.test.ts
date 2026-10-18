@@ -68,6 +68,17 @@ describe("data coverage health route database identity", () => {
     expect(getPreviewDatabaseTargetFingerprint).not.toHaveBeenCalled();
   });
 
+  it("fails closed and keeps health available when Preview auth throws", async () => {
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.mocked(requireAdminApi).mockRejectedValue(new Error("auth failure"));
+    const response = await GET();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.database).toEqual(database);
+    expect(getPreviewDatabaseTargetFingerprint).not.toHaveBeenCalled();
+  });
+
   it("does not expose database target fingerprints in Production", async () => {
     vi.stubEnv("VERCEL_ENV", "production");
     const response = await GET();
