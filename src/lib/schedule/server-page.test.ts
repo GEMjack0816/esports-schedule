@@ -110,6 +110,37 @@ describe("server-paginated schedule pages", () => {
     expect(second.matches.map((item) => item.id)).toEqual(["street-2"]);
   });
 
+  it("accepts a previous locale-sensitive cursor when the result set is unchanged", () => {
+    const schedule = payload([
+      match("istanbul-1", "2026-03-08T12:00:00.000Z", { homeTeam: { name: "İstanbul Wolves", logo: "" } }),
+      match("istanbul-2", "2026-03-08T13:00:00.000Z", { homeTeam: { name: "İstanbul Falcons", logo: "" } }),
+    ]);
+    const first = createSchedulePage(
+      schedule,
+      query({ q: "İSTANBUL", limit: "1" }),
+      new Date("2026-03-08T00:00:00.000Z"),
+    );
+    const [offset, , resultSetHash] = JSON.parse(
+      Buffer.from(first.page.nextCursor ?? "", "base64url").toString("utf8"),
+    ) as [number, string, string];
+    const previousFilterSignature = JSON.stringify([
+      "all", "UTC", "all", "all", "all", "İSTANBUL".toLocaleLowerCase("zh-CN"), null,
+    ]);
+    const previousCursor = Buffer.from(JSON.stringify([
+      offset,
+      createHash("sha256").update(previousFilterSignature).digest("base64url"),
+      resultSetHash,
+    ])).toString("base64url");
+
+    const next = createSchedulePage(
+      schedule,
+      query({ q: "İSTANBUL", limit: "1", cursor: previousCursor }),
+      new Date("2026-03-08T00:00:00.000Z"),
+    );
+
+    expect(next.matches.map((item) => item.id)).toEqual(["istanbul-2"]);
+  });
+
   it("returns stable cursor pages without duplicate or missing matches", () => {
     const schedule = payload(Array.from({ length: 7 }, (_, index) => match(
       `m${index}`,
@@ -377,4 +408,5 @@ describe("server-paginated schedule pages", () => {
     expect(next.matches.map((item) => item.id)).toEqual(["long-filter-2"]);
   });
 });
+
 

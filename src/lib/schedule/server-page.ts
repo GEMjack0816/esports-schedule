@@ -118,8 +118,24 @@ function normalizedQuery(filters: SchedulePageQueryFilters): string {
   ]);
 }
 
+function previousNormalizedQuery(filters: SchedulePageQueryFilters): string {
+  return JSON.stringify([
+    filters.range,
+    filters.timeZone,
+    filters.game,
+    filters.league,
+    filters.status,
+    filters.query.trim().toLocaleLowerCase("zh-CN"),
+    filters.selectedDate,
+  ]);
+}
+
 function querySignature(filters: SchedulePageQueryFilters): string {
   return createHash("sha256").update(normalizedQuery(filters)).digest("base64url");
+}
+
+function previousQuerySignature(filters: SchedulePageQueryFilters): string {
+  return createHash("sha256").update(previousNormalizedQuery(filters)).digest("base64url");
 }
 
 function dateKeys(now: Date, timeZone: string) {
@@ -196,6 +212,7 @@ function encodeCursor(offset: number, signature: string, resultSetHash: string):
 function decodeCursor(
   value: string,
   signature: string,
+  previousSignature: string,
   legacySignature: string,
   resultSetHash: string,
 ): DecodedCursor {
@@ -206,7 +223,7 @@ function decodeCursor(
       if (parsed.length !== 3
         || !Number.isSafeInteger(parsed[0])
         || (parsed[0] as number) < 0
-        || parsed[1] !== signature
+        || (parsed[1] !== signature && parsed[1] !== previousSignature)
         || typeof parsed[2] !== "string"
         || !/^[A-Za-z0-9_-]{43}$/.test(parsed[2])) {
         throw new Error("invalid cursor");
@@ -259,7 +276,8 @@ export function createSchedulePage(
 
   const matchingEntries: Array<{ match: EsportsMatch; cursor: MatchOrderKey }> = [];
   const normalizedSearchQuery = normalizeScheduleSearchText(filters.query);
-  const legacySignature = normalizedQuery(filters);
+  const legacySignature = previousNormalizedQuery(filters);
+  const previousSignature = previousQuerySignature(filters);
   const signature = querySignature(filters);
   for (const match of payload.matches) {
     const key = matchDateKey(match, query.timeZone);
@@ -301,7 +319,7 @@ export function createSchedulePage(
   const resultSetHash = resultSetHashDigest.update("]").digest("base64url");
 
   const cursor = query.cursor
-    ? decodeCursor(query.cursor, signature, legacySignature, resultSetHash)
+    ? decodeCursor(query.cursor, signature, previousSignature, legacySignature, resultSetHash)
     : null;
   const cursorIndex = !cursor
     ? 0
@@ -330,4 +348,5 @@ export function createSchedulePage(
     timeZone: query.timeZone,
   };
 }
+
 
