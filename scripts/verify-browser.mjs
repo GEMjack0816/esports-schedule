@@ -136,6 +136,27 @@ for (const profile of [
       && params.get("q") === "share verification";
   })();
 
+  const dateInput = page.locator('.filter-panel input[type="date"]');
+  const selectedDateValue = await dateInput.getAttribute("min") || "2026-10-19";
+  await dateInput.fill(selectedDateValue);
+  await page.waitForFunction((date) => new URL(location.href).searchParams.get("date") === date, selectedDateValue);
+  const dateFilterUrlSync = new URL(page.url()).searchParams.get("date") === selectedDateValue;
+  const noRangeSelectedForCustomDate = await page.getByRole("tab").evaluateAll(
+    (tabs) => tabs.every((tab) => tab.getAttribute("aria-selected") === "false"),
+  );
+  await page.getByRole("tab", { name: /明日/ }).click();
+  await page.waitForFunction(() => {
+    const params = new URL(location.href).searchParams;
+    return params.get("range") === "tomorrow" && !params.has("date");
+  });
+  const rangeClearsSelectedDate = !new URL(page.url()).searchParams.has("date");
+  await page.locator(".empty-state button").click();
+  await page.waitForFunction(() => {
+    const params = new URL(location.href).searchParams;
+    return !params.has("range") && !params.has("game") && !params.has("status") && !params.has("q") && !params.has("date");
+  });
+  const clearFiltersResetsRange = await page.getByRole("tab", { name: /^今日/ }).getAttribute("aria-selected") === "true";
+
   const apiResponsePromise = page.waitForResponse(
     (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
     { timeout: 120_000 },
@@ -226,6 +247,10 @@ for (const profile of [
     gameFilterUrlSync,
     statusFilterUrlSync,
     shareLinkCopied,
+    dateFilterUrlSync,
+    noRangeSelectedForCustomDate,
+    rangeClearsSelectedDate,
+    clearFiltersResetsRange,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -286,6 +311,10 @@ for (const result of results) {
   if (!result.gameFilterUrlSync) failures.push(`${prefix}: game filter was not written to the URL`);
   if (!result.statusFilterUrlSync) failures.push(`${prefix}: status filter was not written to the URL`);
   if (!result.shareLinkCopied) failures.push(`${prefix}: copied filter link is incomplete`);
+  if (!result.dateFilterUrlSync) failures.push(`${prefix}: selected date was not written to the URL`);
+  if (!result.noRangeSelectedForCustomDate) failures.push(`${prefix}: custom date left a misleading range tab selected`);
+  if (!result.rangeClearsSelectedDate) failures.push(`${prefix}: quick range did not clear the custom date`);
+  if (!result.clearFiltersResetsRange) failures.push(`${prefix}: clear filters did not restore the default range`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
