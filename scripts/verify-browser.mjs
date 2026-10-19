@@ -156,6 +156,7 @@ for (const profile of [
   let favoriteFeatureAvailable = false;
   let favoriteFilterWorks = false;
   let favoritePersistenceWorks = false;
+  let favoriteCrossTabWorks = false;
   let favoriteManagementWorks = false;
   let favoriteEmptyStateWorks = false;
   const firstFavoriteButton = page.locator(".favorite-team-button").first();
@@ -163,8 +164,20 @@ for (const profile of [
     favoriteFeatureAvailable = true;
     const unselectedFavoriteButton = firstFavoriteButton;
     const originalFavoriteLabel = await unselectedFavoriteButton.getAttribute("aria-label");
+    const secondaryPage = await context.newPage();
+    await secondaryPage.goto(auditUrl.toString(), { waitUntil: "networkidle", timeout: 120_000 });
+    await secondaryPage.getByRole("tab", { name: /全部收录/ }).click();
+    const secondaryButton = secondaryPage.getByRole("button", { name: originalFavoriteLabel, exact: true });
+    const secondaryTabReady = await secondaryButton.count() === 1
+      && await secondaryButton.getAttribute("aria-pressed") === "false";
     await unselectedFavoriteButton.click();
     const selectedFavoriteLabel = await page.locator(".favorite-team-button[aria-pressed='true']").first().getAttribute("aria-label");
+    const updatedSecondaryTab = await secondaryPage.waitForFunction((label) =>
+      Array.from(document.querySelectorAll(".favorite-team-button")).some((button) =>
+        button.getAttribute("aria-label") === label && button.getAttribute("aria-pressed") === "true",
+      ), selectedFavoriteLabel, { timeout: 5_000 },
+    ).then(() => true).catch(() => false);
+    favoriteCrossTabWorks = secondaryTabReady && !!selectedFavoriteLabel && updatedSecondaryTab;
     const favoriteFilterButton = page.locator(".favorite-filter-button");
     const filterEnabledAfterSave = await favoriteFilterButton.isEnabled();
     await page.reload({ waitUntil: "networkidle", timeout: 120_000 });
@@ -201,6 +214,7 @@ for (const profile of [
         && await page.locator(".favorite-filter-button").isDisabled();
     }
     if (!originalFavoriteLabel) errors.push("favorite: missing accessible team control label");
+    await secondaryPage.close();
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
@@ -237,6 +251,7 @@ for (const profile of [
     themeToggleWorks: initialTheme !== toggledTheme,
     favoriteFeatureAvailable,
     favoritePersistenceWorks,
+    favoriteCrossTabWorks,
     favoriteFilterWorks,
     favoriteManagementWorks,
     favoriteEmptyStateWorks,
@@ -292,6 +307,7 @@ for (const result of results) {
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.favoriteFeatureAvailable && !result.favoritePersistenceWorks) failures.push(`${prefix}: team favorites did not persist after reload`);
+  if (result.favoriteFeatureAvailable && !result.favoriteCrossTabWorks) failures.push(`${prefix}: favorite changes did not update a second open tab`);
   if (result.favoriteFeatureAvailable && !result.favoriteFilterWorks) failures.push(`${prefix}: favorites-only filter returned non-favorite matches`);
   if (result.favoriteFeatureAvailable && !result.favoriteManagementWorks) failures.push(`${prefix}: saved favorites could not be managed outside the current match results`);
   if (result.favoriteFeatureAvailable && !result.favoriteEmptyStateWorks) failures.push(`${prefix}: favorite filter empty state did not explain how to recover`);
