@@ -2,17 +2,38 @@ import type { EsportsMatch } from "./types";
 
 const credentialParameters = new Set([
   "access_token",
+  "accesstoken",
   "api_key",
   "apikey",
   "auth",
   "authorization",
   "client_secret",
+  "clientsecret",
+  "code",
+  "credential",
+  "idtoken",
+  "jwt",
+  "oauth_token",
+  "oauthtoken",
   "password",
+  "passwd",
+  "refreshtoken",
   "secret",
   "sig",
   "signature",
   "token",
+  "state",
 ]);
+
+function hasCredentialParameter(parameters: URLSearchParams): boolean {
+  return [...parameters.keys()].some((key) => {
+    const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return credentialParameters.has(key.toLowerCase())
+      || credentialParameters.has(normalized)
+      || /(?:token|secret|password|passwd|credential|authorization|signature|jwt)$/.test(normalized)
+      || /(?:api|access|client|private)key$/.test(normalized);
+  });
+}
 
 function utcDateTime(value: string | null): string | null {
   if (!value) return null;
@@ -60,8 +81,9 @@ function safeStreamUrl(match: EsportsMatch): string | null {
   for (const stream of match.streams) {
     try {
       const url = new URL(stream.url);
-      const containsCredential = [...url.searchParams.keys()]
-        .some((key) => credentialParameters.has(key.toLowerCase()));
+      const fragmentParameters = url.hash.slice(1).split("?").at(-1) ?? "";
+      const containsCredential = hasCredentialParameter(url.searchParams)
+        || hasCredentialParameter(new URLSearchParams(fragmentParameters));
       if (url.protocol === "https:" && !url.username && !url.password && !containsCredential) {
         return url.toString();
       }
