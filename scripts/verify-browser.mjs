@@ -94,6 +94,17 @@ for (const profile of [
     status: await page.locator(".filter-panel select").nth(2).inputValue(),
     query: await queryInput.inputValue(),
   };
+  const historyGameSelect = page.locator(".filter-panel select").nth(0);
+  await historyGameSelect.selectOption("valorant");
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("game") === "valorant");
+  await page.goBack({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("game") === "cs2");
+  const browserBackRestoresFilterState = await historyGameSelect.inputValue() === "cs2"
+    && await page.locator(".filter-panel select").nth(2).inputValue() === "scheduled";
+  await page.goForward({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("game") === "valorant");
+  const browserForwardRestoresFilterState = await historyGameSelect.inputValue() === "valorant"
+    && await page.locator(".filter-panel select").nth(2).inputValue() === "scheduled";
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -101,7 +112,7 @@ for (const profile of [
   const gameFilterCounts = {};
   const statusFilterCounts = {};
   await page.getByRole("tab", { name: /全部收录/ }).click();
-  const gameSelect = page.locator(".filter-panel select").nth(0);
+  const gameSelect = historyGameSelect;
   await queryInput.fill("");
   for (const game of ["lol", "valorant", "honor-of-kings", "cs2", "dota2"]) {
     await gameSelect.selectOption(game);
@@ -244,6 +255,8 @@ for (const profile of [
     gameFilterCounts,
     statusFilterCounts,
     restoredFilterState,
+    browserBackRestoresFilterState,
+    browserForwardRestoresFilterState,
     gameFilterUrlSync,
     statusFilterUrlSync,
     shareLinkCopied,
@@ -308,6 +321,8 @@ for (const result of results) {
     || result.restoredFilterState.query !== "shareable-link-test") {
     failures.push(`${prefix}: shared URL filters were not restored`);
   }
+  if (!result.browserBackRestoresFilterState) failures.push(`${prefix}: browser back did not restore the previous filter state`);
+  if (!result.browserForwardRestoresFilterState) failures.push(`${prefix}: browser forward did not restore the next filter state`);
   if (!result.gameFilterUrlSync) failures.push(`${prefix}: game filter was not written to the URL`);
   if (!result.statusFilterUrlSync) failures.push(`${prefix}: status filter was not written to the URL`);
   if (!result.shareLinkCopied) failures.push(`${prefix}: copied filter link is incomplete`);
