@@ -119,6 +119,15 @@ for (const profile of [
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
+    timeZoneIndicator: (() => {
+      const pill = document.querySelector(".timezone-pill");
+      const offset = pill?.querySelector(".timezone-offset");
+      return {
+        visible: !!pill && getComputedStyle(pill).display !== "none" && pill.getBoundingClientRect().width > 0,
+        offset: offset?.textContent?.trim() ?? "",
+        accessibleName: pill?.getAttribute("aria-label") ?? "",
+      };
+    })(),
     offenders: Array.from(document.querySelectorAll("body *"))
       .map((element) => {
         const rect = element.getBoundingClientRect();
@@ -133,6 +142,7 @@ for (const profile of [
       .filter((element) => element.left < -1 || element.right > document.documentElement.clientWidth + 1)
       .slice(0, 12),
   }));
+  const hasNamedTimeZoneGroup = (await page.getByRole("group", { name: /本地时区/ }).count()) === 1;
   const screenshot = path.join(os.tmpdir(), `esports-schedule-${profile.name}.png`);
   await page.screenshot({ path: screenshot, fullPage: true });
 
@@ -168,6 +178,8 @@ for (const profile of [
     profile: profile.name,
     status: response?.status() ?? null,
     horizontalOverflow: layout.scrollWidth > layout.clientWidth,
+    timeZoneIndicator: layout.timeZoneIndicator,
+    hasNamedTimeZoneGroup,
     scrollWidth: layout.scrollWidth,
     clientWidth: layout.clientWidth,
     overflowElements: layout.offenders,
@@ -227,6 +239,10 @@ for (const result of results) {
   const prefix = result.profile;
   if (result.status !== 200) failures.push(`${prefix}: homepage HTTP ${result.status}`);
   if (result.horizontalOverflow) failures.push(`${prefix}: horizontal overflow`);
+  if (!result.timeZoneIndicator.visible) failures.push(`${prefix}: local time-zone indicator is hidden`);
+  if (!/^UTC[+-]\d{2}:\d{2}$/.test(result.timeZoneIndicator.offset)) failures.push(`${prefix}: invalid local UTC offset`);
+  if (!result.timeZoneIndicator.accessibleName.includes(result.timeZoneIndicator.offset)) failures.push(`${prefix}: time-zone indicator accessible name is incomplete`);
+  if (!result.hasNamedTimeZoneGroup) failures.push(`${prefix}: local time-zone indicator is not an accessible named group`);
   if (!result.hasCoverageSummary) failures.push(`${prefix}: missing coverage summary`);
   if (!result.hasSubmitLink) failures.push(`${prefix}: missing submission link`);
   if (!result.hasProfessionalCoverageCopy) failures.push(`${prefix}: missing coverage copy`);

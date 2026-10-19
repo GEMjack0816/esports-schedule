@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
-import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { addDaysKey, dateKeyInTimeZone, timeZoneLocationLabel, timeZoneUtcOffset } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -163,6 +163,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     getBrowserTimeZone,
     getServerTimeZone,
   );
+  const zoneOffset = timeZoneUtcOffset(timeZone);
   const theme = useSyncExternalStore(subscribeToTheme, getBrowserTheme, getServerTheme);
 
   const today = addDaysKey(0, timeZone);
@@ -257,9 +258,10 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           <span>赛界<span className="brand-accent">PULSE</span></span>
         </a>
         <div className="header-actions">
-          <span className="timezone-pill">
+          <span role="group" className="timezone-pill" title={`本地时区：${timeZone}`} aria-label={`本地时区 ${timeZone}，当前偏移 ${zoneOffset}`}>
             <svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="6.75" /><path d="M9 5v4.3l2.7 1.7" /></svg>
-            {timeZone.replace("Asia/", "")}
+            <span className="timezone-location">{timeZoneLocationLabel(timeZone)}</span>
+            <span className="timezone-offset">{zoneOffset}</span>
           </span>
           <button className="theme-button" type="button" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}>
             <span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
