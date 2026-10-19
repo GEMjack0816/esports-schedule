@@ -307,8 +307,8 @@ export function ScheduleDashboard({
   }
 
   async function copyFilterLink() {
-    const params = applyScheduleFilters(new URLSearchParams(window.location.search), filters);
-    const url = new URL(window.location.href);
+    const params = applyScheduleFilters(new URLSearchParams(), filters);
+    const url = new URL(window.location.pathname, window.location.origin);
     url.search = params.toString();
     try {
       await navigator.clipboard.writeText(url.toString());

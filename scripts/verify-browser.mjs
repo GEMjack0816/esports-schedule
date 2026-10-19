@@ -158,7 +158,8 @@ for (const profile of [
     const params = new URL(copiedScheduleUrl).searchParams;
     return params.get("game") === "lol"
       && params.get("status") === "running"
-      && params.get("q") === "share verification";
+      && params.get("q") === "share verification"
+      && !params.has("audit");
   })();
 
   const dateInput = page.locator('.filter-panel input[type="date"]');
