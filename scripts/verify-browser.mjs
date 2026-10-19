@@ -220,7 +220,6 @@ for (const profile of [
         && await page.locator(".favorite-filter-button").isDisabled();
     }
     if (!originalFavoriteLabel) errors.push("favorite: missing accessible team control label");
-    await secondaryPage.close();
 
     await page.getByRole("button", { name: "清除筛选", exact: true }).click();
     await page.evaluate(() => {
@@ -236,11 +235,10 @@ for (const profile of [
     });
     favoriteStorageFallbackWorks = await page.locator(".favorite-team-button[aria-pressed='true']").count() > 0
       && await page.getByText(/浏览器存储不可用，收藏仅暂存在本次页面/).count() === 1;
-    await page.evaluate(() => {
+    await secondaryPage.evaluate(() => {
       const key = "esports-schedule-favorite-teams-v1";
       const value = JSON.stringify([{ game: "honor-of-kings", teamName: "Storage Recovery Team" }]);
       window.localStorage.setItem(key, value);
-      window.dispatchEvent(new StorageEvent("storage", { key, newValue: value, storageArea: window.localStorage }));
     });
     await page.getByText("收藏仅保存在本设备浏览器", { exact: true }).waitFor();
     const recoveredFavoriteManager = page.locator(".favorite-team-manager");
@@ -252,6 +250,7 @@ for (const profile of [
     favoriteStorageRecoveryWorks = favoriteStorageRecoveryStatus === "收藏仅保存在本设备浏览器"
       && favoriteStorageRecoveryManagerCount === 1;
     favoriteStorageRecoveryDetails = { status: favoriteStorageRecoveryStatus, managerCount: favoriteStorageRecoveryManagerCount };
+    await secondaryPage.close();
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
