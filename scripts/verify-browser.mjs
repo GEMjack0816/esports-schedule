@@ -105,6 +105,20 @@ for (const profile of [
   await page.waitForFunction(() => new URL(location.href).searchParams.get("game") === "valorant");
   const browserForwardRestoresFilterState = await historyGameSelect.inputValue() === "valorant"
     && await page.locator(".filter-panel select").nth(2).inputValue() === "scheduled";
+  const historyLengthBeforeQuery = await page.evaluate(() => history.length);
+  await queryInput.fill("grouped query");
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("q") === "grouped query");
+  const historyLengthAfterFirstQuery = await page.evaluate(() => history.length);
+  await queryInput.fill("grouped query updated");
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("q") === "grouped query updated");
+  const queryEditsShareOneHistoryEntry = historyLengthAfterFirstQuery === historyLengthBeforeQuery + 1
+    && await page.evaluate(() => history.length) === historyLengthAfterFirstQuery;
+  await page.goBack({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("q") === "shareable-link-test");
+  const browserBackRestoresPreviousQuery = await queryInput.inputValue() === "shareable-link-test";
+  await page.goForward({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("q") === "grouped query updated");
+  const browserForwardRestoresLatestQuery = await queryInput.inputValue() === "grouped query updated";
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -257,6 +271,9 @@ for (const profile of [
     restoredFilterState,
     browserBackRestoresFilterState,
     browserForwardRestoresFilterState,
+    queryEditsShareOneHistoryEntry,
+    browserBackRestoresPreviousQuery,
+    browserForwardRestoresLatestQuery,
     gameFilterUrlSync,
     statusFilterUrlSync,
     shareLinkCopied,
@@ -323,6 +340,9 @@ for (const result of results) {
   }
   if (!result.browserBackRestoresFilterState) failures.push(`${prefix}: browser back did not restore the previous filter state`);
   if (!result.browserForwardRestoresFilterState) failures.push(`${prefix}: browser forward did not restore the next filter state`);
+  if (!result.queryEditsShareOneHistoryEntry) failures.push(`${prefix}: typing a query created more than one history entry`);
+  if (!result.browserBackRestoresPreviousQuery) failures.push(`${prefix}: browser back did not restore the previous search query`);
+  if (!result.browserForwardRestoresLatestQuery) failures.push(`${prefix}: browser forward did not restore the latest search query`);
   if (!result.gameFilterUrlSync) failures.push(`${prefix}: game filter was not written to the URL`);
   if (!result.statusFilterUrlSync) failures.push(`${prefix}: status filter was not written to the URL`);
   if (!result.shareLinkCopied) failures.push(`${prefix}: copied filter link is incomplete`);
