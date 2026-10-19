@@ -159,8 +159,9 @@ for (const profile of [
   let favoriteCrossTabWorks = false;
   let favoriteManagementWorks = false;
   let favoriteEmptyStateWorks = false;
-  const firstFavoriteButton = page.locator(".favorite-team-button").first();
-  if (await firstFavoriteButton.count() > 0) {
+  const eligibleFavoriteButtons = page.locator(".favorite-team-button:not(:disabled)");
+  const firstFavoriteButton = eligibleFavoriteButtons.first();
+  if (await eligibleFavoriteButtons.count() > 0) {
     favoriteFeatureAvailable = true;
     const unselectedFavoriteButton = firstFavoriteButton;
     const originalFavoriteLabel = await unselectedFavoriteButton.getAttribute("aria-label");
@@ -168,8 +169,10 @@ for (const profile of [
     await secondaryPage.goto(auditUrl.toString(), { waitUntil: "networkidle", timeout: 120_000 });
     await secondaryPage.getByRole("tab", { name: /全部收录/ }).click();
     const secondaryButton = secondaryPage.getByRole("button", { name: originalFavoriteLabel, exact: true });
-    const secondaryTabReady = await secondaryButton.count() === 1
-      && await secondaryButton.getAttribute("aria-pressed") === "false";
+    const secondaryTabReady = await secondaryButton.count() > 0
+      && await secondaryButton.evaluateAll((buttons) =>
+        buttons.every((button) => button.getAttribute("aria-pressed") === "false"),
+      );
     await unselectedFavoriteButton.click();
     const selectedFavoriteLabel = await page.locator(".favorite-team-button[aria-pressed='true']").first().getAttribute("aria-label");
     const updatedSecondaryTab = await secondaryPage.waitForFunction((label) =>
@@ -187,7 +190,7 @@ for (const profile of [
       : page.locator(".favorite-team-button[aria-pressed='true']").first();
     favoritePersistenceWorks = !!selectedFavoriteLabel
       && await persistedButton.count() > 0
-      && await persistedButton.getAttribute("aria-pressed") === "true";
+      && await persistedButton.first().getAttribute("aria-pressed") === "true";
     await page.locator(".favorite-filter-button").click();
     const filteredCards = page.locator(".match-card");
     const filteredCardCount = await filteredCards.count();
