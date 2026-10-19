@@ -5,8 +5,21 @@ export type FavoriteTeam = {
   teamName: string;
 };
 
+const placeholderTeamNames = new Set([
+  "待定",
+  "tbd",
+  "tba",
+  "to be determined",
+  "to be announced",
+  "unknown",
+]);
+
 export function normalizeFavoriteTeamName(teamName: string): string {
   return teamName.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+export function isPlaceholderTeamName(teamName: string): boolean {
+  return placeholderTeamNames.has(normalizeFavoriteTeamName(teamName));
 }
 
 export function favoriteTeamKey(game: GameKey, teamName: string): string {
@@ -37,7 +50,7 @@ export function parseFavoriteTeams(serialized: string): FavoriteTeam[] {
     ) continue;
 
     const teamName = item.teamName.normalize("NFKC").trim().replace(/\s+/g, " ");
-    if (!teamName) continue;
+    if (!teamName || isPlaceholderTeamName(teamName)) continue;
 
     const favorite = { game: item.game as GameKey, teamName };
     const key = favoriteTeamKey(favorite.game, favorite.teamName);
@@ -55,7 +68,7 @@ export function toggleFavoriteTeam(
   teamName: string,
 ): FavoriteTeam[] {
   const normalizedName = teamName.normalize("NFKC").trim().replace(/\s+/g, " ");
-  if (!normalizedName) return favorites;
+  if (!normalizedName || isPlaceholderTeamName(normalizedName)) return favorites;
 
   const key = favoriteTeamKey(game, normalizedName);
   if (favorites.some((favorite) => favoriteTeamKey(favorite.game, favorite.teamName) === key)) {

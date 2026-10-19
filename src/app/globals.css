@@ -235,6 +235,7 @@ a { color: inherit; text-decoration: none; }
 .favorite-team-button { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; }
 .favorite-team-button:hover, .favorite-team-button.is-favorite { color: #f6c85f; }
 .favorite-team-button.is-favorite { border-color: color-mix(in srgb, #f6c85f, transparent 78%); background: color-mix(in srgb, #f6c85f, transparent 93%); }
+.favorite-team-button:disabled { cursor: not-allowed; opacity: .45; }
 .team-winning .team-name, .team-winning .team-score { color: var(--foreground); }
 .team-winning .team-mark { color: var(--cyan); border-color: rgba(69,214,255,.4); }
 .match-meta-cell { display: grid; grid-template-columns: auto 1fr; align-content: center; gap: 10px 12px; }

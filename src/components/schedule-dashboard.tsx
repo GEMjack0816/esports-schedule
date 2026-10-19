@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
-import { favoriteTeamKey, parseFavoriteTeams, toggleFavoriteTeam } from "@/lib/schedule/favorites";
+import { favoriteTeamKey, isPlaceholderTeamName, parseFavoriteTeams, toggleFavoriteTeam } from "@/lib/schedule/favorites";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -134,6 +134,7 @@ function TeamRow({ game, team, score, winning, favorite, onToggleFavorite }: {
   favorite: boolean;
   onToggleFavorite: (game: GameKey, teamName: string) => void;
 }) {
+  const placeholder = isPlaceholderTeamName(team.name);
   return (
     <div className={`team-row ${winning ? "team-winning" : ""}`}>
       <span className="team-mark" aria-hidden="true">
@@ -152,9 +153,12 @@ function TeamRow({ game, team, score, winning, favorite, onToggleFavorite }: {
       <button
         className={`favorite-team-button ${favorite ? "is-favorite" : ""}`}
         type="button"
-        aria-label={`${favorite ? "取消收藏" : "收藏"} ${team.name}（${games[game].label}）`}
+        aria-label={placeholder
+          ? `${team.name}战队尚未确定，无法收藏（${games[game].label}）`
+          : `${favorite ? "取消收藏" : "收藏"} ${team.name}（${games[game].label}）`}
         aria-pressed={favorite}
-        title={`${favorite ? "取消收藏" : "收藏"} ${team.name}`}
+        title={placeholder ? "战队尚未确定" : `${favorite ? "取消收藏" : "收藏"} ${team.name}`}
+        disabled={placeholder}
         onClick={() => onToggleFavorite(game, team.name)}
       >
         <span aria-hidden="true">{favorite ? "★" : "☆"}</span>
