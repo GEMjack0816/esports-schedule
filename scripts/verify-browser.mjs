@@ -160,6 +160,8 @@ for (const profile of [
   let favoriteManagementWorks = false;
   let favoriteEmptyStateWorks = false;
   let favoriteStorageFallbackWorks = false;
+  let favoriteStorageRecoveryWorks = false;
+  let favoriteStorageRecoveryDetails = { status: "not tested", managerCount: 0 };
   const eligibleFavoriteButtons = page.locator(".favorite-team-button:not(:disabled)");
   const firstFavoriteButton = eligibleFavoriteButtons.first();
   if (await eligibleFavoriteButtons.count() > 0) {
@@ -234,6 +236,22 @@ for (const profile of [
     });
     favoriteStorageFallbackWorks = await page.locator(".favorite-team-button[aria-pressed='true']").count() > 0
       && await page.getByText(/浏览器存储不可用，收藏仅暂存在本次页面/).count() === 1;
+    await page.evaluate(() => {
+      const key = "esports-schedule-favorite-teams-v1";
+      const value = JSON.stringify([{ game: "honor-of-kings", teamName: "Storage Recovery Team" }]);
+      window.localStorage.setItem(key, value);
+      window.dispatchEvent(new StorageEvent("storage", { key, newValue: value, storageArea: window.localStorage }));
+    });
+    await page.getByText("收藏仅保存在本设备浏览器", { exact: true }).waitFor();
+    const recoveredFavoriteManager = page.locator(".favorite-team-manager");
+    await recoveredFavoriteManager.locator("summary").click();
+    const favoriteStorageRecoveryStatus = await page.locator(".favorite-filter-row span").innerText();
+    const favoriteStorageRecoveryManagerCount = await recoveredFavoriteManager.locator(
+      'button[aria-label="取消收藏 Storage Recovery Team（王者荣耀）"]',
+    ).count();
+    favoriteStorageRecoveryWorks = favoriteStorageRecoveryStatus === "收藏仅保存在本设备浏览器"
+      && favoriteStorageRecoveryManagerCount === 1;
+    favoriteStorageRecoveryDetails = { status: favoriteStorageRecoveryStatus, managerCount: favoriteStorageRecoveryManagerCount };
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
@@ -275,6 +293,8 @@ for (const profile of [
     favoriteManagementWorks,
     favoriteEmptyStateWorks,
     favoriteStorageFallbackWorks,
+    favoriteStorageRecoveryWorks,
+    favoriteStorageRecoveryDetails,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
@@ -332,6 +352,7 @@ for (const result of results) {
   if (result.favoriteFeatureAvailable && !result.favoriteManagementWorks) failures.push(`${prefix}: saved favorites could not be managed outside the current match results`);
   if (result.favoriteFeatureAvailable && !result.favoriteEmptyStateWorks) failures.push(`${prefix}: favorite filter empty state did not explain how to recover`);
   if (result.favoriteFeatureAvailable && !result.favoriteStorageFallbackWorks) failures.push(`${prefix}: storage failure was not disclosed while preserving in-page favorites`);
+  if (result.favoriteFeatureAvailable && !result.favoriteStorageRecoveryWorks) failures.push(`${prefix}: favorites did not recover after browser storage became available`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);

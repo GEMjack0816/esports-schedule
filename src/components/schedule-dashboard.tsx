@@ -25,7 +25,10 @@ const getBrowserTheme = (): Theme => document.documentElement.dataset.theme === 
 const getServerTheme = (): Theme => "dark";
 const subscribeToFavorites = (callback: () => void) => {
   const onStorage = (event: StorageEvent) => {
-    if (event.key === favoriteStorageKey || event.key === null) callback();
+    if (event.key === favoriteStorageKey || event.key === null) {
+      favoriteStorageUnavailable = false;
+      callback();
+    }
   };
   window.addEventListener("storage", onStorage);
   window.addEventListener("schedule-favorites-change", callback);
@@ -37,7 +40,9 @@ const subscribeToFavorites = (callback: () => void) => {
 const getBrowserFavoritesSnapshot = (): string => {
   if (favoriteStorageUnavailable) return favoriteMemorySnapshot;
   try {
-    return window.localStorage.getItem(favoriteStorageKey) ?? emptyFavoritesSnapshot;
+    const snapshot = window.localStorage.getItem(favoriteStorageKey) ?? emptyFavoritesSnapshot;
+    favoriteMemorySnapshot = snapshot;
+    return snapshot;
   } catch {
     favoriteStorageUnavailable = true;
     return favoriteMemorySnapshot;
