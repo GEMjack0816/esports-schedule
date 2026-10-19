@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { buildScheduleCalendar, isCalendarExportable } from "@/lib/schedule/calendar-export";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -158,6 +159,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [query, setQuery] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [calendarMessage, setCalendarMessage] = useState("");
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
@@ -227,6 +229,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
 
   const liveCount = payload.matches.filter((match) => match.status === "running").length;
   const upcomingCount = payload.matches.filter((match) => match.status === "scheduled").length;
+  const calendarExportCount = filtered.filter(isCalendarExportable).length;
 
   async function refreshSchedule() {
     setRefreshing(true);
@@ -240,6 +243,22 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
 
   function resetFilters() {
     setGame("all"); setLeague("all"); setStatus("all"); setQuery(""); setSelectedDate("");
+  }
+
+  function exportFilteredCalendar() {
+    const exportableMatches = filtered.filter(isCalendarExportable);
+    if (exportableMatches.length === 0) return;
+
+    const file = new Blob([buildScheduleCalendar(exportableMatches)], {
+      type: "text/calendar;charset=utf-8",
+    });
+    const objectUrl = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = `esports-schedule-${range}.ics`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+    setCalendarMessage(`已导出 ${exportableMatches.length} 场比赛到日历文件`);
   }
 
   function toggleTheme() {
@@ -332,6 +351,18 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <label><span className="sr-only">赛事</span><select value={league} onChange={(event) => setLeague(event.target.value)}><option value="all">全部赛事</option>{leagues.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
             <label><span className="sr-only">状态</span><select value={status} onChange={(event) => setStatus(event.target.value as MatchStatus | "all")}><option value="all">全部状态</option>{Object.entries(statusMeta).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
             <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt?.slice(0, 10)} max={payload.coverage.range.latestMatchAt?.slice(0, 10)} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
+          </div>
+
+          <div className="schedule-export-actions">
+            <button
+              type="button"
+              className="calendar-export-button"
+              onClick={exportFilteredCalendar}
+              disabled={calendarExportCount === 0}
+            >
+              导出筛选结果到日历（{calendarExportCount}）
+            </button>
+            <span role="status" aria-live="polite">{calendarMessage}</span>
           </div>
 
           <div className="match-list" aria-live="polite">

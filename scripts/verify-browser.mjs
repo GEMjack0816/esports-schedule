@@ -96,6 +96,26 @@ for (const profile of [
     statusFilterCounts[status] = await page.locator(".match-card").count();
   }
   await statusSelect.selectOption("all");
+  await page.getByRole("tab", { name: /全部收录/ }).click();
+  const calendarButton = page.getByRole("button", { name: /导出筛选结果到日历/ });
+  const calendarCountText = await calendarButton.innerText();
+  const calendarExportCount = Number(calendarCountText.match(/(\d+)/)?.[1] ?? 0);
+  let calendarExportWorks = calendarExportCount === 0 && await calendarButton.isDisabled();
+  if (calendarExportCount > 0) {
+    const downloadPromise = page.waitForEvent("download");
+    await calendarButton.click();
+    const download = await downloadPromise;
+    const stream = await download.createReadStream();
+    const chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    const calendarContent = Buffer.concat(chunks).toString("utf8");
+    const exportedEvents = calendarContent.match(/BEGIN:VEVENT/g)?.length ?? 0;
+    calendarExportWorks = download.suggestedFilename().endsWith(".ics")
+      && calendarContent.startsWith("BEGIN:VCALENDAR\r\n")
+      && calendarContent.endsWith("END:VCALENDAR\r\n")
+      && exportedEvents === calendarExportCount;
+    await page.getByRole("status").filter({ hasText: `已导出 ${calendarExportCount} 场比赛` }).waitFor();
+  }
   await page.getByRole("tab", { name: /^今日/ }).click();
 
   const apiResponsePromise = page.waitForResponse(
@@ -184,6 +204,8 @@ for (const profile of [
     gameOptions,
     gameFilterCounts,
     statusFilterCounts,
+    calendarExportCount,
+    calendarExportWorks,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -235,6 +257,7 @@ for (const result of results) {
   if (result.forbiddenHtmlPhrases.length > 0) failures.push(`${prefix}: demo text in HTML`);
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
+  if (!result.calendarExportWorks) failures.push(`${prefix}: filtered calendar export failed`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
