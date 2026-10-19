@@ -258,7 +258,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           <span>赛界<span className="brand-accent">PULSE</span></span>
         </a>
         <div className="header-actions">
-          <span className="timezone-pill" title={`本地时区：${timeZone}`} aria-label={`本地时区 ${timeZone}，当前偏移 ${zoneOffset}`}>
+          <span role="group" className="timezone-pill" title={`本地时区：${timeZone}`} aria-label={`本地时区 ${timeZone}，当前偏移 ${zoneOffset}`}>
             <svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="6.75" /><path d="M9 5v4.3l2.7 1.7" /></svg>
             <span className="timezone-location">{timeZoneLocationLabel(timeZone)}</span>
             <span className="timezone-offset">{zoneOffset}</span>
