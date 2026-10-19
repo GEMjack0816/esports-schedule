@@ -273,6 +273,46 @@ describe("schedule sync Worker client", () => {
     expect(configuration.workers_dev).toBe(false);
   });
 
+  it("keeps backup cron minute slots separate from the GitHub sync schedule", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const [configuration, workflow] = await Promise.all([
+      readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8").then(JSON.parse),
+      readFile(new URL("../../../.github/workflows/sync-schedule.yml", import.meta.url), "utf8"),
+    ]);
+    const githubCrons = [...workflow.matchAll(/^\s*-\s*cron:\s*["']([^"']+)["']\s*$/gm)]
+      .map((match) => match[1]);
+    const workerCrons = configuration.triggers.crons;
+
+    expect(githubCrons.length).toBeGreaterThan(0);
+    expect(workerCrons.length).toBeGreaterThan(0);
+
+    const minuteSlots = (expression) => {
+      const minuteField = expression.trim().split(/\s+/)[0];
+      const step = minuteField.match(/^\*\/(\d+)$/);
+      if (step) {
+        const interval = Number(step[1]);
+        if (!Number.isInteger(interval) || interval < 1 || interval > 60) return null;
+        return Array.from({ length: Math.ceil(60 / interval) }, (_, index) => index * interval);
+      }
+      if (minuteField === "*") return Array.from({ length: 60 }, (_, minute) => minute);
+      if (!/^\d+(?:,\d+)*$/.test(minuteField)) return null;
+      const values = minuteField.split(",").map(Number);
+      return values.every((minute) => Number.isInteger(minute) && minute >= 0 && minute < 60) ? values : null;
+    };
+
+    for (const githubCron of githubCrons) {
+      const githubSlots = minuteSlots(githubCron);
+      expect(githubSlots, `unsupported GitHub cron minute syntax: ${githubCron}`).not.toBeNull();
+      const githubMinutes = new Set(githubSlots);
+      for (const workerCron of workerCrons) {
+        const workerSlots = minuteSlots(workerCron);
+        expect(workerSlots, `unsupported Worker cron minute syntax: ${workerCron}`).not.toBeNull();
+        const collisions = workerSlots.filter((minute) => githubMinutes.has(minute));
+        expect(collisions, `${githubCron} overlaps ${workerCron} at minute(s) ${collisions.join(", ")}`).toEqual([]);
+      }
+    }
+  });
+
   it("logs only a safe summary and does not log the secret or provider body", async () => {
     const log = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const worker = createScheduleSyncWorker({ fetchImpl: async () => response(), log });
