@@ -98,10 +98,34 @@ for (const profile of [
   await statusSelect.selectOption("all");
   await page.getByRole("tab", { name: /全部收录/ }).click();
   const calendarButton = page.getByRole("button", { name: /导出筛选结果到日历/ });
-  const calendarCountText = await calendarButton.innerText();
-  const calendarExportCount = Number(calendarCountText.match(/(\d+)/)?.[1] ?? 0);
-  let calendarExportWorks = calendarExportCount === 0 && await calendarButton.isDisabled();
-  if (calendarExportCount > 0) {
+  const allCalendarCount = Number((await calendarButton.innerText()).match(/(\d+)/)?.[1] ?? 0);
+  const narrowGame = Object.entries(gameFilterCounts).find(([, count]) => count > 0 && count < allCalendarCount);
+  const narrowStatus = Object.entries(statusFilterCounts).find(([, count]) => count > 0 && count < allCalendarCount);
+  const emptyGame = Object.entries(gameFilterCounts).find(([, count]) => count < allCalendarCount);
+  let calendarExportCount = allCalendarCount;
+  let calendarExportFilter = "all";
+  let calendarExportWorks = allCalendarCount === 0 && await calendarButton.isDisabled();
+  const selectedCalendarFilter = narrowGame
+    ? { type: "game", value: narrowGame[0] }
+    : narrowStatus
+      ? { type: "status", value: narrowStatus[0] }
+      : emptyGame
+        ? { type: "game", value: emptyGame[0] }
+        : null;
+  if (selectedCalendarFilter) {
+    calendarExportFilter = `${selectedCalendarFilter.type}:${selectedCalendarFilter.value}`;
+    if (selectedCalendarFilter.type === "game") {
+      await gameSelect.selectOption(selectedCalendarFilter.value);
+    } else {
+      await statusSelect.selectOption(selectedCalendarFilter.value);
+    }
+    const visibleMatchCount = await page.locator(".match-card").count();
+    const filteredExportCount = Number((await calendarButton.innerText()).match(/(\d+)/)?.[1] ?? 0);
+    calendarExportCount = visibleMatchCount;
+    calendarExportWorks = filteredExportCount === visibleMatchCount
+      && (visibleMatchCount === 0 ? await calendarButton.isDisabled() : true);
+  }
+  if (calendarExportCount > 0 && calendarExportWorks) {
     const downloadPromise = page.waitForEvent("download");
     await calendarButton.click();
     const download = await downloadPromise;
@@ -115,7 +139,11 @@ for (const profile of [
       && calendarContent.endsWith("END:VCALENDAR\r\n")
       && exportedEvents === calendarExportCount;
     await page.getByRole("status").filter({ hasText: `已导出 ${calendarExportCount} 场比赛` }).waitFor();
+  } else if (calendarExportCount === 0) {
+    calendarExportWorks = calendarExportWorks && await calendarButton.isDisabled();
   }
+  await gameSelect.selectOption("all");
+  await statusSelect.selectOption("all");
   await page.getByRole("tab", { name: /^今日/ }).click();
 
   const apiResponsePromise = page.waitForResponse(
@@ -205,6 +233,7 @@ for (const profile of [
     gameFilterCounts,
     statusFilterCounts,
     calendarExportCount,
+    calendarExportFilter,
     calendarExportWorks,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
