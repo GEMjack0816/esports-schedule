@@ -21,13 +21,13 @@ export default async function AdminSubmissionsPage({
       <AdminNav />
       <h1>比赛提交</h1>
       <form className="admin-filters">
-        <select name="status" defaultValue={params.get("status") ?? ""}>
+        <select name="status" aria-label="提交状态" defaultValue={params.get("status") ?? ""}>
           <option value="">全部状态</option>
           <option value="pending">待审核</option>
           <option value="approved">已批准</option>
           <option value="rejected">已驳回</option>
         </select>
-        <input name="q" defaultValue={params.get("q") ?? ""} placeholder="搜索赛事或战队" />
+        <input name="q" aria-label="搜索赛事或战队" defaultValue={params.get("q") ?? ""} placeholder="搜索赛事或战队" />
         <button type="submit">筛选</button>
       </form>
       <div className="admin-table-wrap">
