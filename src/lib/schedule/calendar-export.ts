@@ -1,5 +1,19 @@
 import type { EsportsMatch } from "./types";
 
+const credentialParameters = new Set([
+  "access_token",
+  "api_key",
+  "apikey",
+  "auth",
+  "authorization",
+  "client_secret",
+  "password",
+  "secret",
+  "sig",
+  "signature",
+  "token",
+]);
+
 function utcDateTime(value: string | null): string | null {
   if (!value) return null;
   const timestamp = new Date(value);
@@ -43,14 +57,20 @@ function eventStatus(status: EsportsMatch["status"]): "CANCELLED" | "CONFIRMED" 
 }
 
 function safeStreamUrl(match: EsportsMatch): string | null {
-  const stream = match.streams[0];
-  if (!stream) return null;
-  try {
-    const url = new URL(stream.url);
-    return url.protocol === "https:" ? url.toString() : null;
-  } catch {
-    return null;
+  for (const stream of match.streams) {
+    try {
+      const url = new URL(stream.url);
+      const containsCredential = [...url.searchParams.keys()]
+        .some((key) => credentialParameters.has(key.toLowerCase()));
+      if (url.protocol === "https:" && !url.username && !url.password && !containsCredential) {
+        return url.toString();
+      }
+    } catch {
+      // Ignore malformed provider data and try the next stream.
+    }
   }
+
+  return null;
 }
 
 export function isCalendarExportable(match: EsportsMatch): boolean {

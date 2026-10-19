@@ -91,4 +91,19 @@ describe("schedule calendar export", () => {
     expect(content).not.toContain("URL:");
     expect(content).not.toContain("javascript:");
   });
+
+  it("omits stream URLs containing credentials and selects the next safe HTTPS link", () => {
+    const content = buildScheduleCalendar([match({
+      streams: [
+        { label: "userinfo", url: "https://viewer:password@stream.example/live" },
+        { label: "query credential", url: "https://stream.example/live?access_token=redacted" },
+        { label: "safe", url: "https://stream.example/channel" },
+      ],
+    })]);
+
+    expect(content).toContain("URL:https://stream.example/channel\r\n");
+    expect(content).not.toContain("viewer:password");
+    expect(content).not.toContain("access_token");
+    expect(content).not.toContain("redacted");
+  });
 });
