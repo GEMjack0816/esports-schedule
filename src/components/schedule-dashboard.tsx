@@ -422,6 +422,25 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             </button>
             <span>收藏仅保存在本设备浏览器</span>
           </div>
+          {favorites.length > 0 && (
+            <details className="favorite-team-manager">
+              <summary>管理收藏战队（{favorites.length}）</summary>
+              <ul>
+                {favorites.map((favorite) => (
+                  <li key={favoriteTeamKey(favorite.game, favorite.teamName)}>
+                    <span>{games[favorite.game].label} · {favorite.teamName}</span>
+                    <button
+                      type="button"
+                      aria-label={`取消收藏 ${favorite.teamName}（${games[favorite.game].label}）`}
+                      onClick={() => toggleFavorite(favorite.game, favorite.teamName)}
+                    >
+                      移除
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
 
           <div className="match-list" aria-live="polite">
             {grouped.length > 0 ? grouped.map(([key, matches]) => (

@@ -156,6 +156,7 @@ for (const profile of [
   let favoriteFeatureAvailable = false;
   let favoriteFilterWorks = false;
   let favoritePersistenceWorks = false;
+  let favoriteManagementWorks = false;
   const firstFavoriteButton = page.locator(".favorite-team-button").first();
   if (await firstFavoriteButton.count() > 0) {
     favoriteFeatureAvailable = true;
@@ -180,6 +181,20 @@ for (const profile of [
       cards.every((card) => card.querySelector(".favorite-team-button[aria-pressed='true']")),
     );
     favoriteFilterWorks = filterEnabledAfterSave && filteredCardCount > 0 && everyFilteredCardIncludesFavorite;
+    const manager = page.locator(".favorite-team-manager");
+    if (await manager.count() > 0) {
+      await manager.locator("summary").click();
+      const removeButton = manager.getByRole("button", { name: selectedFavoriteLabel, exact: true });
+      const managedFavoriteAvailable = await removeButton.count() === 1;
+      await page.locator(".date-field input").fill("2099-12-31");
+      const noMatchingCards = await page.locator(".match-card").count() === 0;
+      const remainsManageable = await manager.getByRole("button", { name: selectedFavoriteLabel, exact: true }).count() === 1;
+      await manager.getByRole("button", { name: selectedFavoriteLabel, exact: true }).click();
+      favoriteManagementWorks = managedFavoriteAvailable
+        && noMatchingCards
+        && remainsManageable
+        && await page.locator(".favorite-filter-button").isDisabled();
+    }
     if (!originalFavoriteLabel) errors.push("favorite: missing accessible team control label");
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
@@ -218,6 +233,7 @@ for (const profile of [
     favoriteFeatureAvailable,
     favoritePersistenceWorks,
     favoriteFilterWorks,
+    favoriteManagementWorks,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
@@ -271,6 +287,7 @@ for (const result of results) {
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.favoriteFeatureAvailable && !result.favoritePersistenceWorks) failures.push(`${prefix}: team favorites did not persist after reload`);
   if (result.favoriteFeatureAvailable && !result.favoriteFilterWorks) failures.push(`${prefix}: favorites-only filter returned non-favorite matches`);
+  if (result.favoriteFeatureAvailable && !result.favoriteManagementWorks) failures.push(`${prefix}: saved favorites could not be managed outside the current match results`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);

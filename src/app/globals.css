@@ -198,6 +198,14 @@ a { color: inherit; text-decoration: none; }
 .favorite-filter-button:hover:not(:disabled), .favorite-filter-button.is-active { border-color: var(--cyan); color: var(--cyan); }
 .favorite-filter-button:focus-visible, .favorite-team-button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .favorite-filter-button:disabled { cursor: not-allowed; opacity: .55; }
+.favorite-team-manager { margin: -18px 0 28px; color: var(--muted-bright); font-size: 12px; }
+.favorite-team-manager summary { width: fit-content; padding: 4px 0; cursor: pointer; }
+.favorite-team-manager summary:focus-visible, .favorite-team-manager button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+.favorite-team-manager ul { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; padding: 0; list-style: none; }
+.favorite-team-manager li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; max-width: 100%; min-height: 34px; padding: 4px 6px 4px 10px; border: 1px solid var(--line); background: var(--control-bg); }
+.favorite-team-manager li span { overflow-wrap: anywhere; }
+.favorite-team-manager li button { min-height: 26px; padding: 2px 7px; border: 1px solid var(--line); background: transparent; color: var(--muted-bright); font-size: 11px; cursor: pointer; }
+.favorite-team-manager li button:hover { border-color: var(--cyan); color: var(--cyan); }
 
 .date-group + .date-group { margin-top: 34px; }
 .date-divider { height: 32px; display: flex; align-items: center; gap: 14px; color: var(--muted-bright); font-size: 11px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; }
