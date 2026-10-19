@@ -123,7 +123,10 @@ function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string 
   const stream = match.streams[0];
 
   return (
-    <article className={`match-card ${match.status === "running" ? "match-live" : ""}`}>
+    <article
+      className={`match-card ${match.status === "running" ? "match-live" : ""}`}
+      data-calendar-exportable={isCalendarExportable(match) ? "true" : "false"}
+    >
       <div className="match-time-cell">
         <span className="match-time">{formatTime(match.startTimeUtc, timeZone)}</span>
         <span className="match-date">{formatDate(match.startTimeUtc, timeZone)}</span>

@@ -119,11 +119,11 @@ for (const profile of [
     } else {
       await statusSelect.selectOption(selectedCalendarFilter.value);
     }
-    const visibleMatchCount = await page.locator(".match-card").count();
+    const visibleExportableCount = await page.locator('.match-card[data-calendar-exportable="true"]').count();
     const filteredExportCount = Number((await calendarButton.innerText()).match(/(\d+)/)?.[1] ?? 0);
-    calendarExportCount = visibleMatchCount;
-    calendarExportWorks = filteredExportCount === visibleMatchCount
-      && (visibleMatchCount === 0 ? await calendarButton.isDisabled() : true);
+    calendarExportCount = visibleExportableCount;
+    calendarExportWorks = filteredExportCount === visibleExportableCount
+      && (visibleExportableCount === 0 ? await calendarButton.isDisabled() : true);
   }
   if (calendarExportCount > 0 && calendarExportWorks) {
     const downloadPromise = page.waitForEvent("download");
