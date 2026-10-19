@@ -157,6 +157,7 @@ for (const profile of [
   let favoriteFilterWorks = false;
   let favoritePersistenceWorks = false;
   let favoriteManagementWorks = false;
+  let favoriteEmptyStateWorks = false;
   const firstFavoriteButton = page.locator(".favorite-team-button").first();
   if (await firstFavoriteButton.count() > 0) {
     favoriteFeatureAvailable = true;
@@ -188,10 +189,14 @@ for (const profile of [
       const managedFavoriteAvailable = await removeButton.count() === 1;
       await page.locator(".date-field input").fill("2099-12-31");
       const noMatchingCards = await page.locator(".match-card").count() === 0;
+      const specificEmptyState = await page.getByRole("heading", { name: "收藏战队在当前筛选条件下暂无比赛" }).count() === 1;
+      await page.getByRole("button", { name: "关闭收藏筛选", exact: true }).click();
+      const favoritesFilterClosed = await page.locator(".favorite-filter-button").getAttribute("aria-pressed") === "false";
+      favoriteEmptyStateWorks = noMatchingCards && specificEmptyState && favoritesFilterClosed;
       const remainsManageable = await manager.getByRole("button", { name: selectedFavoriteLabel, exact: true }).count() === 1;
       await manager.getByRole("button", { name: selectedFavoriteLabel, exact: true }).click();
       favoriteManagementWorks = managedFavoriteAvailable
-        && noMatchingCards
+        && favoriteEmptyStateWorks
         && remainsManageable
         && await page.locator(".favorite-filter-button").isDisabled();
     }
@@ -234,6 +239,7 @@ for (const profile of [
     favoritePersistenceWorks,
     favoriteFilterWorks,
     favoriteManagementWorks,
+    favoriteEmptyStateWorks,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
@@ -288,6 +294,7 @@ for (const result of results) {
   if (result.favoriteFeatureAvailable && !result.favoritePersistenceWorks) failures.push(`${prefix}: team favorites did not persist after reload`);
   if (result.favoriteFeatureAvailable && !result.favoriteFilterWorks) failures.push(`${prefix}: favorites-only filter returned non-favorite matches`);
   if (result.favoriteFeatureAvailable && !result.favoriteManagementWorks) failures.push(`${prefix}: saved favorites could not be managed outside the current match results`);
+  if (result.favoriteFeatureAvailable && !result.favoriteEmptyStateWorks) failures.push(`${prefix}: favorite filter empty state did not explain how to recover`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);

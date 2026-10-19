@@ -320,6 +320,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   function toggleFavorite(gameKey: GameKey, teamName: string) {
     const nextFavorites = toggleFavoriteTeam(parseFavoriteTeams(getBrowserFavoritesSnapshot()), gameKey, teamName);
     writeFavoritesSnapshot(JSON.stringify(nextFavorites));
+    if (nextFavorites.length === 0) setFavoritesOnly(false);
   }
 
   function toggleTheme() {
@@ -455,7 +456,14 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
                 ))}
               </section>
             )) : (
-              <div className="empty-state"><span className="empty-glyph">⌁</span><h3>没有找到符合条件的比赛</h3><p>试试切换时间范围，或清除部分筛选条件。</p><button type="button" onClick={resetFilters}>清除筛选</button></div>
+              <div className="empty-state">
+                <span className="empty-glyph">⌁</span>
+                <h3>{favoritesOnly ? "收藏战队在当前筛选条件下暂无比赛" : "没有找到符合条件的比赛"}</h3>
+                <p>{favoritesOnly ? "试试扩大日期范围，或关闭收藏筛选。" : "试试切换时间范围，或清除部分筛选条件。"}</p>
+                {favoritesOnly
+                  ? <button type="button" onClick={() => setFavoritesOnly(false)}>关闭收藏筛选</button>
+                  : <button type="button" onClick={resetFilters}>清除筛选</button>}
+              </div>
             )}
           </div>
         </section>
