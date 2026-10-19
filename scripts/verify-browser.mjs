@@ -152,6 +152,36 @@ for (const profile of [
   } catch (error) {
     errors.push(`version-health:${error instanceof Error ? error.message : "request failed"}`);
   }
+  await page.getByRole("tab", { name: /全部收录/ }).click();
+  let favoriteFeatureAvailable = false;
+  let favoriteFilterWorks = false;
+  let favoritePersistenceWorks = false;
+  const firstFavoriteButton = page.locator(".favorite-team-button").first();
+  if (await firstFavoriteButton.count() > 0) {
+    favoriteFeatureAvailable = true;
+    const unselectedFavoriteButton = firstFavoriteButton;
+    const originalFavoriteLabel = await unselectedFavoriteButton.getAttribute("aria-label");
+    await unselectedFavoriteButton.click();
+    const selectedFavoriteLabel = await page.locator(".favorite-team-button[aria-pressed='true']").first().getAttribute("aria-label");
+    const favoriteFilterButton = page.locator(".favorite-filter-button");
+    const filterEnabledAfterSave = await favoriteFilterButton.isEnabled();
+    await page.reload({ waitUntil: "networkidle", timeout: 120_000 });
+    await page.getByRole("tab", { name: /全部收录/ }).click();
+    const persistedButton = selectedFavoriteLabel
+      ? page.getByRole("button", { name: selectedFavoriteLabel, exact: true })
+      : page.locator(".favorite-team-button[aria-pressed='true']").first();
+    favoritePersistenceWorks = !!selectedFavoriteLabel
+      && await persistedButton.count() > 0
+      && await persistedButton.getAttribute("aria-pressed") === "true";
+    await page.locator(".favorite-filter-button").click();
+    const filteredCards = page.locator(".match-card");
+    const filteredCardCount = await filteredCards.count();
+    const everyFilteredCardIncludesFavorite = filteredCardCount > 0 && await filteredCards.evaluateAll((cards) =>
+      cards.every((card) => card.querySelector(".favorite-team-button[aria-pressed='true']")),
+    );
+    favoriteFilterWorks = filterEnabledAfterSave && filteredCardCount > 0 && everyFilteredCardIncludesFavorite;
+    if (!originalFavoriteLabel) errors.push("favorite: missing accessible team control label");
+  }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
   const adminResponse = await page.goto(`${baseUrl}/admin`, {
@@ -185,6 +215,9 @@ for (const profile of [
     gameFilterCounts,
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
+    favoriteFeatureAvailable,
+    favoritePersistenceWorks,
+    favoriteFilterWorks,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
@@ -236,6 +269,8 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (result.favoriteFeatureAvailable && !result.favoritePersistenceWorks) failures.push(`${prefix}: team favorites did not persist after reload`);
+  if (result.favoriteFeatureAvailable && !result.favoriteFilterWorks) failures.push(`${prefix}: favorites-only filter returned non-favorite matches`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);

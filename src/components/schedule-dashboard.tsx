@@ -5,9 +5,14 @@ import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { favoriteTeamKey, parseFavoriteTeams, toggleFavoriteTeam } from "@/lib/schedule/favorites";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
+const favoriteStorageKey = "esports-schedule-favorite-teams-v1";
+const emptyFavoritesSnapshot = "[]";
+let favoriteMemorySnapshot = emptyFavoritesSnapshot;
+let favoriteStorageUnavailable = false;
 
 const subscribeToTimeZone = () => () => undefined;
 const getBrowserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -18,6 +23,38 @@ const subscribeToTheme = (callback: () => void) => {
 };
 const getBrowserTheme = (): Theme => document.documentElement.dataset.theme === "light" ? "light" : "dark";
 const getServerTheme = (): Theme => "dark";
+const subscribeToFavorites = (callback: () => void) => {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === favoriteStorageKey || event.key === null) callback();
+  };
+  window.addEventListener("storage", onStorage);
+  window.addEventListener("schedule-favorites-change", callback);
+  return () => {
+    window.removeEventListener("storage", onStorage);
+    window.removeEventListener("schedule-favorites-change", callback);
+  };
+};
+const getBrowserFavoritesSnapshot = (): string => {
+  if (favoriteStorageUnavailable) return favoriteMemorySnapshot;
+  try {
+    return window.localStorage.getItem(favoriteStorageKey) ?? emptyFavoritesSnapshot;
+  } catch {
+    favoriteStorageUnavailable = true;
+    return favoriteMemorySnapshot;
+  }
+};
+const getServerFavoritesSnapshot = (): string => emptyFavoritesSnapshot;
+
+function writeFavoritesSnapshot(snapshot: string) {
+  favoriteMemorySnapshot = snapshot;
+  try {
+    window.localStorage.setItem(favoriteStorageKey, snapshot);
+    favoriteStorageUnavailable = false;
+  } catch {
+    favoriteStorageUnavailable = true;
+  }
+  window.dispatchEvent(new Event("schedule-favorites-change"));
+}
 
 const games: Record<GameKey, { label: string; short: string; color: string }> = {
   lol: { label: "英雄联盟", short: "LOL", color: "#45d6ff" },
@@ -89,10 +126,13 @@ function MatchStatusBadge({ status }: { status: MatchStatus }) {
   );
 }
 
-function TeamRow({ team, score, winning }: {
+function TeamRow({ game, team, score, winning, favorite, onToggleFavorite }: {
+  game: GameKey;
   team: EsportsMatch["homeTeam"];
   score: number | null;
   winning: boolean;
+  favorite: boolean;
+  onToggleFavorite: (game: GameKey, teamName: string) => void;
 }) {
   return (
     <div className={`team-row ${winning ? "team-winning" : ""}`}>
@@ -109,11 +149,26 @@ function TeamRow({ team, score, winning }: {
       </span>
       <span className="team-name">{team.name}</span>
       <span className="team-score">{score ?? "–"}</span>
+      <button
+        className={`favorite-team-button ${favorite ? "is-favorite" : ""}`}
+        type="button"
+        aria-label={`${favorite ? "取消收藏" : "收藏"} ${team.name}（${games[game].label}）`}
+        aria-pressed={favorite}
+        title={`${favorite ? "取消收藏" : "收藏"} ${team.name}`}
+        onClick={() => onToggleFavorite(game, team.name)}
+      >
+        <span aria-hidden="true">{favorite ? "★" : "☆"}</span>
+      </button>
     </div>
   );
 }
 
-function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string }) {
+function MatchCard({ match, timeZone, favoriteKeys, onToggleFavorite }: {
+  match: EsportsMatch;
+  timeZone: string;
+  favoriteKeys: ReadonlySet<string>;
+  onToggleFavorite: (game: GameKey, teamName: string) => void;
+}) {
   const game = games[match.game];
   const scoreA = match.homeScore;
   const scoreB = match.awayScore;
@@ -132,8 +187,10 @@ function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string 
         <div><h3>{match.league}</h3><p>{[match.tournament, match.stage].filter(Boolean).join(" · ") || "赛程待更新"}</p></div>
       </div>
       <div className="match-teams-cell">
-        <TeamRow team={match.homeTeam} score={scoreA} winning={firstWins} />
-        <TeamRow team={match.awayTeam} score={scoreB} winning={secondWins} />
+        <TeamRow game={match.game} team={match.homeTeam} score={scoreA} winning={firstWins}
+          favorite={favoriteKeys.has(favoriteTeamKey(match.game, match.homeTeam.name))} onToggleFavorite={onToggleFavorite} />
+        <TeamRow game={match.game} team={match.awayTeam} score={scoreB} winning={secondWins}
+          favorite={favoriteKeys.has(favoriteTeamKey(match.game, match.awayTeam.name))} onToggleFavorite={onToggleFavorite} />
       </div>
       <div className="match-meta-cell">
         <span className="bo-label">{match.bestOf ? `BO${match.bestOf}` : "BO待定"}</span>
@@ -157,7 +214,18 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [status, setStatus] = useState<MatchStatus | "all">("all");
   const [query, setQuery] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const favoritesSnapshot = useSyncExternalStore(
+    subscribeToFavorites,
+    getBrowserFavoritesSnapshot,
+    getServerFavoritesSnapshot,
+  );
+  const favorites = useMemo(() => parseFavoriteTeams(favoritesSnapshot), [favoritesSnapshot]);
+  const favoriteKeys = useMemo(
+    () => new Set(favorites.map((favorite) => favoriteTeamKey(favorite.game, favorite.teamName))),
+    [favorites],
+  );
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
@@ -208,9 +276,12 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
         && (game === "all" || match.game === game)
         && (league === "all" || match.league === league)
         && (status === "all" || match.status === status)
+        && (!favoritesOnly
+          || favoriteKeys.has(favoriteTeamKey(match.game, match.homeTeam.name))
+          || favoriteKeys.has(favoriteTeamKey(match.game, match.awayTeam.name)))
         && (!normalizedQuery || haystack.includes(normalizedQuery));
     });
-  }, [game, league, payload.matches, query, range, selectedDate, sevenDaysOut, status, timeZone, today, tomorrow]);
+  }, [favoriteKeys, favoritesOnly, game, league, payload.matches, query, range, selectedDate, sevenDaysOut, status, timeZone, today, tomorrow]);
 
   const grouped = useMemo(() => {
     const groups = new Map<string, EsportsMatch[]>();
@@ -239,7 +310,12 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   }
 
   function resetFilters() {
-    setGame("all"); setLeague("all"); setStatus("all"); setQuery(""); setSelectedDate("");
+    setGame("all"); setLeague("all"); setStatus("all"); setQuery(""); setSelectedDate(""); setFavoritesOnly(false);
+  }
+
+  function toggleFavorite(gameKey: GameKey, teamName: string) {
+    const nextFavorites = toggleFavoriteTeam(parseFavoriteTeams(getBrowserFavoritesSnapshot()), gameKey, teamName);
+    writeFavoritesSnapshot(JSON.stringify(nextFavorites));
   }
 
   function toggleTheme() {
@@ -334,11 +410,26 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt?.slice(0, 10)} max={payload.coverage.range.latestMatchAt?.slice(0, 10)} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
           </div>
 
+          <div className="favorite-filter-row">
+            <button
+              type="button"
+              className={`favorite-filter-button ${favoritesOnly ? "is-active" : ""}`}
+              aria-pressed={favoritesOnly}
+              disabled={favorites.length === 0}
+              onClick={() => setFavoritesOnly((current) => !current)}
+            >
+              {favoritesOnly ? "★ 正在筛选收藏" : "☆ 只看收藏战队"}（{favorites.length}）
+            </button>
+            <span>收藏仅保存在本设备浏览器</span>
+          </div>
+
           <div className="match-list" aria-live="polite">
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
               <section className="date-group" key={key}>
                 <div className="date-divider"><span>{formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
-                {matches.map((match) => <MatchCard match={match} timeZone={timeZone} key={match.id} />)}
+                {matches.map((match) => (
+                  <MatchCard match={match} timeZone={timeZone} favoriteKeys={favoriteKeys} onToggleFavorite={toggleFavorite} key={match.id} />
+                ))}
               </section>
             )) : (
               <div className="empty-state"><span className="empty-glyph">⌁</span><h3>没有找到符合条件的比赛</h3><p>试试切换时间范围，或清除部分筛选条件。</p><button type="button" onClick={resetFilters}>清除筛选</button></div>
