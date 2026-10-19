@@ -152,6 +152,106 @@ for (const profile of [
   } catch (error) {
     errors.push(`version-health:${error instanceof Error ? error.message : "request failed"}`);
   }
+  await page.getByRole("tab", { name: /全部收录/ }).click();
+  let favoriteFeatureAvailable = false;
+  let favoriteFilterWorks = false;
+  let favoritePersistenceWorks = false;
+  let favoriteCrossTabWorks = false;
+  let favoriteManagementWorks = false;
+  let favoriteEmptyStateWorks = false;
+  let favoriteStorageFallbackWorks = false;
+  let favoriteStorageRecoveryWorks = false;
+  let favoriteStorageRecoveryDetails = { status: "not tested", managerCount: 0 };
+  const eligibleFavoriteButtons = page.locator(".favorite-team-button:not(:disabled)");
+  const firstFavoriteButton = eligibleFavoriteButtons.first();
+  if (await eligibleFavoriteButtons.count() > 0) {
+    favoriteFeatureAvailable = true;
+    const unselectedFavoriteButton = firstFavoriteButton;
+    const originalFavoriteLabel = await unselectedFavoriteButton.getAttribute("aria-label");
+    const secondaryPage = await context.newPage();
+    await secondaryPage.goto(auditUrl.toString(), { waitUntil: "networkidle", timeout: 120_000 });
+    await secondaryPage.getByRole("tab", { name: /全部收录/ }).click();
+    const secondaryButton = secondaryPage.getByRole("button", { name: originalFavoriteLabel, exact: true });
+    const secondaryTabReady = await secondaryButton.count() > 0
+      && await secondaryButton.evaluateAll((buttons) =>
+        buttons.every((button) => button.getAttribute("aria-pressed") === "false"),
+      );
+    await unselectedFavoriteButton.click();
+    const selectedFavoriteLabel = await page.locator(".favorite-team-button[aria-pressed='true']").first().getAttribute("aria-label");
+    const updatedSecondaryTab = await secondaryPage.waitForFunction((label) =>
+      Array.from(document.querySelectorAll(".favorite-team-button")).some((button) =>
+        button.getAttribute("aria-label") === label && button.getAttribute("aria-pressed") === "true",
+      ), selectedFavoriteLabel, { timeout: 5_000 },
+    ).then(() => true).catch(() => false);
+    favoriteCrossTabWorks = secondaryTabReady && !!selectedFavoriteLabel && updatedSecondaryTab;
+    const favoriteFilterButton = page.locator(".favorite-filter-button");
+    const filterEnabledAfterSave = await favoriteFilterButton.isEnabled();
+    await page.reload({ waitUntil: "networkidle", timeout: 120_000 });
+    await page.getByRole("tab", { name: /全部收录/ }).click();
+    const persistedButton = selectedFavoriteLabel
+      ? page.getByRole("button", { name: selectedFavoriteLabel, exact: true })
+      : page.locator(".favorite-team-button[aria-pressed='true']").first();
+    favoritePersistenceWorks = !!selectedFavoriteLabel
+      && await persistedButton.count() > 0
+      && await persistedButton.first().getAttribute("aria-pressed") === "true";
+    await page.locator(".favorite-filter-button").click();
+    const filteredCards = page.locator(".match-card");
+    const filteredCardCount = await filteredCards.count();
+    const everyFilteredCardIncludesFavorite = filteredCardCount > 0 && await filteredCards.evaluateAll((cards) =>
+      cards.every((card) => card.querySelector(".favorite-team-button[aria-pressed='true']")),
+    );
+    favoriteFilterWorks = filterEnabledAfterSave && filteredCardCount > 0 && everyFilteredCardIncludesFavorite;
+    const manager = page.locator(".favorite-team-manager");
+    if (await manager.count() > 0) {
+      await manager.locator("summary").click();
+      const removeButton = manager.getByRole("button", { name: selectedFavoriteLabel, exact: true });
+      const managedFavoriteAvailable = await removeButton.count() === 1;
+      await page.locator(".date-field input").fill("2099-12-31");
+      const noMatchingCards = await page.locator(".match-card").count() === 0;
+      const specificEmptyState = await page.getByRole("heading", { name: "收藏战队在当前筛选条件下暂无比赛" }).count() === 1;
+      await page.getByRole("button", { name: "关闭收藏筛选", exact: true }).click();
+      const favoritesFilterClosed = await page.locator(".favorite-filter-button").getAttribute("aria-pressed") === "false";
+      favoriteEmptyStateWorks = noMatchingCards && specificEmptyState && favoritesFilterClosed;
+      const remainsManageable = await manager.getByRole("button", { name: selectedFavoriteLabel, exact: true }).count() === 1;
+      await manager.getByRole("button", { name: selectedFavoriteLabel, exact: true }).click();
+      favoriteManagementWorks = managedFavoriteAvailable
+        && favoriteEmptyStateWorks
+        && remainsManageable
+        && await page.locator(".favorite-filter-button").isDisabled();
+    }
+    if (!originalFavoriteLabel) errors.push("favorite: missing accessible team control label");
+
+    await page.getByRole("button", { name: "清除筛选", exact: true }).click();
+    await page.evaluate(() => {
+      const originalSetItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value) {
+        if (key === "esports-schedule-favorite-teams-v1") {
+          throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+        }
+        return originalSetItem.call(this, key, value);
+      };
+      document.querySelector(".favorite-team-button:not(:disabled)")?.click();
+      Storage.prototype.setItem = originalSetItem;
+    });
+    favoriteStorageFallbackWorks = await page.locator(".favorite-team-button[aria-pressed='true']").count() > 0
+      && await page.getByText(/浏览器存储不可用，收藏仅暂存在本次页面/).count() === 1;
+    await secondaryPage.evaluate(() => {
+      const key = "esports-schedule-favorite-teams-v1";
+      const value = JSON.stringify([{ game: "honor-of-kings", teamName: "Storage Recovery Team" }]);
+      window.localStorage.setItem(key, value);
+    });
+    await page.getByText("收藏仅保存在本设备浏览器", { exact: true }).waitFor();
+    const recoveredFavoriteManager = page.locator(".favorite-team-manager");
+    await recoveredFavoriteManager.locator("summary").click();
+    const favoriteStorageRecoveryStatus = await page.locator(".favorite-filter-row span").innerText();
+    const favoriteStorageRecoveryManagerCount = await recoveredFavoriteManager.locator(
+      'button[aria-label="取消收藏 Storage Recovery Team（王者荣耀）"]',
+    ).count();
+    favoriteStorageRecoveryWorks = favoriteStorageRecoveryStatus === "收藏仅保存在本设备浏览器"
+      && favoriteStorageRecoveryManagerCount === 1;
+    favoriteStorageRecoveryDetails = { status: favoriteStorageRecoveryStatus, managerCount: favoriteStorageRecoveryManagerCount };
+    await secondaryPage.close();
+  }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
   const adminResponse = await page.goto(`${baseUrl}/admin`, {
@@ -185,6 +285,15 @@ for (const profile of [
     gameFilterCounts,
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
+    favoriteFeatureAvailable,
+    favoritePersistenceWorks,
+    favoriteCrossTabWorks,
+    favoriteFilterWorks,
+    favoriteManagementWorks,
+    favoriteEmptyStateWorks,
+    favoriteStorageFallbackWorks,
+    favoriteStorageRecoveryWorks,
+    favoriteStorageRecoveryDetails,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
@@ -236,6 +345,13 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (result.favoriteFeatureAvailable && !result.favoritePersistenceWorks) failures.push(`${prefix}: team favorites did not persist after reload`);
+  if (result.favoriteFeatureAvailable && !result.favoriteCrossTabWorks) failures.push(`${prefix}: favorite changes did not update a second open tab`);
+  if (result.favoriteFeatureAvailable && !result.favoriteFilterWorks) failures.push(`${prefix}: favorites-only filter returned non-favorite matches`);
+  if (result.favoriteFeatureAvailable && !result.favoriteManagementWorks) failures.push(`${prefix}: saved favorites could not be managed outside the current match results`);
+  if (result.favoriteFeatureAvailable && !result.favoriteEmptyStateWorks) failures.push(`${prefix}: favorite filter empty state did not explain how to recover`);
+  if (result.favoriteFeatureAvailable && !result.favoriteStorageFallbackWorks) failures.push(`${prefix}: storage failure was not disclosed while preserving in-page favorites`);
+  if (result.favoriteFeatureAvailable && !result.favoriteStorageRecoveryWorks) failures.push(`${prefix}: favorites did not recover after browser storage became available`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
