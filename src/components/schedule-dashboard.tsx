@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
-import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { addDaysKey, dateKeyInTimeZone, dateRangeBoundsInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -168,6 +168,11 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const today = addDaysKey(0, timeZone);
   const tomorrow = addDaysKey(1, timeZone);
   const sevenDaysOut = addDaysKey(6, timeZone);
+  const dateBounds = dateRangeBoundsInTimeZone(
+    payload.coverage.range.earliestMatchAt,
+    payload.coverage.range.latestMatchAt,
+    timeZone,
+  );
 
   const rangeCounts = useMemo(() => {
     const counts: Record<RangeKey, number> = { today: 0, tomorrow: 0, seven: 0, history: 0, all: 0 };
@@ -331,7 +336,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <label><span className="sr-only">游戏</span><select value={game} onChange={(event) => setGame(event.target.value as GameKey | "all")}><option value="all">全部游戏</option>{Object.entries(games).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
             <label><span className="sr-only">赛事</span><select value={league} onChange={(event) => setLeague(event.target.value)}><option value="all">全部赛事</option>{leagues.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
             <label><span className="sr-only">状态</span><select value={status} onChange={(event) => setStatus(event.target.value as MatchStatus | "all")}><option value="all">全部状态</option>{Object.entries(statusMeta).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
-            <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt?.slice(0, 10)} max={payload.coverage.range.latestMatchAt?.slice(0, 10)} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
+            <label className="date-field"><span className="sr-only">日期</span><input type="date" min={dateBounds.min} max={dateBounds.max} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
           </div>
 
           <div className="match-list" aria-live="polite">
