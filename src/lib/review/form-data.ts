@@ -1,5 +1,7 @@
 import "server-only";
 
+import { normalizeUtcDateTimeInput } from "./utc-datetime-input";
+
 function text(form: FormData, key: string): string {
   return String(form.get(key) ?? "");
 }
@@ -15,7 +17,7 @@ export function submissionFromForm(form: FormData) {
     league: text(form, "submission.league"),
     teamA: text(form, "submission.teamA"),
     teamB: text(form, "submission.teamB"),
-    scheduledAt: text(form, "submission.scheduledAt"),
+    scheduledAt: normalizeUtcDateTimeInput(text(form, "submission.scheduledAt")),
     bestOf: nullable(form, "submission.bestOf"),
     sourceUrl: text(form, "submission.sourceUrl"),
     notes: nullable(form, "submission.notes"),
@@ -35,7 +37,7 @@ export function publishedFromForm(form: FormData) {
     awayTeamName: text(form, `${prefix}awayTeamName`),
     awayTeamAcronym: nullable(form, `${prefix}awayTeamAcronym`),
     awayTeamLogo: nullable(form, `${prefix}awayTeamLogo`),
-    startTimeUtc: nullable(form, `${prefix}startTimeUtc`),
+    startTimeUtc: normalizeUtcDateTimeInput(nullable(form, `${prefix}startTimeUtc`)),
     bestOf: nullable(form, `${prefix}bestOf`),
     status: text(form, `${prefix}status`),
     homeScore: nullable(form, `${prefix}homeScore`),

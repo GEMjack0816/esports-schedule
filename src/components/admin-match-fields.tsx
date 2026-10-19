@@ -1,11 +1,6 @@
 import type { MatchSubmissionRow, PublishedManualMatchRow } from "@/db/schema";
 import type { PublishedMatchWrite } from "@/lib/review/types";
-
-function localInputValue(value: Date | string | null): string {
-  if (!value) return "";
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 16);
-}
+import { utcDateTimeLocalValue } from "@/lib/review/utc-datetime-input";
 
 export function SubmissionFields({ row }: { row: MatchSubmissionRow }) {
   return (
@@ -15,7 +10,7 @@ export function SubmissionFields({ row }: { row: MatchSubmissionRow }) {
       <label>赛事<input name="submission.league" defaultValue={row.league} required /></label>
       <label>战队 A<input name="submission.teamA" defaultValue={row.teamA} required /></label>
       <label>战队 B<input name="submission.teamB" defaultValue={row.teamB} required /></label>
-      <label>开始时间<input name="submission.scheduledAt" type="datetime-local" defaultValue={localInputValue(row.scheduledAt)} required /></label>
+      <label>开始时间（UTC）<input name="submission.scheduledAt" type="datetime-local" step="0.001" defaultValue={utcDateTimeLocalValue(row.scheduledAt)} required /></label>
       <label>BO<input name="submission.bestOf" type="number" min="1" max="9" defaultValue={row.bestOf ?? ""} /></label>
       <label>来源<input name="submission.sourceUrl" type="url" defaultValue={row.sourceUrl} required /></label>
       <label>备注<textarea name="submission.notes" defaultValue={row.notes ?? ""} /></label>
@@ -41,7 +36,7 @@ export function PublishedMatchFields({
       <label>客队<input name="published.awayTeamName" defaultValue={value.awayTeamName} required /></label>
       <label>客队简称<input name="published.awayTeamAcronym" defaultValue={value.awayTeamAcronym ?? ""} /></label>
       <label>客队 Logo<input name="published.awayTeamLogo" type="url" defaultValue={value.awayTeamLogo ?? ""} /></label>
-      <label>开始时间<input name="published.startTimeUtc" type="datetime-local" defaultValue={localInputValue(value.startTimeUtc)} /></label>
+      <label>开始时间（UTC）<input name="published.startTimeUtc" type="datetime-local" step="0.001" defaultValue={utcDateTimeLocalValue(value.startTimeUtc)} /></label>
       <label>BO<input name="published.bestOf" type="number" min="1" max="9" defaultValue={value.bestOf ?? ""} /></label>
       <label>状态<select name="published.status" defaultValue={value.status}>
         {["scheduled", "running", "finished", "postponed", "cancelled", "forfeit", "unknown"].map((status) => (
