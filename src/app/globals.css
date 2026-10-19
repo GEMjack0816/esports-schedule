@@ -113,6 +113,7 @@ a { color: inherit; text-decoration: none; }
 .header-actions { display: flex; align-items: center; gap: 10px; }
 .timezone-pill, .refresh-button, .theme-button { height: 38px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); color: var(--muted-bright); background: var(--control-bg); font-size: 12px; padding: 0 13px; }
 .timezone-pill svg, .refresh-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.timezone-offset { color: var(--cyan); font-family: var(--font-geist-mono), ui-monospace, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .refresh-button { cursor: pointer; transition: .2s ease; }
 .theme-button { width: 38px; justify-content: center; padding: 0; cursor: pointer; font-size: 16px; }
 .theme-button:hover { color: var(--cyan); border-color: var(--cyan); }
@@ -282,7 +283,8 @@ a { color: inherit; text-decoration: none; }
 
 @media (max-width: 720px) {
   .site-header { height: 68px; }
-  .timezone-pill { display: none; }
+  .timezone-pill { gap: 6px; padding: 0 9px; }
+  .timezone-pill svg, .timezone-location { display: none; }
   .refresh-button span { display: none; }
   .refresh-button { width: 38px; padding: 0; justify-content: center; }
   .hero-section { padding-top: 56px; padding-bottom: 52px; gap: 38px; }
