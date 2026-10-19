@@ -43,9 +43,13 @@ for (const profile of [
   auditUrl.searchParams.set("status", "scheduled");
   auditUrl.searchParams.set("q", "shareable-link-test");
   await page.addInitScript(() => {
+    window.__clipboardShouldFail = false;
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
-      value: { writeText: async (value) => { window.__copiedScheduleUrl = value; } },
+      value: { writeText: async (value) => {
+        if (window.__clipboardShouldFail) throw new Error("clipboard blocked");
+        window.__copiedScheduleUrl = value;
+      } },
     });
   });
   page.on("console", (message) => {
@@ -160,6 +164,23 @@ for (const profile of [
       && params.get("status") === "running"
       && params.get("q") === "share verification"
       && !params.has("audit");
+  })();
+  await page.evaluate(() => { window.__clipboardShouldFail = true; });
+  await page.getByRole("button", { name: "复制筛选链接" }).click();
+  await page.getByRole("status").filter({ hasText: "复制失败，请手动复制下方链接" }).waitFor();
+  const fallbackLinkInput = page.getByLabel("手动复制筛选链接");
+  const fallbackLinkValue = await fallbackLinkInput.inputValue();
+  await fallbackLinkInput.focus();
+  const fallbackInputSelectsLink = await fallbackLinkInput.evaluate(
+    (input) => input.selectionStart === 0 && input.selectionEnd === input.value.length,
+  );
+  const manualCopyFallbackWorks = (() => {
+    const params = new URL(fallbackLinkValue).searchParams;
+    return params.get("game") === "lol"
+      && params.get("status") === "running"
+      && params.get("q") === "share verification"
+      && !params.has("audit")
+      && fallbackInputSelectsLink;
   })();
 
   const dateInput = page.locator('.filter-panel input[type="date"]');
@@ -278,6 +299,7 @@ for (const profile of [
     gameFilterUrlSync,
     statusFilterUrlSync,
     shareLinkCopied,
+    manualCopyFallbackWorks,
     dateFilterUrlSync,
     noRangeSelectedForCustomDate,
     rangeClearsSelectedDate,
@@ -347,6 +369,7 @@ for (const result of results) {
   if (!result.gameFilterUrlSync) failures.push(`${prefix}: game filter was not written to the URL`);
   if (!result.statusFilterUrlSync) failures.push(`${prefix}: status filter was not written to the URL`);
   if (!result.shareLinkCopied) failures.push(`${prefix}: copied filter link is incomplete`);
+  if (!result.manualCopyFallbackWorks) failures.push(`${prefix}: clipboard failure did not expose a selectable sanitized link`);
   if (!result.dateFilterUrlSync) failures.push(`${prefix}: selected date was not written to the URL`);
   if (!result.noRangeSelectedForCustomDate) failures.push(`${prefix}: custom date left a misleading range tab selected`);
   if (!result.rangeClearsSelectedDate) failures.push(`${prefix}: quick range did not clear the custom date`);

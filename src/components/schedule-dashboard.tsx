@@ -171,6 +171,7 @@ export function ScheduleDashboard({
   const [selectedDate, setSelectedDate] = useState(initialFilters.selectedDate);
   const [refreshing, setRefreshing] = useState(false);
   const [shareMessage, setShareMessage] = useState("");
+  const [shareFallbackUrl, setShareFallbackUrl] = useState("");
   const queryHistoryEntryPushed = useRef(false);
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
@@ -310,11 +311,14 @@ export function ScheduleDashboard({
     const params = applyScheduleFilters(new URLSearchParams(), filters);
     const url = new URL(window.location.pathname, window.location.origin);
     url.search = params.toString();
+    const shareUrl = url.toString();
     try {
-      await navigator.clipboard.writeText(url.toString());
+      await navigator.clipboard.writeText(shareUrl);
+      setShareFallbackUrl("");
       setShareMessage("筛选链接已复制");
     } catch {
-      setShareMessage("复制失败，可复制浏览器地址栏链接");
+      setShareFallbackUrl(shareUrl);
+      setShareMessage("复制失败，请手动复制下方链接");
     }
   }
 
@@ -434,6 +438,13 @@ export function ScheduleDashboard({
             <button type="button" className="share-filters-button" onClick={copyFilterLink}>复制筛选链接</button>
             <span role="status" aria-live="polite">{shareMessage}</span>
           </div>
+          {shareFallbackUrl && (
+            <div className="share-fallback">
+              <label>手动复制筛选链接
+                <input type="url" readOnly value={shareFallbackUrl} onFocus={(event) => event.currentTarget.select()} />
+              </label>
+            </div>
+          )}
 
           <div className="match-list" aria-live="polite">
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
