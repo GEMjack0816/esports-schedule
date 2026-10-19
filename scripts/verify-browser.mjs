@@ -38,6 +38,16 @@ for (const profile of [
   const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage"];
   const auditUrl = new URL(baseUrl);
   auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
+  auditUrl.searchParams.set("range", "all");
+  auditUrl.searchParams.set("game", "cs2");
+  auditUrl.searchParams.set("status", "scheduled");
+  auditUrl.searchParams.set("q", "shareable-link-test");
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (value) => { window.__copiedScheduleUrl = value; } },
+    });
+  });
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const text = message.text();
@@ -77,6 +87,13 @@ for (const profile of [
   const homepageCommit = await page.locator("#esports-schedule-version").getAttribute("data-git-commit");
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
+  const queryInput = page.locator('.filter-panel input[type="search"], .filter-panel input:not([type])').first();
+  const restoredFilterState = {
+    range: await page.getByRole("tab", { name: /全部收录/ }).getAttribute("aria-selected"),
+    game: await page.locator(".filter-panel select").nth(0).inputValue(),
+    status: await page.locator(".filter-panel select").nth(2).inputValue(),
+    query: await queryInput.inputValue(),
+  };
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -85,18 +102,39 @@ for (const profile of [
   const statusFilterCounts = {};
   await page.getByRole("tab", { name: /全部收录/ }).click();
   const gameSelect = page.locator(".filter-panel select").nth(0);
+  await queryInput.fill("");
   for (const game of ["lol", "valorant", "honor-of-kings", "cs2", "dota2"]) {
     await gameSelect.selectOption(game);
     gameFilterCounts[game] = await page.locator(".match-card").count();
   }
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("game") === "dota2");
+  const gameFilterUrlSync = new URL(page.url()).searchParams.get("game") === "dota2";
   await gameSelect.selectOption("all");
   const statusSelect = page.locator(".filter-panel select").nth(2);
   for (const status of ["running", "finished", "scheduled"]) {
     await statusSelect.selectOption(status);
     statusFilterCounts[status] = await page.locator(".match-card").count();
   }
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("status") === "scheduled");
+  const statusFilterUrlSync = new URL(page.url()).searchParams.get("status") === "scheduled";
   await statusSelect.selectOption("all");
   await page.getByRole("tab", { name: /^今日/ }).click();
+  await queryInput.fill("share verification");
+  await gameSelect.selectOption("lol");
+  await statusSelect.selectOption("running");
+  await page.waitForFunction(() => {
+    const params = new URL(location.href).searchParams;
+    return params.get("game") === "lol" && params.get("status") === "running" && params.get("q") === "share verification";
+  });
+  await page.getByRole("button", { name: "复制筛选链接" }).click();
+  await page.getByRole("status").filter({ hasText: "筛选链接已复制" }).waitFor();
+  const copiedScheduleUrl = await page.evaluate(() => window.__copiedScheduleUrl ?? "");
+  const shareLinkCopied = (() => {
+    const params = new URL(copiedScheduleUrl).searchParams;
+    return params.get("game") === "lol"
+      && params.get("status") === "running"
+      && params.get("q") === "share verification";
+  })();
 
   const apiResponsePromise = page.waitForResponse(
     (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
@@ -184,6 +222,10 @@ for (const profile of [
     gameOptions,
     gameFilterCounts,
     statusFilterCounts,
+    restoredFilterState,
+    gameFilterUrlSync,
+    statusFilterUrlSync,
+    shareLinkCopied,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -235,6 +277,15 @@ for (const result of results) {
   if (result.forbiddenHtmlPhrases.length > 0) failures.push(`${prefix}: demo text in HTML`);
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
+  if (result.restoredFilterState.range !== "true"
+    || result.restoredFilterState.game !== "cs2"
+    || result.restoredFilterState.status !== "scheduled"
+    || result.restoredFilterState.query !== "shareable-link-test") {
+    failures.push(`${prefix}: shared URL filters were not restored`);
+  }
+  if (!result.gameFilterUrlSync) failures.push(`${prefix}: game filter was not written to the URL`);
+  if (!result.statusFilterUrlSync) failures.push(`${prefix}: status filter was not written to the URL`);
+  if (!result.shareLinkCopied) failures.push(`${prefix}: copied filter link is incomplete`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
