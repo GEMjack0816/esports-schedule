@@ -265,8 +265,11 @@ export function createScheduleSyncWorker({ fetchImpl = fetch, log = console, wai
       try {
         const result = await invokeScheduleSync({ fetchImpl, secret: env.CRON_SECRET, waitImpl });
         const summary = { event: "schedule_sync", scheduledTime, ...result };
-        if (result.outcome === "skipped_busy") log.warn(JSON.stringify(summary));
-        else log.log(JSON.stringify(summary));
+        if (result.outcome === "skipped_busy" || result.outcome === "partial") {
+          log.warn(JSON.stringify(summary));
+        } else {
+          log.log(JSON.stringify(summary));
+        }
         return result;
       } catch (error) {
         const code = error instanceof SyncInvocationError ? error.code : "internal_failure";

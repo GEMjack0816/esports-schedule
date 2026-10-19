@@ -341,6 +341,30 @@ describe("schedule sync Worker client", () => {
     expect(log.log).not.toHaveBeenCalled();
   });
 
+  it("records partial sync outcomes as warnings with a safe summary", async () => {
+    const log = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const worker = createScheduleSyncWorker({
+      fetchImpl: async () => response({
+        status: "partial",
+        gamesSucceeded: 4,
+        gamesFailed: 1,
+        snapshotsPersisted: 4,
+        errors: [{ game: "lol", code: "PANDASCORE_RATE_LIMITED", httpStatus: 429 }],
+      }),
+      log,
+    });
+    const result = await worker.scheduled({ scheduledTime: 1, noRetry: vi.fn() }, { CRON_SECRET: syncSecret });
+
+    expect(result).toMatchObject({ outcome: "partial", gamesSucceeded: 4, gamesFailed: 1 });
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.log).not.toHaveBeenCalled();
+    expect(log.error).not.toHaveBeenCalled();
+    const record = JSON.parse(log.warn.mock.calls[0][0]);
+    expect(record).toMatchObject({ event: "schedule_sync", outcome: "partial", gamesSucceeded: 4, gamesFailed: 1 });
+    expect(record).not.toHaveProperty("errors");
+    expect(JSON.stringify(record)).not.toContain(syncSecret);
+  });
+
   it("sanitizes failed-run logs", async () => {
     const log = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const worker = createScheduleSyncWorker({
