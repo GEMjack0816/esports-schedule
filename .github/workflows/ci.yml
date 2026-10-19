@@ -14,6 +14,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  migration-line-endings-windows:
+    name: Migration line endings (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Re-checkout with Windows autocrlf enabled
+        shell: pwsh
+        run: |
+          git config core.autocrlf true
+          git checkout-index --force --all
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 20
+
+      - name: Verify migration files use LF line endings
+        run: npm run verify:migration-line-endings
+
   verify:
     name: TypeScript, lint, tests, and build
     runs-on: ubuntu-latest
@@ -40,6 +64,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -49,6 +75,12 @@ jobs:
 
       - name: Install locked dependencies
         run: npm ci
+
+      - name: Verify applied migrations are immutable
+        run: npm run verify:migration-immutability
+
+      - name: Verify migration files use LF line endings
+        run: npm run verify:migration-line-endings
 
       - name: Apply schema to the isolated PostgreSQL service
         run: npm run db:migrate
