@@ -130,6 +130,21 @@ for (const profile of [
     const link = document.querySelector(".skip-link");
     const focused = document.activeElement === link;
     const focusVisible = document.activeElement?.matches(":focus-visible") ?? false;
+    const linkStyle = link ? getComputedStyle(link) : null;
+    const linkBounds = link?.getBoundingClientRect();
+    const visiblyRendered = Boolean(
+      linkStyle &&
+      linkBounds &&
+      linkStyle.display !== "none" &&
+      linkStyle.visibility === "visible" &&
+      Number.parseFloat(linkStyle.opacity) > 0 &&
+      linkBounds.width > 0 &&
+      linkBounds.height > 0 &&
+      linkBounds.left >= 0 &&
+      linkBounds.top >= 0 &&
+      linkBounds.right <= window.innerWidth &&
+      linkBounds.bottom <= window.innerHeight,
+    );
     const originalTheme = document.documentElement.dataset.theme;
     const luminance = (color) => {
       const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
@@ -155,7 +170,7 @@ for (const profile of [
     }
     if (originalTheme) document.documentElement.dataset.theme = originalTheme;
     else delete document.documentElement.dataset.theme;
-    return { focused, focusVisible, contrastByTheme };
+    return { focused, focusVisible, visiblyRendered, contrastByTheme };
   });
   await page.keyboard.press("Enter");
   const skipNavigation = await page.evaluate(() => {
@@ -337,6 +352,9 @@ for (const result of results) {
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (!result.skipLinkFirstTab.focused || !result.skipLinkFirstTab.focusVisible) {
     failures.push(`${prefix}: first Tab does not reveal the skip link`);
+  }
+  if (!result.skipLinkFirstTab.visiblyRendered) {
+    failures.push(`${prefix}: skip link is not visually visible in the viewport after keyboard focus`);
   }
   for (const [theme, contrast] of Object.entries(result.skipLinkFirstTab.contrastByTheme)) {
     if (contrast === null || contrast < 4.5) {
