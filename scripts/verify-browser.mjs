@@ -182,6 +182,10 @@ for (const profile of [
       && !params.has("audit")
       && fallbackInputSelectsLink;
   })();
+  await gameSelect.selectOption("cs2");
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("game") === "cs2");
+  const staleShareFeedbackClearsOnFilterChange = await page.locator(".filter-share-actions [role='status']").innerText() === ""
+    && await page.getByLabel("手动复制筛选链接").count() === 0;
 
   const dateInput = page.locator('.filter-panel input[type="date"]');
   const selectedDateValue = await dateInput.getAttribute("min") || "2026-10-19";
@@ -300,6 +304,7 @@ for (const profile of [
     statusFilterUrlSync,
     shareLinkCopied,
     manualCopyFallbackWorks,
+    staleShareFeedbackClearsOnFilterChange,
     dateFilterUrlSync,
     noRangeSelectedForCustomDate,
     rangeClearsSelectedDate,
@@ -370,6 +375,7 @@ for (const result of results) {
   if (!result.statusFilterUrlSync) failures.push(`${prefix}: status filter was not written to the URL`);
   if (!result.shareLinkCopied) failures.push(`${prefix}: copied filter link is incomplete`);
   if (!result.manualCopyFallbackWorks) failures.push(`${prefix}: clipboard failure did not expose a selectable sanitized link`);
+  if (!result.staleShareFeedbackClearsOnFilterChange) failures.push(`${prefix}: changing filters left stale copy feedback visible`);
   if (!result.dateFilterUrlSync) failures.push(`${prefix}: selected date was not written to the URL`);
   if (!result.noRangeSelectedForCustomDate) failures.push(`${prefix}: custom date left a misleading range tab selected`);
   if (!result.rangeClearsSelectedDate) failures.push(`${prefix}: quick range did not clear the custom date`);

@@ -189,6 +189,11 @@ export function ScheduleDashboard({
     selectedDate,
   }), [game, league, query, range, selectedDate, status]);
 
+  function clearShareFeedback() {
+    setShareMessage("");
+    setShareFallbackUrl("");
+  }
+
   function pushFilterHistoryEntry(nextFilters: ScheduleFilters) {
     const params = applyScheduleFilters(new URLSearchParams(window.location.search), nextFilters);
     const queryString = params.toString();
@@ -198,6 +203,7 @@ export function ScheduleDashboard({
   }
 
   function updateQuery(nextQuery: string) {
+    clearShareFeedback();
     if (!queryHistoryEntryPushed.current) {
       pushFilterHistoryEntry({ ...filters, query: nextQuery });
       queryHistoryEntryPushed.current = true;
@@ -207,6 +213,8 @@ export function ScheduleDashboard({
 
   useEffect(() => {
     const restoreFromUrl = () => {
+      setShareMessage("");
+      setShareFallbackUrl("");
       queryHistoryEntryPushed.current = false;
       const restored = parseScheduleFilters(new URLSearchParams(window.location.search));
       setRange(restored.range);
@@ -302,6 +310,7 @@ export function ScheduleDashboard({
   }
 
   function resetFilters() {
+    clearShareFeedback();
     pushFilterHistoryEntry(DEFAULT_SCHEDULE_FILTERS);
     setRange("today"); setGame("all"); setLeague("all"); setStatus("all"); setQuery(""); setSelectedDate("");
     queryHistoryEntryPushed.current = false;
@@ -401,6 +410,7 @@ export function ScheduleDashboard({
           <div className="range-tabs" role="tablist" aria-label="选择时间范围">
             {([ ["today", "今日"], ["tomorrow", "明日"], ["seven", "未来 7 天"], ["history", "历史比赛"], ["all", "全部收录"] ] as const).map(([key, label]) => (
               <button key={key} role="tab" aria-selected={!selectedDate && range === key} className={!selectedDate && range === key ? "active" : ""} type="button" onClick={() => {
+                clearShareFeedback();
                 pushFilterHistoryEntry({ ...filters, range: key, selectedDate: "" });
                 setRange(key);
                 setSelectedDate("");
@@ -414,21 +424,25 @@ export function ScheduleDashboard({
             <label className="search-field"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => updateQuery(event.target.value)} onBlur={() => { queryHistoryEntryPushed.current = false; }} placeholder="搜索战队或赛事" /></label>
             <label><span className="sr-only">游戏</span><select value={game} onChange={(event) => {
               const nextGame = event.target.value as GameKey | "all";
+              clearShareFeedback();
               pushFilterHistoryEntry({ ...filters, game: nextGame });
               setGame(nextGame);
             }}><option value="all">全部游戏</option>{Object.entries(games).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
             <label><span className="sr-only">赛事</span><select value={league} onChange={(event) => {
               const nextLeague = event.target.value;
+              clearShareFeedback();
               pushFilterHistoryEntry({ ...filters, league: nextLeague });
               setLeague(nextLeague);
             }}><option value="all">全部赛事</option>{league !== "all" && !leagues.includes(league) && <option value={league}>{league}（当前无匹配）</option>}{leagues.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
             <label><span className="sr-only">状态</span><select value={status} onChange={(event) => {
               const nextStatus = event.target.value as MatchStatus | "all";
+              clearShareFeedback();
               pushFilterHistoryEntry({ ...filters, status: nextStatus });
               setStatus(nextStatus);
             }}><option value="all">全部状态</option>{Object.entries(statusMeta).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
             <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt?.slice(0, 10)} max={payload.coverage.range.latestMatchAt?.slice(0, 10)} value={selectedDate} onChange={(event) => {
               const nextDate = event.target.value;
+              clearShareFeedback();
               pushFilterHistoryEntry({ ...filters, selectedDate: nextDate });
               setSelectedDate(nextDate);
             }} /></label>
