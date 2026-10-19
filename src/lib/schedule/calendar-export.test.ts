@@ -56,10 +56,10 @@ describe("schedule calendar export", () => {
     expect(content).toContain("\r\nDESCRIPTION:");
   });
 
-  it("folds long UTF-8 lines at RFC octet boundaries without splitting characters", () => {
+  it("folds long UTF-8 lines at RFC octet boundaries without splitting code points", () => {
     const content = buildScheduleCalendar([match({
-      homeTeam: { name: "战队名".repeat(30), logo: "" },
-      league: "全球总决赛".repeat(30),
+      homeTeam: { name: "战队名🎮".repeat(30), logo: "" },
+      league: "全球总决赛🏆".repeat(30),
     })]);
     const physicalLines = content.split("\r\n").filter(Boolean);
 
@@ -67,6 +67,7 @@ describe("schedule calendar export", () => {
     for (const line of physicalLines) {
       expect(new TextEncoder().encode(line).byteLength).toBeLessThanOrEqual(75);
       expect(line).not.toMatch(/[\uD800-\uDBFF]$/);
+      expect(line).not.toMatch(/^\s*[\uDC00-\uDFFF]/);
     }
   });
 

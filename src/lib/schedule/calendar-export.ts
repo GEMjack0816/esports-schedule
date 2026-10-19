@@ -50,13 +50,21 @@ function escapeText(value: string): string {
     .replace(/;/g, "\\;");
 }
 
+function utf8OctetLength(character: string): number {
+  const codePoint = character.codePointAt(0) ?? 0;
+  if (codePoint <= 0x7f) return 1;
+  if (codePoint <= 0x7ff) return 2;
+  if (codePoint <= 0xffff) return 3;
+  return 4;
+}
+
 function foldLine(line: string): string {
   const physicalLines: string[] = [];
   let current = "";
   let octets = 0;
 
   for (const character of line) {
-    const characterOctets = new TextEncoder().encode(character).byteLength;
+    const characterOctets = utf8OctetLength(character);
     if (octets + characterOctets > 75) {
       physicalLines.push(current);
       current = ` ${character}`;
