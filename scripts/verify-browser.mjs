@@ -21,6 +21,53 @@ for (const executablePath of executableCandidates) {
 if (!browser) throw launchError || new Error("No supported browser executable found");
 
 const results = [];
+
+async function tabToAndReadFocusIndicator(page, selector) {
+  const target = page.locator(selector);
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    window.scrollTo(0, 0);
+  });
+
+  for (let index = 0; index < 80; index += 1) {
+    await page.keyboard.press("Tab");
+    if (await target.evaluate((element) => document.activeElement === element)) {
+      return target.evaluate((element) => {
+        const style = getComputedStyle(element);
+        const backgroundColor = getComputedStyle(document.body).backgroundColor;
+        const colorChannels = (color) => {
+          const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+          if (!channels || channels.length !== 3) return null;
+          return channels.map((channel) => {
+            const normalized = channel / 255;
+            return normalized <= 0.04045
+              ? normalized / 12.92
+              : ((normalized + 0.055) / 1.055) ** 2.4;
+          });
+        };
+        const ringLuminance = colorChannels(style.outlineColor);
+        const backgroundLuminance = colorChannels(backgroundColor);
+        const relativeLuminance = (channels) =>
+          channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+        const luminanceContrast = ringLuminance && backgroundLuminance
+          ? (Math.max(relativeLuminance(ringLuminance), relativeLuminance(backgroundLuminance)) + 0.05) /
+            (Math.min(relativeLuminance(ringLuminance), relativeLuminance(backgroundLuminance)) + 0.05)
+          : null;
+        return {
+          focusVisible: element.matches(":focus-visible"),
+          outlineStyle: style.outlineStyle,
+          outlineWidth: style.outlineWidth,
+          outlineColor: style.outlineColor,
+          backgroundColor,
+          luminanceContrast,
+        };
+      });
+    }
+  }
+
+  return null;
+}
+
 for (const profile of [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile-390", width: 390, height: 844 },
@@ -78,6 +125,68 @@ for (const profile of [
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+  await page.keyboard.press("Tab");
+  const skipLinkFirstTab = await page.evaluate(() => {
+    const link = document.querySelector(".skip-link");
+    const focused = document.activeElement === link;
+    const focusVisible = document.activeElement?.matches(":focus-visible") ?? false;
+    const linkStyle = link ? getComputedStyle(link) : null;
+    const linkBounds = link?.getBoundingClientRect();
+    const visiblyRendered = Boolean(
+      linkStyle &&
+      linkBounds &&
+      linkStyle.display !== "none" &&
+      linkStyle.visibility === "visible" &&
+      Number.parseFloat(linkStyle.opacity) > 0 &&
+      linkBounds.width > 0 &&
+      linkBounds.height > 0 &&
+      linkBounds.left >= 0 &&
+      linkBounds.top >= 0 &&
+      linkBounds.right <= window.innerWidth &&
+      linkBounds.bottom <= window.innerHeight,
+    );
+    const originalTheme = document.documentElement.dataset.theme;
+    const luminance = (color) => {
+      const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+      if (!channels || channels.length !== 3) return null;
+      const linear = channels.map((channel) => {
+        const normalized = channel / 255;
+        return normalized <= 0.04045
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4;
+      });
+      return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+    };
+    const contrastByTheme = {};
+    for (const theme of ["dark", "light"]) {
+      document.documentElement.dataset.theme = theme;
+      const style = getComputedStyle(link);
+      const textLuminance = luminance(style.color);
+      const backgroundLuminance = luminance(style.backgroundColor);
+      contrastByTheme[theme] = textLuminance === null || backgroundLuminance === null
+        ? null
+        : (Math.max(textLuminance, backgroundLuminance) + 0.05) /
+          (Math.min(textLuminance, backgroundLuminance) + 0.05);
+    }
+    if (originalTheme) document.documentElement.dataset.theme = originalTheme;
+    else delete document.documentElement.dataset.theme;
+    return { focused, focusVisible, visiblyRendered, contrastByTheme };
+  });
+  await page.keyboard.press("Enter");
+  const skipNavigation = await page.evaluate(() => {
+    const main = document.querySelector("#main-content");
+    const header = document.querySelector(".site-header");
+    const mainStyle = getComputedStyle(main);
+    return {
+      focused: document.activeElement?.id === "main-content",
+      focusVisible: document.activeElement?.matches(":focus-visible") ?? false,
+      focusIndicator: mainStyle.boxShadow,
+      hash: window.location.hash,
+      mainTop: main?.getBoundingClientRect().top ?? null,
+      headerBottom: header?.getBoundingClientRect().bottom ?? null,
+    };
+  });
+  const scheduleFilterFocus = await tabToAndReadFocusIndicator(page, ".search-field input");
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
 
@@ -154,6 +263,7 @@ for (const profile of [
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
+  const submitInputFocus = await tabToAndReadFocusIndicator(page, '.submit-form input[name="league"]');
   const adminResponse = await page.goto(`${baseUrl}/admin`, {
     waitUntil: "networkidle",
     timeout: 120_000,
@@ -185,6 +295,10 @@ for (const profile of [
     gameFilterCounts,
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
+    skipLinkFirstTab,
+    skipNavigation,
+    scheduleFilterFocus,
+    submitInputFocus,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
@@ -236,6 +350,43 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (!result.skipLinkFirstTab.focused || !result.skipLinkFirstTab.focusVisible) {
+    failures.push(`${prefix}: first Tab does not reveal the skip link`);
+  }
+  if (!result.skipLinkFirstTab.visiblyRendered) {
+    failures.push(`${prefix}: skip link is not visually visible in the viewport after keyboard focus`);
+  }
+  for (const [theme, contrast] of Object.entries(result.skipLinkFirstTab.contrastByTheme)) {
+    if (contrast === null || contrast < 4.5) {
+      failures.push(`${prefix}: skip link text contrast is below 4.5:1 in ${theme} theme`);
+    }
+  }
+  if (
+    !result.skipNavigation.focused ||
+    !result.skipNavigation.focusVisible ||
+    result.skipNavigation.focusIndicator === "none" ||
+    result.skipNavigation.hash !== "#main-content" ||
+    result.skipNavigation.mainTop === null ||
+    result.skipNavigation.headerBottom === null ||
+    result.skipNavigation.mainTop < result.skipNavigation.headerBottom
+  ) {
+    failures.push(`${prefix}: skip link does not reveal and focus main content below the sticky header`);
+  }
+  for (const [control, focus] of Object.entries({
+    scheduleFilter: result.scheduleFilterFocus,
+    submissionInput: result.submitInputFocus,
+  })) {
+    if (
+      !focus ||
+      focus.focusVisible !== true ||
+      focus.outlineStyle !== "solid" ||
+      Number.parseFloat(focus.outlineWidth) < 2 ||
+      focus.luminanceContrast === null ||
+      focus.luminanceContrast < 3
+    ) {
+      failures.push(`${prefix}: ${control} has no visible keyboard focus indicator`);
+    }
+  }
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
