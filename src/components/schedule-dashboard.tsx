@@ -44,6 +44,17 @@ const getBrowserFavoritesSnapshot = (): string => {
   }
 };
 const getServerFavoritesSnapshot = (): string => emptyFavoritesSnapshot;
+const getBrowserFavoriteStorageStatus = (): "checking" | "persistent" | "memory" => {
+  if (favoriteStorageUnavailable) return "memory";
+  try {
+    window.localStorage.getItem(favoriteStorageKey);
+    return "persistent";
+  } catch {
+    favoriteStorageUnavailable = true;
+    return "memory";
+  }
+};
+const getServerFavoriteStorageStatus = (): "checking" => "checking";
 
 function writeFavoritesSnapshot(snapshot: string) {
   favoriteMemorySnapshot = snapshot;
@@ -224,6 +235,11 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     subscribeToFavorites,
     getBrowserFavoritesSnapshot,
     getServerFavoritesSnapshot,
+  );
+  const favoriteStorageStatus = useSyncExternalStore(
+    subscribeToFavorites,
+    getBrowserFavoriteStorageStatus,
+    getServerFavoriteStorageStatus,
   );
   const favorites = useMemo(() => parseFavoriteTeams(favoritesSnapshot), [favoritesSnapshot]);
   const favoriteKeys = useMemo(
@@ -425,7 +441,11 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             >
               {favoritesOnly ? "★ 正在筛选收藏" : "☆ 只看收藏战队"}（{favorites.length}）
             </button>
-            <span>收藏仅保存在本设备浏览器</span>
+            <span className={favoriteStorageStatus === "memory" ? "favorite-storage-warning" : undefined} aria-live="polite">
+              {favoriteStorageStatus === "memory"
+                ? "浏览器存储不可用，收藏仅暂存在本次页面；刷新后会清空。"
+                : "收藏仅保存在本设备浏览器"}
+            </span>
           </div>
           {favorites.length > 0 && (
             <details className="favorite-team-manager">

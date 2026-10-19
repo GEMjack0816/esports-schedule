@@ -198,6 +198,7 @@ a { color: inherit; text-decoration: none; }
 .favorite-filter-button:hover:not(:disabled), .favorite-filter-button.is-active { border-color: var(--cyan); color: var(--cyan); }
 .favorite-filter-button:focus-visible, .favorite-team-button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .favorite-filter-button:disabled { cursor: not-allowed; opacity: .55; }
+.favorite-storage-warning { color: var(--warning, #f6c85f); }
 .favorite-team-manager { margin: -18px 0 28px; color: var(--muted-bright); font-size: 12px; }
 .favorite-team-manager summary { width: fit-content; padding: 4px 0; cursor: pointer; }
 .favorite-team-manager summary:focus-visible, .favorite-team-manager button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }

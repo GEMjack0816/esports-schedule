@@ -159,6 +159,7 @@ for (const profile of [
   let favoriteCrossTabWorks = false;
   let favoriteManagementWorks = false;
   let favoriteEmptyStateWorks = false;
+  let favoriteStorageFallbackWorks = false;
   const eligibleFavoriteButtons = page.locator(".favorite-team-button:not(:disabled)");
   const firstFavoriteButton = eligibleFavoriteButtons.first();
   if (await eligibleFavoriteButtons.count() > 0) {
@@ -218,6 +219,21 @@ for (const profile of [
     }
     if (!originalFavoriteLabel) errors.push("favorite: missing accessible team control label");
     await secondaryPage.close();
+
+    await page.getByRole("button", { name: "清除筛选", exact: true }).click();
+    await page.evaluate(() => {
+      const originalSetItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value) {
+        if (key === "esports-schedule-favorite-teams-v1") {
+          throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+        }
+        return originalSetItem.call(this, key, value);
+      };
+      document.querySelector(".favorite-team-button:not(:disabled)")?.click();
+      Storage.prototype.setItem = originalSetItem;
+    });
+    favoriteStorageFallbackWorks = await page.locator(".favorite-team-button[aria-pressed='true']").count() > 0
+      && await page.getByText(/浏览器存储不可用，收藏仅暂存在本次页面/).count() === 1;
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
@@ -258,6 +274,7 @@ for (const profile of [
     favoriteFilterWorks,
     favoriteManagementWorks,
     favoriteEmptyStateWorks,
+    favoriteStorageFallbackWorks,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
@@ -314,6 +331,7 @@ for (const result of results) {
   if (result.favoriteFeatureAvailable && !result.favoriteFilterWorks) failures.push(`${prefix}: favorites-only filter returned non-favorite matches`);
   if (result.favoriteFeatureAvailable && !result.favoriteManagementWorks) failures.push(`${prefix}: saved favorites could not be managed outside the current match results`);
   if (result.favoriteFeatureAvailable && !result.favoriteEmptyStateWorks) failures.push(`${prefix}: favorite filter empty state did not explain how to recover`);
+  if (result.favoriteFeatureAvailable && !result.favoriteStorageFallbackWorks) failures.push(`${prefix}: storage failure was not disclosed while preserving in-page favorites`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
