@@ -11,3 +11,7 @@ with a new additive migration. A checksum difference on an already-applied
 migration should be investigated against its historical file bytes and the
 actual schema. Do not rerun an applied migration or edit the database journal
 just to make a checksum match.
+
+CI compares the PR or branch against its base and rejects modifications or
+deletions of existing `drizzle/NNNN_*.sql` files. New additive migration files
+are allowed.

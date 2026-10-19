@@ -11,13 +11,14 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:check": "node scripts/check-database.mjs",
+    "verify:migration-immutability": "node scripts/check-migration-immutability.mjs",
     "verify:migration-line-endings": "node scripts/check-migration-line-endings.mjs",
     "verify:browser": "node scripts/verify-browser.mjs",
     "verify:admin": "node scripts/verify-admin.mjs",
     "verify:production": "node scripts/verify-production.mjs",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "check": "npm run verify:migration-line-endings && npm run typecheck && npm run lint && npm run test && npm run build && npm run test:client-bundle"
+    "check": "npm run verify:migration-immutability && npm run verify:migration-line-endings && npm run typecheck && npm run lint && npm run test && npm run build && npm run test:client-bundle"
   },
   "dependencies": {
     "@vercel/functions": "^3.7.5",
