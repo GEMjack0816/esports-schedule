@@ -3,6 +3,7 @@ import type { GameKey, MatchStatus } from "./types";
 
 export const scheduleRangeKeys = ["today", "tomorrow", "seven", "history", "all"] as const;
 export type ScheduleRangeKey = (typeof scheduleRangeKeys)[number];
+export const MAX_SCHEDULE_FILTER_TEXT_LENGTH = 120;
 
 export type ScheduleFilters = {
   range: ScheduleRangeKey;
@@ -56,11 +57,11 @@ export function parseScheduleFilters(params: URLSearchParams): ScheduleFilters {
     game: rawGame === "all" || !rawGame
       ? "all"
       : gameKeys.includes(rawGame as GameKey) ? rawGame as GameKey : "all",
-    league: rawLeague && rawLeague !== "all" ? rawLeague.slice(0, 120) : "all",
+    league: rawLeague && rawLeague !== "all" ? rawLeague.slice(0, MAX_SCHEDULE_FILTER_TEXT_LENGTH) : "all",
     status: rawStatus === "all" || !rawStatus
       ? "all"
       : matchStatuses.includes(rawStatus as MatchStatus) ? rawStatus as MatchStatus : "all",
-    query: rawQuery?.trim().slice(0, 120) ?? "",
+    query: rawQuery?.trim().slice(0, MAX_SCHEDULE_FILTER_TEXT_LENGTH) ?? "",
     selectedDate: isCalendarDate(params.get("date")) ? params.get("date")! : "",
   };
 }
@@ -74,9 +75,9 @@ export function applyScheduleFilters(
 
   if (filters.range !== DEFAULT_SCHEDULE_FILTERS.range) params.set("range", filters.range);
   if (filters.game !== "all") params.set("game", filters.game);
-  if (filters.league !== "all") params.set("league", filters.league.slice(0, 120));
+  if (filters.league !== "all") params.set("league", filters.league.slice(0, MAX_SCHEDULE_FILTER_TEXT_LENGTH));
   if (filters.status !== "all") params.set("status", filters.status);
-  const query = filters.query.trim().slice(0, 120);
+  const query = filters.query.trim().slice(0, MAX_SCHEDULE_FILTER_TEXT_LENGTH);
   if (query) params.set("q", query);
   if (isCalendarDate(filters.selectedDate)) params.set("date", filters.selectedDate);
 

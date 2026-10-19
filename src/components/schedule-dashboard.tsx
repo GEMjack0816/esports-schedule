@@ -8,6 +8,7 @@ import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 import {
   applyScheduleFilters,
   DEFAULT_SCHEDULE_FILTERS,
+  MAX_SCHEDULE_FILTER_TEXT_LENGTH,
   parseScheduleFilters,
   type ScheduleFilters,
 } from "@/lib/schedule/filter-state";
@@ -203,12 +204,13 @@ export function ScheduleDashboard({
   }
 
   function updateQuery(nextQuery: string) {
+    const boundedQuery = nextQuery.slice(0, MAX_SCHEDULE_FILTER_TEXT_LENGTH);
     clearShareFeedback();
     if (!queryHistoryEntryPushed.current) {
-      pushFilterHistoryEntry({ ...filters, query: nextQuery });
+      pushFilterHistoryEntry({ ...filters, query: boundedQuery });
       queryHistoryEntryPushed.current = true;
     }
-    setQuery(nextQuery);
+    setQuery(boundedQuery);
   }
 
   useEffect(() => {
@@ -421,7 +423,7 @@ export function ScheduleDashboard({
           </div>
 
           <div className="filter-panel">
-            <label className="search-field"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => updateQuery(event.target.value)} onBlur={() => { queryHistoryEntryPushed.current = false; }} placeholder="搜索战队或赛事" /></label>
+            <label className="search-field"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3 3" /></svg><input maxLength={MAX_SCHEDULE_FILTER_TEXT_LENGTH} value={query} onChange={(event) => updateQuery(event.target.value)} onBlur={() => { queryHistoryEntryPushed.current = false; }} placeholder="搜索战队或赛事" /></label>
             <label><span className="sr-only">游戏</span><select value={game} onChange={(event) => {
               const nextGame = event.target.value as GameKey | "all";
               clearShareFeedback();

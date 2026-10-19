@@ -123,6 +123,12 @@ for (const profile of [
   await page.goForward({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => new URL(location.href).searchParams.get("q") === "grouped query updated");
   const browserForwardRestoresLatestQuery = await queryInput.inputValue() === "grouped query updated";
+  const searchQueryMaxLength = Number(await queryInput.getAttribute("maxlength"));
+  await queryInput.fill("Q".repeat(searchQueryMaxLength + 10));
+  await page.waitForFunction((maxLength) => new URL(location.href).searchParams.get("q")?.length === maxLength, searchQueryMaxLength);
+  const searchQueryMatchesUrlLimit = searchQueryMaxLength === 120
+    && (await queryInput.inputValue()).length === searchQueryMaxLength
+    && new URL(page.url()).searchParams.get("q")?.length === searchQueryMaxLength;
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -300,6 +306,7 @@ for (const profile of [
     queryEditsShareOneHistoryEntry,
     browserBackRestoresPreviousQuery,
     browserForwardRestoresLatestQuery,
+    searchQueryMatchesUrlLimit,
     gameFilterUrlSync,
     statusFilterUrlSync,
     shareLinkCopied,
@@ -371,6 +378,7 @@ for (const result of results) {
   if (!result.queryEditsShareOneHistoryEntry) failures.push(`${prefix}: typing a query created more than one history entry`);
   if (!result.browserBackRestoresPreviousQuery) failures.push(`${prefix}: browser back did not restore the previous search query`);
   if (!result.browserForwardRestoresLatestQuery) failures.push(`${prefix}: browser forward did not restore the latest search query`);
+  if (!result.searchQueryMatchesUrlLimit) failures.push(`${prefix}: search input exceeded the URL/parser character limit`);
   if (!result.gameFilterUrlSync) failures.push(`${prefix}: game filter was not written to the URL`);
   if (!result.statusFilterUrlSync) failures.push(`${prefix}: status filter was not written to the URL`);
   if (!result.shareLinkCopied) failures.push(`${prefix}: copied filter link is incomplete`);
