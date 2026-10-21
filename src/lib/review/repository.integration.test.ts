@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { getDatabase } from "@/db";
+import { getDatabase, safeDatabaseErrorCode } from "@/db";
 import type { DrizzleReviewRepository } from "./repository";
 import type { MatchSubmissionInput } from "@/lib/submissions";
 import {
@@ -61,6 +61,29 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       lock_timeout: "5s",
       idle_in_transaction_session_timeout: "30s",
     });
+  });
+
+  it("classifies a real PostgreSQL idle-transaction termination as a timeout", async () => {
+    const idleTimeoutClient = postgres(testUrl!, {
+      max: 1,
+      prepare: false,
+      connection: { idle_in_transaction_session_timeout: 100 },
+    });
+    let capturedError: unknown;
+
+    try {
+      await idleTimeoutClient.begin(async (transaction) => {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        await transaction`select 1`;
+      });
+    } catch (error) {
+      capturedError = error;
+    } finally {
+      await idleTimeoutClient.end();
+    }
+
+    expect(capturedError).toBeDefined();
+    expect(safeDatabaseErrorCode(capturedError)).toBe("TIMEOUT");
   });
 
   afterAll(async () => {
