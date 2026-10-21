@@ -1,0 +1,49 @@
+import { describe, expect, it } from "vitest";
+import {
+  matchesNormalizedScheduleSearchText,
+  normalizeScheduleSearchText,
+  normalizeScheduleSearchValues,
+  scheduleSearchMatches,
+} from "./search";
+
+describe("schedule search normalization", () => {
+  it("uses locale-independent casing for Turkish I variants", () => {
+    expect(normalizeScheduleSearchText("ISTANBUL")).toBe("istanbul");
+    expect(scheduleSearchMatches("istanbul", ["İstanbul Wildcats"])).toBe(true);
+    expect(scheduleSearchMatches("ISTANBUL", ["ıstanbul Wildcats"])).toBe(true);
+  });
+
+  it("matches accented and compatibility-equivalent Latin text", () => {
+    expect(scheduleSearchMatches("sao paulo", ["São Paulo Esports"])).toBe(true);
+    expect(scheduleSearchMatches("strasse", ["Straße Esports"])).toBe(true);
+  });
+
+  it("folds combining marks only when attached to Latin letters", () => {
+    expect(normalizeScheduleSearchText("École")).toBe("ecole");
+    expect(normalizeScheduleSearchText("ά")).toBe(String.fromCodePoint(0x03b1, 0x0301));
+  });
+
+  it("matches Greek final and medial sigma independent of word position", () => {
+    expect(scheduleSearchMatches("ΟΣ", ["οσ esports"])).toBe(true);
+    expect(scheduleSearchMatches("οσ", ["ος esports"])).toBe(true);
+  });
+
+  it("preserves non-Latin text and collapses incidental whitespace", () => {
+    expect(normalizeScheduleSearchText("  王者荣耀　赛事  ")).toBe("王者荣耀 赛事");
+    expect(scheduleSearchMatches("王者荣耀  赛事", ["王者荣耀", "赛事"])).toBe(true);
+  });
+
+  it("treats an empty query as a match", () => {
+    expect(scheduleSearchMatches("   ", ["Any match"])).toBe(true);
+  });
+
+  it("matches a pre-normalized search index without re-folding candidate text", () => {
+    const indexedMatch = normalizeScheduleSearchValues([
+      "São Paulo Esports",
+      "İstanbul Wildcats",
+      "League 1",
+    ]);
+    expect(matchesNormalizedScheduleSearchText("sao paulo", indexedMatch)).toBe(true);
+    expect(matchesNormalizedScheduleSearchText("istanbul", indexedMatch)).toBe(true);
+  });
+});

@@ -96,6 +96,28 @@ for (const profile of [
     statusFilterCounts[status] = await page.locator(".match-card").count();
   }
   await statusSelect.selectOption("all");
+
+  const searchBehavior = {
+    tested: false,
+    matchingQueryReturnsMatch: false,
+    unmatchedQueryReturnsNoMatches: false,
+    clearingQueryRestoresMatches: false,
+  };
+  const searchInput = page.locator(".search-field input");
+  const sampleTeam = page.locator(".match-card .team-name").first();
+  const sampleTeamCount = await sampleTeam.count();
+  if (sampleTeamCount > 0) {
+    searchBehavior.tested = true;
+    const sampleTeamName = (await sampleTeam.innerText()).trim();
+    const initialMatchCount = await page.locator(".match-card").count();
+    await searchInput.fill(sampleTeamName);
+    searchBehavior.matchingQueryReturnsMatch = await page.locator(".match-card").count() > 0;
+    await searchInput.fill("codex-no-match-query-987654321");
+    searchBehavior.unmatchedQueryReturnsNoMatches = await page.locator(".match-card").count() === 0;
+    await searchInput.clear();
+    searchBehavior.clearingQueryRestoresMatches =
+      await page.locator(".match-card").count() === initialMatchCount;
+  }
   await page.getByRole("tab", { name: /^今日/ }).click();
 
   const apiResponsePromise = page.waitForResponse(
@@ -184,6 +206,7 @@ for (const profile of [
     gameOptions,
     gameFilterCounts,
     statusFilterCounts,
+    searchBehavior,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -236,6 +259,15 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (result.searchBehavior?.tested && !result.searchBehavior.matchingQueryReturnsMatch) {
+    failures.push(`${prefix}: matching team search returned no results`);
+  }
+  if (result.searchBehavior?.tested && !result.searchBehavior.unmatchedQueryReturnsNoMatches) {
+    failures.push(`${prefix}: unmatched team search returned results`);
+  }
+  if (result.searchBehavior?.tested && !result.searchBehavior.clearingQueryRestoresMatches) {
+    failures.push(`${prefix}: clearing team search did not restore results`);
+  }
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
