@@ -18,8 +18,22 @@ function wait(milliseconds) {
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
+const EXPLICIT_TIMEZONE_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
 function getTimestampAgeSeconds(value, now) {
-  if (typeof value !== "string") return null;
+  if (typeof value !== "string" || !EXPLICIT_TIMEZONE_TIMESTAMP.test(value)) {
+    return null;
+  }
+
+  const calendarDate = new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
+  if (
+    !Number.isFinite(calendarDate.getTime()) ||
+    calendarDate.toISOString().slice(0, 10) !== value.slice(0, 10)
+  ) {
+    return null;
+  }
+
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return null;
   const skewSeconds = (timestamp - now.getTime()) / 1000;

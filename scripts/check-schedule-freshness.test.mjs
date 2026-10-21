@@ -143,6 +143,21 @@ describe("schedule freshness monitor", () => {
     expect(result.problems).toContain("lastSuccessfulSyncAt timestamp is missing, invalid, or too far in the future");
   });
 
+  it("rejects timezone-ambiguous and invalid-calendar timestamps", () => {
+    const payload = healthyPayload();
+    payload.sourceFetchedAt = "2026-10-16T12:10:00";
+    payload.games.lol.lastSuccessfulSyncAt = "2026-02-30T12:10:00.000Z";
+
+    const result = inspectScheduleFreshness(payload, now);
+
+    expect(result.problems).toContain(
+      "sourceFetchedAt timestamp is missing, invalid, or too far in the future",
+    );
+    expect(result.problems).toContain(
+      "lol lastSuccessfulSyncAt timestamp is missing, invalid, or too far in the future",
+    );
+  });
+
   it("rejects timestamps implausibly ahead of the monitor clock", () => {
     const payload = healthyPayload();
     payload.games.lol.sourceFetchedAt = "2026-10-16T12:18:00.000Z";
