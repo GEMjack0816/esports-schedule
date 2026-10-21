@@ -3,13 +3,18 @@ import { getGameSyncPresentation, getScheduleSourceLabel } from "./presentation"
 
 const fiveDelayed = ["delayed", "delayed", "delayed", "delayed", "delayed"] as const;
 const noErrorStates = fiveDelayed.map((syncStatus) => ({ syncStatus, lastError: null }));
-const staleWithoutErrors = Array.from({ length: 5 }, () => ({ syncStatus: "failed" as const, lastError: null }));
+const staleWithoutErrors = Array.from({ length: 5 }, () => ({ syncStatus: "stale" as const, lastError: null }));
 const error = { at: "2026-10-21T12:35:00.000Z", code: "UPSTREAM", httpStatus: 502 };
 
 describe("getGameSyncPresentation", () => {
   it("labels an age-expired status as an expired snapshot without error evidence", () => {
-    expect(getGameSyncPresentation({ syncStatus: "failed", lastError: null, refreshInProgress: false }))
+    expect(getGameSyncPresentation({ syncStatus: "stale", lastError: null, refreshInProgress: false }))
       .toEqual({ label: "快照过期", visualStatus: "delayed" });
+  });
+
+  it("does not call a missing snapshot a failed or expired sync", () => {
+    expect(getGameSyncPresentation({ syncStatus: "unavailable", lastError: null, refreshInProgress: false }))
+      .toEqual({ label: "暂无可用快照", visualStatus: "unknown" });
   });
 
   it("labels a failed attempt only when error evidence exists", () => {

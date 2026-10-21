@@ -70,7 +70,7 @@ export type EndpointCoverage = {
   };
 };
 
-export type GameSyncStatus = "normal" | "delayed" | "failed";
+export type GameSyncStatus = "normal" | "delayed" | "stale" | "failed" | "unavailable";
 
 export type ProviderVerificationSample = {
   providerMatchId: string;
