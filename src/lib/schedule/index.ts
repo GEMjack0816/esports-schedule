@@ -129,7 +129,7 @@ function emptyGameCoverage(): GameCoverage {
     sourceFetchedAt: null,
     snapshotAgeSeconds: null,
     refreshInProgress: false,
-    syncStatus: "failed",
+    syncStatus: "unavailable",
     staleMinutes: null,
     dataSource: "unavailable",
     lastErrorCode: null,
@@ -179,11 +179,15 @@ export function deriveGameCoverage(
       : null;
     const failedAttempt = !!state?.lastErrorAt
       && (!sourceFetchedAt || Date.parse(state.lastErrorAt) >= Date.parse(sourceFetchedAt));
-    const syncStatus = failedAttempt || snapshotAgeMs === null || snapshotAgeMs > FAILED_AFTER_MS
+    const syncStatus: GameCoverage["syncStatus"] = failedAttempt
       ? "failed"
-      : snapshotAgeMs > FRESH_FOR_MS
-        ? "delayed"
-        : "normal";
+      : !snapshot
+        ? "unavailable"
+        : snapshotAgeMs === null || snapshotAgeMs > FAILED_AFTER_MS
+          ? "stale"
+          : snapshotAgeMs > FRESH_FOR_MS
+            ? "delayed"
+            : "normal";
 
     games[game] = {
       ...base,
