@@ -25,6 +25,7 @@ for (const profile of [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile-390", width: 390, height: 844 },
   { name: "forced-colors", width: 1440, height: 900, forcedColors: true },
+  { name: "forced-colors-mobile-390", width: 390, height: 844, forcedColors: true },
 ]) {
   const context = await browser.newContext({
     viewport: { width: profile.width, height: profile.height },
@@ -269,7 +270,7 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
-  if (prefix === "forced-colors") {
+  if (result.forcedColorsStyles) {
     if (!result.forcedColorsStyles?.mediaActive) failures.push(`${prefix}: forced-colors media query is inactive`);
     if (!result.forcedColorsStyles?.heroTextColor || result.forcedColorsStyles.heroTextColor === "transparent") failures.push(`${prefix}: hero text color is not visible`);
     if (!result.forcedColorsStyles?.heroTextFillColor || result.forcedColorsStyles.heroTextFillColor === "transparent" || result.forcedColorsStyles.heroTextFillColor === "rgba(0, 0, 0, 0)") failures.push(`${prefix}: hero text fill is not visible`);
