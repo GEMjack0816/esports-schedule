@@ -134,10 +134,12 @@ for (const profile of [
     for await (const chunk of stream) chunks.push(chunk);
     const calendarContent = Buffer.concat(chunks).toString("utf8");
     const exportedEvents = calendarContent.match(/BEGIN:VEVENT/g)?.length ?? 0;
+    const estimatedDurationEvents = calendarContent.match(/DURATION:PT2H/g)?.length ?? 0;
     calendarExportWorks = download.suggestedFilename().endsWith(".ics")
       && calendarContent.startsWith("BEGIN:VCALENDAR\r\n")
       && calendarContent.endsWith("END:VCALENDAR\r\n")
-      && exportedEvents === calendarExportCount;
+      && exportedEvents === calendarExportCount
+      && estimatedDurationEvents === exportedEvents;
     await page.getByRole("status").filter({ hasText: `已导出 ${calendarExportCount} 场比赛` }).waitFor();
   } else if (calendarExportCount === 0) {
     calendarExportWorks = calendarExportWorks && await calendarButton.isDisabled();
