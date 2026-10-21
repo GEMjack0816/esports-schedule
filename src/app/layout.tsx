@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
+import { socialImageAlt, socialImagePath, twitterCard } from "@/lib/site-social-metadata";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -12,7 +13,9 @@ export const metadata: Metadata = {
     description: "聚合五大电竞项目的主要职业及半职业比赛、比分与直播入口。",
     type: "website",
     locale: "zh_CN",
+    images: [{ url: socialImagePath, width: 1200, height: 630, alt: socialImageAlt }],
   },
+  twitter: twitterCard,
 };
 
 export default function RootLayout({

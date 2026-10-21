@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071116" />
+      <stop offset="1" stop-color="#101c25" />
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#36e0cb" stop-opacity=".16" />
+      <stop offset="1" stop-color="#36e0cb" stop-opacity="0" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#51f0dc" />
+      <stop offset="1" stop-color="#b6fff4" />
+    </linearGradient>
+    <pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse">
+      <path d="M42 0H0V42" fill="none" stroke="#b8d0d6" stroke-opacity=".045" />
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#background)" />
+  <rect width="1200" height="630" fill="url(#grid)" />
+  <path d="M600 630 1200 70V630Z" fill="url(#glow)" />
+  <circle cx="1015" cy="310" r="210" fill="none" stroke="#51f0dc" stroke-opacity=".12" stroke-width="1.5" />
+  <circle cx="1015" cy="310" r="160" fill="none" stroke="#51f0dc" stroke-opacity=".18" stroke-width="1.5" />
+  <circle cx="1015" cy="310" r="108" fill="#0b171d" stroke="#51f0dc" stroke-opacity=".3" stroke-width="2" />
+  <path d="M876 310h278M1015 171v278" stroke="#51f0dc" stroke-opacity=".1" />
+  <path d="M966 350v-42h24v42m20 0v-84h24v84m20 0v-62h24v62" fill="none" stroke="url(#accent)" stroke-linecap="square" stroke-width="12" />
+  <circle cx="1060" cy="260" r="6" fill="#51f0dc" />
+
+  <g transform="translate(76 68)">
+    <path d="M0 0h46v46H0z" rx="5" fill="#51f0dc" />
+    <path d="M11 34V22h6v12m6 0V12h6v22m6 0V17h6v17" fill="none" stroke="#071116" stroke-width="4" />
+    <text x="62" y="33" fill="#f3fbfc" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="25" font-weight="700" letter-spacing="2">赛界 <tspan fill="#51f0dc" font-size="17" letter-spacing="4">PULSE</tspan></text>
+  </g>
+
+  <text x="78" y="253" fill="#f3fbfc" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="66" font-weight="700" letter-spacing="1">全球赛场，</text>
+  <text x="78" y="340" fill="url(#accent)" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="66" font-weight="700" letter-spacing="1">一屏掌握。</text>
+  <text x="82" y="398" fill="#c1d2d8" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="21" letter-spacing=".3">聚合五大电竞项目的主要职业及半职业比赛</text>
+
+  <g font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="17" font-weight="600" letter-spacing=".5">
+    <rect x="80" y="452" width="94" height="38" rx="19" fill="#13262e" stroke="#29434b" />
+    <text x="127" y="477" text-anchor="middle" fill="#d8e8eb">赛程</text>
+    <rect x="186" y="452" width="94" height="38" rx="19" fill="#13262e" stroke="#29434b" />
+    <text x="233" y="477" text-anchor="middle" fill="#d8e8eb">比分</text>
+    <rect x="292" y="452" width="94" height="38" rx="19" fill="#13262e" stroke="#29434b" />
+    <text x="339" y="477" text-anchor="middle" fill="#d8e8eb">直播</text>
+  </g>
+
+  <path d="M80 548h1040" stroke="#29434b" />
+  <text x="80" y="584" fill="#7f9aa3" font-family="Arial, sans-serif" font-size="15" letter-spacing="2">LOL  ·  VALORANT  ·  KOG  ·  CS2  ·  DOTA 2</text>
+  <text x="1120" y="584" text-anchor="end" fill="#51f0dc" font-family="Arial, sans-serif" font-size="15" letter-spacing="1">ESPORTS SCHEDULE</text>
+</svg>
