@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { getScheduleSourceLabel } from "@/lib/schedule/presentation";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -289,9 +290,12 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <div><span className="section-index">01 / 赛程中心</span><h2 id="schedule-title">比赛日历</h2></div>
             <div className={`source-state ${payload.mode === "live" && !payload.stale ? "source-live" : "source-stale"}`}>
               <i />
-              <span>{payload.mode === "live"
-                ? payload.stale ? "PandaScore 聚合数据（部分延迟）" : "PandaScore 聚合数据"
-                : "PandaScore 聚合数据（服务暂不可用）"}</span>
+              <span>{getScheduleSourceLabel({
+                mode: payload.mode,
+                stale: payload.stale,
+                refreshInProgress: payload.coverage.refreshInProgress,
+                gameStatuses: Object.values(payload.coverage.games).map((game) => game.syncStatus),
+              })}</span>
             </div>
           </div>
 
