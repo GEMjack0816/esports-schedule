@@ -454,3 +454,28 @@ a { color: inherit; text-decoration: none; }
   border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
   border-radius: .4rem;
 }
+
+@media (forced-colors: active) {
+  /* The outlined hero word uses transparent text in normal themes. */
+  .hero-copy h1 span {
+    color: CanvasText;
+    -webkit-text-stroke: 0;
+  }
+
+  /* Forced-colors mode suppresses gradient backgrounds; restore the native affordance. */
+  .filter-panel select {
+    appearance: auto;
+    background-image: none;
+  }
+
+  .range-tabs button.active {
+    border-bottom-color: Highlight;
+  }
+
+  /* Shadows are removed in forced-colors mode, so focus must use an outline. */
+  :focus-visible {
+    outline: 2px solid Highlight !important;
+    outline-offset: 3px;
+    box-shadow: none;
+  }
+}

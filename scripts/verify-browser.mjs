@@ -24,11 +24,14 @@ const results = [];
 for (const profile of [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile-390", width: 390, height: 844 },
+  { name: "forced-colors", width: 1440, height: 900, forcedColors: true },
+  { name: "forced-colors-mobile-390", width: 390, height: 844, forcedColors: true },
 ]) {
   const context = await browser.newContext({
     viewport: { width: profile.width, height: profile.height },
     locale: "zh-CN",
     timezoneId: "Asia/Shanghai",
+    forcedColors: profile.forcedColors ? "active" : "none",
   });
   const page = await context.newPage();
   const errors = [];
@@ -78,6 +81,36 @@ for (const profile of [
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+  let forcedColorsStyles = null;
+  if (profile.forcedColors) {
+    await page.keyboard.press("Tab");
+    forcedColorsStyles = await page.evaluate(() => {
+      const heroText = document.querySelector(".hero-copy h1 span");
+      const select = document.querySelector(".filter-panel select");
+      const activeRange = document.querySelector(".range-tabs button.active");
+      const focused = document.activeElement;
+      if (!(heroText instanceof HTMLElement) || !(select instanceof HTMLSelectElement)
+        || !(activeRange instanceof HTMLButtonElement)) return null;
+      const heroStyle = getComputedStyle(heroText);
+      const selectStyle = getComputedStyle(select);
+      const activeRangeStyle = getComputedStyle(activeRange);
+      const focusStyle = getComputedStyle(focused);
+      return {
+        mediaActive: matchMedia("(forced-colors: active)").matches,
+        heroTextColor: heroStyle.color,
+        heroTextFillColor: heroStyle.webkitTextFillColor,
+        heroTextStrokeWidth: heroStyle.webkitTextStrokeWidth,
+        selectAppearance: selectStyle.appearance,
+        selectBackgroundImage: selectStyle.backgroundImage,
+        activeRangeBorderColor: activeRangeStyle.borderBottomColor,
+        activeRangeBorderWidth: activeRangeStyle.borderBottomWidth,
+        focusVisible: focused.matches(":focus-visible"),
+        focusOutlineStyle: focusStyle.outlineStyle,
+        focusOutlineWidth: focusStyle.outlineWidth,
+        focusBoxShadow: focusStyle.boxShadow,
+      };
+    });
+  }
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
 
@@ -185,6 +218,7 @@ for (const profile of [
     gameFilterCounts,
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
+    forcedColorsStyles,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
@@ -236,6 +270,21 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (prefix.startsWith("forced-colors") && result.forcedColorsStyles === null) failures.push(`${prefix}: forced-colors inspection targets are missing`);
+  if (result.forcedColorsStyles) {
+    if (!result.forcedColorsStyles?.mediaActive) failures.push(`${prefix}: forced-colors media query is inactive`);
+    if (!result.forcedColorsStyles?.heroTextColor || result.forcedColorsStyles.heroTextColor === "transparent") failures.push(`${prefix}: hero text color is not visible`);
+    if (!result.forcedColorsStyles?.heroTextFillColor || result.forcedColorsStyles.heroTextFillColor === "transparent" || result.forcedColorsStyles.heroTextFillColor === "rgba(0, 0, 0, 0)") failures.push(`${prefix}: hero text fill is not visible`);
+    if (result.forcedColorsStyles?.heroTextStrokeWidth !== "0px") failures.push(`${prefix}: hero text outline is not disabled`);
+    if (result.forcedColorsStyles?.selectAppearance !== "auto") failures.push(`${prefix}: native select affordance is not restored`);
+    if (result.forcedColorsStyles?.selectBackgroundImage !== "none") failures.push(`${prefix}: custom select background remains active`);
+    if (!result.forcedColorsStyles?.activeRangeBorderColor || result.forcedColorsStyles.activeRangeBorderColor === "transparent" || result.forcedColorsStyles.activeRangeBorderColor === "rgba(0, 0, 0, 0)") failures.push(`${prefix}: active range marker is not visible`);
+    if (result.forcedColorsStyles?.activeRangeBorderWidth !== "2px") failures.push(`${prefix}: active range marker width is unexpected`);
+    if (!result.forcedColorsStyles?.focusVisible) failures.push(`${prefix}: keyboard tab did not produce a focus-visible target`);
+    if (result.forcedColorsStyles?.focusOutlineStyle !== "solid") failures.push(`${prefix}: visible focus outline is missing`);
+    if (result.forcedColorsStyles?.focusOutlineWidth !== "2px") failures.push(`${prefix}: focus outline width is unexpected`);
+    if (result.forcedColorsStyles?.focusBoxShadow !== "none") failures.push(`${prefix}: focus relies on a suppressed box shadow`);
+  }
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
