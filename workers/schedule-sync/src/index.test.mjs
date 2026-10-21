@@ -13,6 +13,7 @@ function healthResponse(overrides = {}, status = 200) {
     refreshInProgress: false,
     providers: { pandascore: "connected" },
     sourceFetchedAt: "2026-10-18T09:55:00.000Z",
+    lastSuccessfulSyncAt: "2026-10-18T09:55:00.000Z",
     snapshotAgeSeconds: 300,
     games: Object.fromEntries(pandaGames.map((game) => [game, { syncStatus: "normal" }])),
     ...overrides,
@@ -442,11 +443,32 @@ describe("schedule sync Worker client", () => {
     expect(requests[1].options.headers.authorization).toBe(`Bearer ${syncSecret}`);
   });
 
+  it("runs the authenticated sync when the persistent snapshot is fresh but last provider sync is stale", async () => {
+    const requests = [];
+    const worker = createScheduleSyncWorker({
+      nowImpl: () => Date.parse("2026-10-18T10:00:00.000Z"),
+      fetchImpl: async (url) => {
+        requests.push(url);
+        return url === healthUrl
+          ? healthResponse({ lastSuccessfulSyncAt: "2026-10-18T09:44:59.000Z" })
+          : response();
+      },
+      log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+    await expect(worker.scheduled({ scheduledTime: 1, noRetry: vi.fn() }, { CRON_SECRET: syncSecret }))
+      .resolves.toMatchObject({ outcome: "success", generation: 12 });
+    expect(requests).toEqual([healthUrl, "https://esports-schedule-two.vercel.app/api/cron/sync"]);
+  });
+
   it("fails toward sync when health is unavailable or not a trustworthy five-game snapshot", async () => {
     for (const health of [
       healthResponse({}, 503),
       healthResponse({ games: { lol: { syncStatus: "normal" } } }),
       healthResponse({ sourceFetchedAt: "2099-01-01T00:00:00.000Z" }),
+      healthResponse({ lastSuccessfulSyncAt: null }),
+      healthResponse({ lastSuccessfulSyncAt: "2026-10-18T09:44:59.000Z" }),
+      healthResponse({ lastSuccessfulSyncAt: "2099-01-01T00:00:00.000Z" }),
     ]) {
       const requests = [];
       const worker = createScheduleSyncWorker({

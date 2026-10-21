@@ -183,17 +183,27 @@ function getFreshScheduleAgeSeconds(payload, now) {
     || payload.snapshotAgeSeconds > FRESHNESS_LIMIT_SECONDS
     || typeof payload.sourceFetchedAt !== "string"
     || !Number.isFinite(Date.parse(payload.sourceFetchedAt))
+    || typeof payload.lastSuccessfulSyncAt !== "string"
+    || !Number.isFinite(Date.parse(payload.lastSuccessfulSyncAt))
     || !payload.games || typeof payload.games !== "object" || Array.isArray(payload.games)) {
     return null;
   }
 
   const sourceFetchedAt = Date.parse(payload.sourceFetchedAt);
+  const lastSuccessfulSyncAt = Date.parse(payload.lastSuccessfulSyncAt);
   // Reject clock-skewed/future timestamps and do not infer freshness from a
   // boolean alone. The app's age metric and timestamp must agree within a
   // small tolerance, and all five games must report normal synchronization.
   const timestampAgeSeconds = (now - sourceFetchedAt) / 1_000;
   if (timestampAgeSeconds < -60
     || Math.abs(timestampAgeSeconds - payload.snapshotAgeSeconds) > 60) {
+    return null;
+  }
+  // A recent persisted snapshot is not by itself proof that the providers are
+  // being refreshed. Do not skip the scheduled sync when the last successful
+  // upstream sync is missing, stale, or implausibly in the future.
+  const successfulSyncAgeSeconds = (now - lastSuccessfulSyncAt) / 1_000;
+  if (successfulSyncAgeSeconds < -60 || successfulSyncAgeSeconds > FRESHNESS_LIMIT_SECONDS) {
     return null;
   }
   if (!PANDA_GAMES.every((game) => payload.games[game]?.syncStatus === "normal")) return null;
