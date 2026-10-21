@@ -144,6 +144,40 @@ for (const profile of [
   }
   await gameSelect.selectOption("all");
   await statusSelect.selectOption("all");
+  const dateInput = page.locator('.date-field input[type="date"]');
+  const firstTimedMatch = page.locator('.match-card[data-calendar-exportable="true"] time[datetime]').first();
+  let calendarDateFilterWorks = true;
+  let calendarDateFilterFilename = null;
+  if (await firstTimedMatch.count() > 0) {
+    const firstStartTime = await firstTimedMatch.getAttribute("datetime");
+    const selectedCalendarDate = await page.evaluate((value) => {
+      const date = new Date(value);
+      const pad = (part) => String(part).padStart(2, "0");
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    }, firstStartTime);
+    await dateInput.fill(selectedCalendarDate);
+    const dateVisibleExportableCount = await page.locator('.match-card[data-calendar-exportable="true"]').count();
+    const dateReportedExportableCount = Number((await calendarButton.innerText()).match(/(\d+)/)?.[1] ?? 0);
+    calendarDateFilterWorks = dateReportedExportableCount === dateVisibleExportableCount;
+    if (dateVisibleExportableCount > 0) {
+      const dateDownloadPromise = page.waitForEvent("download");
+      await calendarButton.click();
+      const dateDownload = await dateDownloadPromise;
+      const dateStream = await dateDownload.createReadStream();
+      const dateChunks = [];
+      for await (const chunk of dateStream) dateChunks.push(chunk);
+      const dateContent = Buffer.concat(dateChunks).toString("utf8");
+      calendarDateFilterFilename = dateDownload.suggestedFilename();
+      calendarDateFilterWorks = calendarDateFilterWorks
+        && calendarDateFilterFilename === `esports-schedule-date-${selectedCalendarDate}.ics`
+        && (dateContent.match(/BEGIN:VEVENT/g)?.length ?? 0) === dateVisibleExportableCount;
+    } else {
+      calendarDateFilterWorks = calendarDateFilterWorks && await calendarButton.isDisabled();
+    }
+    await dateInput.fill("");
+  } else {
+    calendarDateFilterWorks = await calendarButton.isDisabled();
+  }
   await page.getByRole("tab", { name: /^今日/ }).click();
 
   const apiResponsePromise = page.waitForResponse(
@@ -235,6 +269,8 @@ for (const profile of [
     calendarExportCount,
     calendarExportFilter,
     calendarExportWorks,
+    calendarDateFilterFilename,
+    calendarDateFilterWorks,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -287,6 +323,7 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.calendarExportWorks) failures.push(`${prefix}: filtered calendar export failed`);
+  if (!result.calendarDateFilterWorks) failures.push(`${prefix}: exact-date calendar export failed`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);

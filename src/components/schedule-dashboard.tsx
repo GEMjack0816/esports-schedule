@@ -5,9 +5,10 @@ import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
-import { buildScheduleCalendar, isCalendarExportable } from "@/lib/schedule/calendar-export";
+import { buildScheduleCalendar, calendarExportFilename, isCalendarExportable } from "@/lib/schedule/calendar-export";
+import type { CalendarRangeKey } from "@/lib/schedule/calendar-export";
 
-type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
+type RangeKey = CalendarRangeKey;
 type Theme = "dark" | "light";
 
 const subscribeToTimeZone = () => () => undefined;
@@ -128,7 +129,9 @@ function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string 
       data-calendar-exportable={isCalendarExportable(match) ? "true" : "false"}
     >
       <div className="match-time-cell">
-        <span className="match-time">{formatTime(match.startTimeUtc, timeZone)}</span>
+        <time className="match-time" dateTime={match.startTimeUtc ?? undefined}>
+          {formatTime(match.startTimeUtc, timeZone)}
+        </time>
         <span className="match-date">{formatDate(match.startTimeUtc, timeZone)}</span>
       </div>
       <div className="match-event-cell">
@@ -258,7 +261,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     const objectUrl = URL.createObjectURL(file);
     const link = document.createElement("a");
     link.href = objectUrl;
-    link.download = `esports-schedule-${range}.ics`;
+    link.download = calendarExportFilename(range, selectedDate);
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
     setCalendarMessage(`已导出 ${exportableMatches.length} 场比赛到日历文件`);

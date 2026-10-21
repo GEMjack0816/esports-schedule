@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EsportsMatch } from "./types";
-import { buildScheduleCalendar, isCalendarExportable } from "./calendar-export";
+import { buildScheduleCalendar, calendarExportFilename, isCalendarExportable } from "./calendar-export";
 
 function match(overrides: Partial<EsportsMatch> = {}): EsportsMatch {
   return {
@@ -25,6 +25,12 @@ function match(overrides: Partial<EsportsMatch> = {}): EsportsMatch {
 }
 
 describe("schedule calendar export", () => {
+  it("names an exact-date export by its selected date instead of the retained quick range", () => {
+    expect(calendarExportFilename("today", "2026-10-20")).toBe("esports-schedule-date-2026-10-20.ics");
+    expect(calendarExportFilename("tomorrow", "")).toBe("esports-schedule-tomorrow.ics");
+    expect(calendarExportFilename("seven", "2026-02-30")).toBe("esports-schedule-seven.ics");
+  });
+
   it("exports a timed fixture with stable UTC timestamps and a safe stream URL", () => {
     const content = buildScheduleCalendar(
       [match()],

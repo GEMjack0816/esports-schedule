@@ -1,5 +1,7 @@
 import type { EsportsMatch } from "./types";
 
+export type CalendarRangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
+
 const credentialParameters = new Set([
   "access_token",
   "accesstoken",
@@ -105,6 +107,17 @@ function safeStreamUrl(match: EsportsMatch): string | null {
 
 export function isCalendarExportable(match: EsportsMatch): boolean {
   return utcDateTime(match.startTimeUtc) !== null;
+}
+
+export function calendarExportFilename(range: CalendarRangeKey, selectedDate = ""): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)) {
+    const parsed = new Date(`${selectedDate}T00:00:00.000Z`);
+    if (Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === selectedDate) {
+      return `esports-schedule-date-${selectedDate}.ics`;
+    }
+  }
+
+  return `esports-schedule-${range}.ics`;
 }
 
 export function buildScheduleCalendar(
