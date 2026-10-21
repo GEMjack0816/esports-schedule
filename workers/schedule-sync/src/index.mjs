@@ -171,7 +171,29 @@ function isCompletedSyncFailure(payload) {
     && Array.isArray(payload.errors);
 }
 
+const EXPLICIT_TIMEZONE_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function parseTimestampWithTimezone(value) {
+  if (typeof value !== "string" || !EXPLICIT_TIMEZONE_TIMESTAMP.test(value)) {
+    return null;
+  }
+
+  const calendarDate = new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
+  if (
+    !Number.isFinite(calendarDate.getTime()) ||
+    calendarDate.toISOString().slice(0, 10) !== value.slice(0, 10)
+  ) {
+    return null;
+  }
+
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
 function getFreshScheduleAgeSeconds(payload, now) {
+  const sourceFetchedAt = parseTimestampWithTimezone(payload?.sourceFetchedAt);
+  const lastSuccessfulSyncAt = parseTimestampWithTimezone(payload?.lastSuccessfulSyncAt);
   if (!payload || typeof payload !== "object" || Array.isArray(payload)
     || payload.demoMode !== false
     || payload.mode !== "live"
@@ -181,16 +203,12 @@ function getFreshScheduleAgeSeconds(payload, now) {
     || !Number.isInteger(payload.snapshotAgeSeconds)
     || payload.snapshotAgeSeconds < 0
     || payload.snapshotAgeSeconds > FRESHNESS_LIMIT_SECONDS
-    || typeof payload.sourceFetchedAt !== "string"
-    || !Number.isFinite(Date.parse(payload.sourceFetchedAt))
-    || typeof payload.lastSuccessfulSyncAt !== "string"
-    || !Number.isFinite(Date.parse(payload.lastSuccessfulSyncAt))
+    || sourceFetchedAt === null
+    || lastSuccessfulSyncAt === null
     || !payload.games || typeof payload.games !== "object" || Array.isArray(payload.games)) {
     return null;
   }
 
-  const sourceFetchedAt = Date.parse(payload.sourceFetchedAt);
-  const lastSuccessfulSyncAt = Date.parse(payload.lastSuccessfulSyncAt);
   // Reject clock-skewed/future timestamps and do not infer freshness from a
   // boolean alone. The app's age metric and timestamp must agree within a
   // small tolerance, and all five games must report normal synchronization.

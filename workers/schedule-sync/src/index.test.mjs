@@ -461,6 +461,70 @@ describe("schedule sync Worker client", () => {
     expect(requests).toEqual([healthUrl, "https://esports-schedule-two.vercel.app/api/cron/sync"]);
   });
 
+  it("runs the authenticated sync when freshness timestamps omit a timezone", async () => {
+    const requests = [];
+    const worker = createScheduleSyncWorker({
+      nowImpl: () => Date.parse("2026-10-18T10:00:00.000Z"),
+      fetchImpl: async (url) => {
+        requests.push(url);
+        return url === healthUrl
+          ? healthResponse({
+              sourceFetchedAt: "2026-10-18T09:55:00",
+              lastSuccessfulSyncAt: "2026-10-18T09:55:00",
+            })
+          : response();
+      },
+      log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+    await expect(worker.scheduled({ scheduledTime: 1, noRetry: vi.fn() }, { CRON_SECRET: syncSecret }))
+      .resolves.toMatchObject({ outcome: "success", generation: 12 });
+    expect(requests).toEqual([healthUrl, "https://esports-schedule-two.vercel.app/api/cron/sync"]);
+  });
+
+  it("does not accept an invalid calendar date that Date.parse normalizes", async () => {
+    const requests = [];
+    const worker = createScheduleSyncWorker({
+      nowImpl: () => Date.parse("2026-03-02T10:00:00.000Z"),
+      fetchImpl: async (url) => {
+        requests.push(url);
+        return url === healthUrl
+          ? healthResponse({
+              sourceFetchedAt: "2026-02-30T10:00:00.000Z",
+              lastSuccessfulSyncAt: "2026-02-30T10:00:00.000Z",
+              snapshotAgeSeconds: 0,
+            })
+          : response();
+      },
+      log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+    await expect(worker.scheduled({ scheduledTime: 1, noRetry: vi.fn() }, { CRON_SECRET: syncSecret }))
+      .resolves.toMatchObject({ outcome: "success", generation: 12 });
+    expect(requests).toEqual([healthUrl, "https://esports-schedule-two.vercel.app/api/cron/sync"]);
+  });
+
+  it("accepts unambiguous ISO timestamps with an explicit non-UTC offset", async () => {
+    const requests = [];
+    const worker = createScheduleSyncWorker({
+      nowImpl: () => Date.parse("2026-10-18T10:00:00.000Z"),
+      fetchImpl: async (url) => {
+        requests.push(url);
+        return url === healthUrl
+          ? healthResponse({
+              sourceFetchedAt: "2026-10-18T05:55:00.000-04:00",
+              lastSuccessfulSyncAt: "2026-10-18T05:55:00.000-04:00",
+            })
+          : response();
+      },
+      log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+    await expect(worker.scheduled({ scheduledTime: 1, noRetry: vi.fn() }, { CRON_SECRET: syncSecret }))
+      .resolves.toEqual({ outcome: "skipped_fresh", snapshotAgeSeconds: 300 });
+    expect(requests).toEqual([healthUrl]);
+  });
+
   it("fails toward sync when health is unavailable or not a trustworthy five-game snapshot", async () => {
     for (const health of [
       healthResponse({}, 503),
