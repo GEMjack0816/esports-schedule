@@ -22,6 +22,18 @@ describe("sync workflow response validation", () => {
     expect(validateSyncResponse(success, 200).ok).toBe(true);
   });
 
+  it.each([
+    "1",
+    "2026-02-31T00:00:00.000Z",
+    "2026-08-30T00:00:00Z",
+    "2026-08-30T00:00:00.000+00:00",
+  ])("rejects non-canonical or normalized timestamps: %s", (lastSuccessfulSyncAt) => {
+    expect(validateSyncResponse({ ...success, lastSuccessfulSyncAt }, 200)).toMatchObject({
+      ok: false,
+      message: "sync did not report a canonical UTC lastSuccessfulSyncAt",
+    });
+  });
+
   it("rejects malformed HTTP status codes instead of accepting a successful payload", () => {
     expect(validateSyncResponse(success, Number.NaN)).toEqual({
       ok: false,

@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
+function isCanonicalUtcTimestamp(value) {
+  if (typeof value !== "string") return false;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.valueOf()) && parsed.toISOString() === value;
+}
+
 export function validateSyncResponse(payload, httpStatus) {
   if (!payload || typeof payload !== "object") {
     return { ok: false, message: "sync endpoint returned invalid JSON" };
@@ -44,8 +50,8 @@ export function validateSyncResponse(payload, httpStatus) {
     || payload.gamesSucceeded + payload.gamesFailed !== payload.gamesAttempted) {
     return { ok: false, message: "sync game outcome counts are inconsistent" };
   }
-  if (typeof payload.lastSuccessfulSyncAt !== "string" || Number.isNaN(Date.parse(payload.lastSuccessfulSyncAt))) {
-    return { ok: false, message: "sync did not report a valid lastSuccessfulSyncAt" };
+  if (!isCanonicalUtcTimestamp(payload.lastSuccessfulSyncAt)) {
+    return { ok: false, message: "sync did not report a canonical UTC lastSuccessfulSyncAt" };
   }
   if (payload.status !== "success" && payload.status !== "partial") {
     return { ok: false, message: `sync reported logical status ${String(payload.status)}` };
