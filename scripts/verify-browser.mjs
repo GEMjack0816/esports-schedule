@@ -38,6 +38,20 @@ for (const profile of [
   const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage"];
   const auditUrl = new URL(baseUrl);
   auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
+  auditUrl.searchParams.set("range", "all");
+  auditUrl.searchParams.set("game", "cs2");
+  auditUrl.searchParams.set("status", "scheduled");
+  auditUrl.searchParams.set("q", "shareable-link-test");
+  await page.addInitScript(() => {
+    window.__clipboardShouldFail = false;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (value) => {
+        if (window.__clipboardShouldFail) throw new Error("clipboard blocked");
+        window.__copiedScheduleUrl = value;
+      } },
+    });
+  });
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const text = message.text();
@@ -77,6 +91,52 @@ for (const profile of [
   const homepageCommit = await page.locator("#esports-schedule-version").getAttribute("data-git-commit");
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
+  const queryInput = page.locator('.filter-panel input[type="search"], .filter-panel input:not([type])').first();
+  const restoredFilterState = {
+    range: await page.getByRole("tab", { name: /全部收录/ }).getAttribute("aria-selected"),
+    game: await page.locator(".filter-panel select").nth(0).inputValue(),
+    status: await page.locator(".filter-panel select").nth(2).inputValue(),
+    query: await queryInput.inputValue(),
+  };
+  const unicodeBoundaryUrl = new URL(auditUrl);
+  const unicodeBoundaryText = `${"x".repeat(119)}😀tail`;
+  unicodeBoundaryUrl.searchParams.set("q", unicodeBoundaryText);
+  await page.goto(unicodeBoundaryUrl.toString(), { waitUntil: "networkidle", timeout: 120_000 });
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("q") === "x".repeat(119));
+  const unicodeFilterBoundarySafe = await page.locator('.filter-panel input[type="search"], .filter-panel input:not([type])').first().inputValue() === "x".repeat(119)
+    && new URL(page.url()).searchParams.get("q") === "x".repeat(119);
+  await page.goto(auditUrl.toString(), { waitUntil: "networkidle", timeout: 120_000 });
+  const historyGameSelect = page.locator(".filter-panel select").nth(0);
+  await historyGameSelect.selectOption("valorant");
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("game") === "valorant");
+  await page.goBack({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("game") === "cs2");
+  const browserBackRestoresFilterState = await historyGameSelect.inputValue() === "cs2"
+    && await page.locator(".filter-panel select").nth(2).inputValue() === "scheduled";
+  await page.goForward({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("game") === "valorant");
+  const browserForwardRestoresFilterState = await historyGameSelect.inputValue() === "valorant"
+    && await page.locator(".filter-panel select").nth(2).inputValue() === "scheduled";
+  const historyLengthBeforeQuery = await page.evaluate(() => history.length);
+  await queryInput.fill("grouped query");
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("q") === "grouped query");
+  const historyLengthAfterFirstQuery = await page.evaluate(() => history.length);
+  await queryInput.fill("grouped query updated");
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("q") === "grouped query updated");
+  const queryEditsShareOneHistoryEntry = historyLengthAfterFirstQuery === historyLengthBeforeQuery + 1
+    && await page.evaluate(() => history.length) === historyLengthAfterFirstQuery;
+  await page.goBack({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("q") === "shareable-link-test");
+  const browserBackRestoresPreviousQuery = await queryInput.inputValue() === "shareable-link-test";
+  await page.goForward({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("q") === "grouped query updated");
+  const browserForwardRestoresLatestQuery = await queryInput.inputValue() === "grouped query updated";
+  const searchQueryMaxLength = Number(await queryInput.getAttribute("maxlength"));
+  await queryInput.fill("Q".repeat(searchQueryMaxLength + 10));
+  await page.waitForFunction((maxLength) => new URL(location.href).searchParams.get("q")?.length === maxLength, searchQueryMaxLength);
+  const searchQueryMatchesUrlLimit = searchQueryMaxLength === 120
+    && (await queryInput.inputValue()).length === searchQueryMaxLength
+    && new URL(page.url()).searchParams.get("q")?.length === searchQueryMaxLength;
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -84,19 +144,83 @@ for (const profile of [
   const gameFilterCounts = {};
   const statusFilterCounts = {};
   await page.getByRole("tab", { name: /全部收录/ }).click();
-  const gameSelect = page.locator(".filter-panel select").nth(0);
+  const gameSelect = historyGameSelect;
+  await queryInput.fill("");
   for (const game of ["lol", "valorant", "honor-of-kings", "cs2", "dota2"]) {
     await gameSelect.selectOption(game);
     gameFilterCounts[game] = await page.locator(".match-card").count();
   }
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("game") === "dota2");
+  const gameFilterUrlSync = new URL(page.url()).searchParams.get("game") === "dota2";
   await gameSelect.selectOption("all");
   const statusSelect = page.locator(".filter-panel select").nth(2);
   for (const status of ["running", "finished", "scheduled"]) {
     await statusSelect.selectOption(status);
     statusFilterCounts[status] = await page.locator(".match-card").count();
   }
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("status") === "scheduled");
+  const statusFilterUrlSync = new URL(page.url()).searchParams.get("status") === "scheduled";
   await statusSelect.selectOption("all");
   await page.getByRole("tab", { name: /^今日/ }).click();
+  await queryInput.fill("share verification");
+  await gameSelect.selectOption("lol");
+  await statusSelect.selectOption("running");
+  await page.waitForFunction(() => {
+    const params = new URL(location.href).searchParams;
+    return params.get("game") === "lol" && params.get("status") === "running" && params.get("q") === "share verification";
+  });
+  await page.getByRole("button", { name: "复制筛选链接" }).click();
+  await page.getByRole("status").filter({ hasText: "筛选链接已复制" }).waitFor();
+  const copiedScheduleUrl = await page.evaluate(() => window.__copiedScheduleUrl ?? "");
+  const shareLinkCopied = (() => {
+    const params = new URL(copiedScheduleUrl).searchParams;
+    return params.get("game") === "lol"
+      && params.get("status") === "running"
+      && params.get("q") === "share verification"
+      && !params.has("audit");
+  })();
+  await page.evaluate(() => { window.__clipboardShouldFail = true; });
+  await page.getByRole("button", { name: "复制筛选链接" }).click();
+  await page.getByRole("status").filter({ hasText: "复制失败，请手动复制下方链接" }).waitFor();
+  const fallbackLinkInput = page.getByLabel("手动复制筛选链接");
+  const fallbackLinkValue = await fallbackLinkInput.inputValue();
+  await fallbackLinkInput.focus();
+  const fallbackInputSelectsLink = await fallbackLinkInput.evaluate(
+    (input) => input.selectionStart === 0 && input.selectionEnd === input.value.length,
+  );
+  const manualCopyFallbackWorks = (() => {
+    const params = new URL(fallbackLinkValue).searchParams;
+    return params.get("game") === "lol"
+      && params.get("status") === "running"
+      && params.get("q") === "share verification"
+      && !params.has("audit")
+      && fallbackInputSelectsLink;
+  })();
+  await gameSelect.selectOption("cs2");
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("game") === "cs2");
+  const staleShareFeedbackClearsOnFilterChange = await page.locator(".filter-share-actions [role='status']").innerText() === ""
+    && await page.getByLabel("手动复制筛选链接").count() === 0;
+
+  const dateInput = page.locator('.filter-panel input[type="date"]');
+  const selectedDateValue = await dateInput.getAttribute("min") || "2026-10-19";
+  await dateInput.fill(selectedDateValue);
+  await page.waitForFunction((date) => new URL(location.href).searchParams.get("date") === date, selectedDateValue);
+  const dateFilterUrlSync = new URL(page.url()).searchParams.get("date") === selectedDateValue;
+  const noRangeSelectedForCustomDate = await page.getByRole("tab").evaluateAll(
+    (tabs) => tabs.every((tab) => tab.getAttribute("aria-selected") === "false"),
+  );
+  await page.getByRole("tab", { name: /明日/ }).click();
+  await page.waitForFunction(() => {
+    const params = new URL(location.href).searchParams;
+    return params.get("range") === "tomorrow" && !params.has("date");
+  });
+  const rangeClearsSelectedDate = !new URL(page.url()).searchParams.has("date");
+  await page.locator(".empty-state button").click();
+  await page.waitForFunction(() => {
+    const params = new URL(location.href).searchParams;
+    return !params.has("range") && !params.has("game") && !params.has("status") && !params.has("q") && !params.has("date");
+  });
+  const clearFiltersResetsRange = await page.getByRole("tab", { name: /^今日/ }).getAttribute("aria-selected") === "true";
 
   const apiResponsePromise = page.waitForResponse(
     (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
@@ -184,6 +308,23 @@ for (const profile of [
     gameOptions,
     gameFilterCounts,
     statusFilterCounts,
+    restoredFilterState,
+    unicodeFilterBoundarySafe,
+    browserBackRestoresFilterState,
+    browserForwardRestoresFilterState,
+    queryEditsShareOneHistoryEntry,
+    browserBackRestoresPreviousQuery,
+    browserForwardRestoresLatestQuery,
+    searchQueryMatchesUrlLimit,
+    gameFilterUrlSync,
+    statusFilterUrlSync,
+    shareLinkCopied,
+    manualCopyFallbackWorks,
+    staleShareFeedbackClearsOnFilterChange,
+    dateFilterUrlSync,
+    noRangeSelectedForCustomDate,
+    rangeClearsSelectedDate,
+    clearFiltersResetsRange,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -235,6 +376,28 @@ for (const result of results) {
   if (result.forbiddenHtmlPhrases.length > 0) failures.push(`${prefix}: demo text in HTML`);
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
+  if (result.restoredFilterState.range !== "true"
+    || result.restoredFilterState.game !== "cs2"
+    || result.restoredFilterState.status !== "scheduled"
+    || result.restoredFilterState.query !== "shareable-link-test") {
+    failures.push(`${prefix}: shared URL filters were not restored`);
+  }
+  if (!result.unicodeFilterBoundarySafe) failures.push(`${prefix}: a truncated emoji corrupted a shared filter URL`);
+  if (!result.browserBackRestoresFilterState) failures.push(`${prefix}: browser back did not restore the previous filter state`);
+  if (!result.browserForwardRestoresFilterState) failures.push(`${prefix}: browser forward did not restore the next filter state`);
+  if (!result.queryEditsShareOneHistoryEntry) failures.push(`${prefix}: typing a query created more than one history entry`);
+  if (!result.browserBackRestoresPreviousQuery) failures.push(`${prefix}: browser back did not restore the previous search query`);
+  if (!result.browserForwardRestoresLatestQuery) failures.push(`${prefix}: browser forward did not restore the latest search query`);
+  if (!result.searchQueryMatchesUrlLimit) failures.push(`${prefix}: search input exceeded the URL/parser character limit`);
+  if (!result.gameFilterUrlSync) failures.push(`${prefix}: game filter was not written to the URL`);
+  if (!result.statusFilterUrlSync) failures.push(`${prefix}: status filter was not written to the URL`);
+  if (!result.shareLinkCopied) failures.push(`${prefix}: copied filter link is incomplete`);
+  if (!result.manualCopyFallbackWorks) failures.push(`${prefix}: clipboard failure did not expose a selectable sanitized link`);
+  if (!result.staleShareFeedbackClearsOnFilterChange) failures.push(`${prefix}: changing filters left stale copy feedback visible`);
+  if (!result.dateFilterUrlSync) failures.push(`${prefix}: selected date was not written to the URL`);
+  if (!result.noRangeSelectedForCustomDate) failures.push(`${prefix}: custom date left a misleading range tab selected`);
+  if (!result.rangeClearsSelectedDate) failures.push(`${prefix}: quick range did not clear the custom date`);
+  if (!result.clearFiltersResetsRange) failures.push(`${prefix}: clear filters did not restore the default range`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);

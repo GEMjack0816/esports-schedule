@@ -2,11 +2,19 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import {
+  applyScheduleFilters,
+  boundScheduleFilterText,
+  DEFAULT_SCHEDULE_FILTERS,
+  MAX_SCHEDULE_FILTER_TEXT_LENGTH,
+  parseScheduleFilters,
+  type ScheduleFilters,
+} from "@/lib/schedule/filter-state";
 
-type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
+type RangeKey = ScheduleFilters["range"];
 type Theme = "dark" | "light";
 
 const subscribeToTimeZone = () => () => undefined;
@@ -149,21 +157,87 @@ function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string 
   );
 }
 
-export function ScheduleDashboard({ initialData }: { initialData: SchedulePayload }) {
+export function ScheduleDashboard({
+  initialData,
+  initialFilters = DEFAULT_SCHEDULE_FILTERS,
+}: {
+  initialData: SchedulePayload;
+  initialFilters?: ScheduleFilters;
+}) {
   const [payload, setPayload] = useState(initialData);
-  const [range, setRange] = useState<RangeKey>("today");
-  const [game, setGame] = useState<GameKey | "all">("all");
-  const [league, setLeague] = useState("all");
-  const [status, setStatus] = useState<MatchStatus | "all">("all");
-  const [query, setQuery] = useState("");
-  const [selectedDate, setSelectedDate] = useState("");
+  const [range, setRange] = useState<RangeKey>(initialFilters.range);
+  const [game, setGame] = useState<GameKey | "all">(initialFilters.game);
+  const [league, setLeague] = useState(initialFilters.league);
+  const [status, setStatus] = useState<MatchStatus | "all">(initialFilters.status);
+  const [query, setQuery] = useState(initialFilters.query);
+  const [selectedDate, setSelectedDate] = useState(initialFilters.selectedDate);
   const [refreshing, setRefreshing] = useState(false);
+  const [shareMessage, setShareMessage] = useState("");
+  const [shareFallbackUrl, setShareFallbackUrl] = useState("");
+  const queryHistoryEntryPushed = useRef(false);
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
     getServerTimeZone,
   );
   const theme = useSyncExternalStore(subscribeToTheme, getBrowserTheme, getServerTheme);
+
+  const filters = useMemo<ScheduleFilters>(() => ({
+    range,
+    game,
+    league,
+    status,
+    query,
+    selectedDate,
+  }), [game, league, query, range, selectedDate, status]);
+
+  function clearShareFeedback() {
+    setShareMessage("");
+    setShareFallbackUrl("");
+  }
+
+  function pushFilterHistoryEntry(nextFilters: ScheduleFilters) {
+    const params = applyScheduleFilters(new URLSearchParams(window.location.search), nextFilters);
+    const queryString = params.toString();
+    const nextUrl = `${window.location.pathname}${queryString ? `?${queryString}` : ""}${window.location.hash}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (nextUrl !== currentUrl) window.history.pushState(window.history.state, "", nextUrl);
+  }
+
+  function updateQuery(nextQuery: string) {
+    const boundedQuery = boundScheduleFilterText(nextQuery);
+    clearShareFeedback();
+    if (!queryHistoryEntryPushed.current) {
+      pushFilterHistoryEntry({ ...filters, query: boundedQuery });
+      queryHistoryEntryPushed.current = true;
+    }
+    setQuery(boundedQuery);
+  }
+
+  useEffect(() => {
+    const restoreFromUrl = () => {
+      setShareMessage("");
+      setShareFallbackUrl("");
+      queryHistoryEntryPushed.current = false;
+      const restored = parseScheduleFilters(new URLSearchParams(window.location.search));
+      setRange(restored.range);
+      setGame(restored.game);
+      setLeague(restored.league);
+      setStatus(restored.status);
+      setQuery(restored.query);
+      setSelectedDate(restored.selectedDate);
+    };
+    window.addEventListener("popstate", restoreFromUrl);
+    return () => window.removeEventListener("popstate", restoreFromUrl);
+  }, []);
+
+  useEffect(() => {
+    const params = applyScheduleFilters(new URLSearchParams(window.location.search), filters);
+    const queryString = params.toString();
+    const nextUrl = `${window.location.pathname}${queryString ? `?${queryString}` : ""}${window.location.hash}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (nextUrl !== currentUrl) window.history.replaceState(window.history.state, "", nextUrl);
+  }, [filters]);
 
   const today = addDaysKey(0, timeZone);
   const tomorrow = addDaysKey(1, timeZone);
@@ -239,7 +313,25 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   }
 
   function resetFilters() {
-    setGame("all"); setLeague("all"); setStatus("all"); setQuery(""); setSelectedDate("");
+    clearShareFeedback();
+    pushFilterHistoryEntry(DEFAULT_SCHEDULE_FILTERS);
+    setRange("today"); setGame("all"); setLeague("all"); setStatus("all"); setQuery(""); setSelectedDate("");
+    queryHistoryEntryPushed.current = false;
+  }
+
+  async function copyFilterLink() {
+    const params = applyScheduleFilters(new URLSearchParams(), filters);
+    const url = new URL(window.location.pathname, window.location.origin);
+    url.search = params.toString();
+    const shareUrl = url.toString();
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setShareFallbackUrl("");
+      setShareMessage("筛选链接已复制");
+    } catch {
+      setShareFallbackUrl(shareUrl);
+      setShareMessage("复制失败，请手动复制下方链接");
+    }
   }
 
   function toggleTheme() {
@@ -320,19 +412,56 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
 
           <div className="range-tabs" role="tablist" aria-label="选择时间范围">
             {([ ["today", "今日"], ["tomorrow", "明日"], ["seven", "未来 7 天"], ["history", "历史比赛"], ["all", "全部收录"] ] as const).map(([key, label]) => (
-              <button key={key} role="tab" aria-selected={range === key} className={range === key ? "active" : ""} type="button" onClick={() => setRange(key)}>
+              <button key={key} role="tab" aria-selected={!selectedDate && range === key} className={!selectedDate && range === key ? "active" : ""} type="button" onClick={() => {
+                clearShareFeedback();
+                pushFilterHistoryEntry({ ...filters, range: key, selectedDate: "" });
+                setRange(key);
+                setSelectedDate("");
+              }}>
                 <span>{label}</span><em>{rangeCounts[key]}</em>
               </button>
             ))}
           </div>
 
           <div className="filter-panel">
-            <label className="search-field"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索战队或赛事" /></label>
-            <label><span className="sr-only">游戏</span><select value={game} onChange={(event) => setGame(event.target.value as GameKey | "all")}><option value="all">全部游戏</option>{Object.entries(games).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
-            <label><span className="sr-only">赛事</span><select value={league} onChange={(event) => setLeague(event.target.value)}><option value="all">全部赛事</option>{leagues.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
-            <label><span className="sr-only">状态</span><select value={status} onChange={(event) => setStatus(event.target.value as MatchStatus | "all")}><option value="all">全部状态</option>{Object.entries(statusMeta).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
-            <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt?.slice(0, 10)} max={payload.coverage.range.latestMatchAt?.slice(0, 10)} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
+            <label className="search-field"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3 3" /></svg><input maxLength={MAX_SCHEDULE_FILTER_TEXT_LENGTH} value={query} onChange={(event) => updateQuery(event.target.value)} onBlur={() => { queryHistoryEntryPushed.current = false; }} placeholder="搜索战队或赛事" /></label>
+            <label><span className="sr-only">游戏</span><select value={game} onChange={(event) => {
+              const nextGame = event.target.value as GameKey | "all";
+              clearShareFeedback();
+              pushFilterHistoryEntry({ ...filters, game: nextGame });
+              setGame(nextGame);
+            }}><option value="all">全部游戏</option>{Object.entries(games).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
+            <label><span className="sr-only">赛事</span><select value={league} onChange={(event) => {
+              const nextLeague = event.target.value;
+              clearShareFeedback();
+              pushFilterHistoryEntry({ ...filters, league: nextLeague });
+              setLeague(nextLeague);
+            }}><option value="all">全部赛事</option>{league !== "all" && !leagues.includes(league) && <option value={league}>{league}（当前无匹配）</option>}{leagues.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
+            <label><span className="sr-only">状态</span><select value={status} onChange={(event) => {
+              const nextStatus = event.target.value as MatchStatus | "all";
+              clearShareFeedback();
+              pushFilterHistoryEntry({ ...filters, status: nextStatus });
+              setStatus(nextStatus);
+            }}><option value="all">全部状态</option>{Object.entries(statusMeta).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
+            <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt?.slice(0, 10)} max={payload.coverage.range.latestMatchAt?.slice(0, 10)} value={selectedDate} onChange={(event) => {
+              const nextDate = event.target.value;
+              clearShareFeedback();
+              pushFilterHistoryEntry({ ...filters, selectedDate: nextDate });
+              setSelectedDate(nextDate);
+            }} /></label>
           </div>
+
+          <div className="filter-share-actions">
+            <button type="button" className="share-filters-button" onClick={copyFilterLink}>复制筛选链接</button>
+            <span role="status" aria-live="polite">{shareMessage}</span>
+          </div>
+          {shareFallbackUrl && (
+            <div className="share-fallback">
+              <label>手动复制筛选链接
+                <input type="url" readOnly value={shareFallbackUrl} onFocus={(event) => event.currentTarget.select()} />
+              </label>
+            </div>
+          )}
 
           <div className="match-list" aria-live="polite">
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
