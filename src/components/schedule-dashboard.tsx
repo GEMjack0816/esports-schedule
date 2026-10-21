@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
-import { getScheduleSourceLabel } from "@/lib/schedule/presentation";
+import { getGameSyncPresentation, getScheduleSourceLabel } from "@/lib/schedule/presentation";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -311,11 +311,15 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           <div className="sync-status-grid" aria-label="各游戏数据同步状态">
             {Object.entries(games).map(([key, value]) => {
               const coverage = payload.coverage.games[key as GameKey];
-              const syncStatus = coverage?.syncStatus ?? "failed";
+              const syncPresentation = getGameSyncPresentation({
+                syncStatus: coverage?.syncStatus,
+                lastError: coverage?.lastError,
+                refreshInProgress: coverage?.refreshInProgress ?? false,
+              });
               return (
-                <div className={`sync-status-card sync-${syncStatus}`} key={key}>
+                <div className={`sync-status-card sync-${syncPresentation.visualStatus}`} key={key}>
                   <span>{value.label}</span>
-                  <strong>{coverage?.refreshInProgress ? "同步中" : syncStatus === "normal" ? "正常" : syncStatus === "delayed" ? "延迟" : "同步失败"}</strong>
+                  <strong>{syncPresentation.label}</strong>
                   <small>{formatDateTime(coverage?.sourceFetchedAt ?? null, timeZone)}</small>
                 </div>
               );

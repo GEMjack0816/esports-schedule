@@ -1,10 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { getScheduleSourceLabel } from "./presentation";
+import { getGameSyncPresentation, getScheduleSourceLabel } from "./presentation";
 
 const fiveDelayed = ["delayed", "delayed", "delayed", "delayed", "delayed"] as const;
 const noErrorStates = fiveDelayed.map((syncStatus) => ({ syncStatus, lastError: null }));
 const staleWithoutErrors = Array.from({ length: 5 }, () => ({ syncStatus: "failed" as const, lastError: null }));
 const error = { at: "2026-10-21T12:35:00.000Z", code: "UPSTREAM", httpStatus: 502 };
+
+describe("getGameSyncPresentation", () => {
+  it("labels an age-expired status as an expired snapshot without error evidence", () => {
+    expect(getGameSyncPresentation({ syncStatus: "failed", lastError: null, refreshInProgress: false }))
+      .toEqual({ label: "快照过期", visualStatus: "delayed" });
+  });
+
+  it("labels a failed attempt only when error evidence exists", () => {
+    expect(getGameSyncPresentation({ syncStatus: "failed", lastError: error, refreshInProgress: false }))
+      .toEqual({ label: "同步失败", visualStatus: "failed" });
+  });
+
+  it("shows an updating state before the previous status", () => {
+    expect(getGameSyncPresentation({ syncStatus: "failed", lastError: error, refreshInProgress: true }))
+      .toEqual({ label: "同步中", visualStatus: "delayed" });
+  });
+
+  it("avoids claiming failure when coverage is absent", () => {
+    expect(getGameSyncPresentation({ syncStatus: null, lastError: null, refreshInProgress: false }))
+      .toEqual({ label: "状态未知", visualStatus: "unknown" });
+  });
+});
 
 describe("getScheduleSourceLabel", () => {
   it("uses the normal label for a fresh live snapshot", () => {
