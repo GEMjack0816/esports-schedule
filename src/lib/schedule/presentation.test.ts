@@ -52,6 +52,15 @@ describe("getScheduleSourceLabel", () => {
     })).toBe("PandaScore 聚合数据（赛程快照已过期，当前显示已缓存数据）");
   });
 
+  it("labels delayed snapshots beyond the freshness window without inventing sync failures", () => {
+    expect(getScheduleSourceLabel({
+      mode: "live",
+      stale: true,
+      refreshInProgress: false,
+      gameStates: noErrorStates,
+    })).toBe("PandaScore 聚合数据（赛程快照已过期，当前显示已缓存数据）");
+  });
+
   it("distinguishes a refresh in progress from a failed refresh", () => {
     expect(getScheduleSourceLabel({
       mode: "live",
