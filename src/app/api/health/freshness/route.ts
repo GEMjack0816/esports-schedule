@@ -29,7 +29,9 @@ function responseBody(
     service: "esports-schedule",
     status: state,
     mode: schedule?.mode ?? "unavailable",
-    stale: schedule?.stale ?? true,
+    // Reflect this endpoint's complete freshness decision, including invalid
+    // or missing timestamps that the schedule payload itself may not flag.
+    stale: state !== "fresh",
     snapshotAgeSeconds: schedule?.coverage.snapshotAgeSeconds ?? null,
     sourceFetchedAt: schedule?.coverage.sourceFetchedAt ?? null,
     lastSuccessfulSyncAt: schedule?.coverage.lastSuccessfulSyncAt ?? null,

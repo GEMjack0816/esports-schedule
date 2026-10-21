@@ -80,7 +80,10 @@ describe("GET /api/health/freshness", () => {
 
     const response = await GET();
     expect(response.status).toBe(503);
-    await expect(response.json()).resolves.toMatchObject({ status: "stale" });
+    await expect(response.json()).resolves.toMatchObject({
+      status: "stale",
+      stale: true,
+    });
   });
 
   it("accepts source and successful-sync timestamps just inside the freshness boundary", async () => {
