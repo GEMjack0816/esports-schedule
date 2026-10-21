@@ -1,7 +1,8 @@
 # Preview database target verification
 
 `GET /api/health/data-coverage` adds `database.targetFingerprint` only when
-`VERCEL_ENV=preview`. Production responses do not include this field.
+`VERCEL_ENV=preview` and the request has a valid administrator session.
+Anonymous Preview health requests and all Production responses omit this field.
 
 The fingerprint is SHA-256 over the lowercase PostgreSQL hostname, normalized
 port, a NUL byte, and the decoded database name. An omitted port is normalized
