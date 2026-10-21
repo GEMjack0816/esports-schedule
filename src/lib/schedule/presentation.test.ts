@@ -17,8 +17,13 @@ describe("getGameSyncPresentation", () => {
       .toEqual({ label: "暂无可用快照", visualStatus: "unknown" });
   });
 
-  it("labels a failed attempt only when error evidence exists", () => {
+  it("preserves a known failed status when error details are present", () => {
     expect(getGameSyncPresentation({ syncStatus: "failed", lastError: error, refreshInProgress: false }))
+      .toEqual({ label: "同步失败", visualStatus: "failed" });
+  });
+
+  it("does not hide a known failed status when error details are unavailable", () => {
+    expect(getGameSyncPresentation({ syncStatus: "failed", lastError: null, refreshInProgress: false }))
       .toEqual({ label: "同步失败", visualStatus: "failed" });
   });
 
@@ -91,6 +96,15 @@ describe("getScheduleSourceLabel", () => {
       stale: true,
       refreshInProgress: false,
       gameStates: Array.from({ length: 5 }, () => ({ syncStatus: "failed" as const, lastError: error })),
+    })).toBe("PandaScore 聚合数据（同步失败，当前显示上次成功快照）");
+  });
+
+  it("reports failed syncs even when error details are unavailable", () => {
+    expect(getScheduleSourceLabel({
+      mode: "live",
+      stale: true,
+      refreshInProgress: false,
+      gameStates: Array.from({ length: 5 }, () => ({ syncStatus: "failed" as const, lastError: null })),
     })).toBe("PandaScore 聚合数据（同步失败，当前显示上次成功快照）");
   });
 
