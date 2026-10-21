@@ -43,7 +43,7 @@ describe("schedule calendar export", () => {
     expect(content).toContain("DTSTAMP:20261019T110000Z\r\n");
     expect(content).toContain("DTSTART:20261019T123000Z\r\n");
     expect(content).toContain("DURATION:PT2H\r\n");
-    expect(content).toContain("日历预留估值：2 小时（非赛事官方结束时间）");
+    expect(content.replace(/\r\n[ \t]/g, "")).toContain("日历预留估值：2 小时（非赛事官方结束时间）");
     expect(content).toContain("SUMMARY:T1 vs Gen.G · League of Legends World Championship\r\n");
     expect(content).toContain("STATUS:TENTATIVE\r\n");
     expect(content).toContain("URL:https://stream.example/live\r\n");
