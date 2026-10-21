@@ -2,7 +2,7 @@
 export function normalizeScheduleSearchText(value: string): string {
   return value
     .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/([\p{Script=Latin}])\p{M}+/gu, "$1")
     .replace(/[\u0131\u0130]/g, "i")
     .toLowerCase()
     .replace(/\u00df/g, "ss")

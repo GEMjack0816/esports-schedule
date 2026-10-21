@@ -18,6 +18,11 @@ describe("schedule search normalization", () => {
     expect(scheduleSearchMatches("strasse", ["Straße Esports"])).toBe(true);
   });
 
+  it("folds combining marks only when attached to Latin letters", () => {
+    expect(normalizeScheduleSearchText("École")).toBe("ecole");
+    expect(normalizeScheduleSearchText("ά")).toBe(String.fromCodePoint(0x03b1, 0x0301));
+  });
+
   it("matches Greek final and medial sigma independent of word position", () => {
     expect(scheduleSearchMatches("ΟΣ", ["οσ esports"])).toBe(true);
     expect(scheduleSearchMatches("οσ", ["ος esports"])).toBe(true);
