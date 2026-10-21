@@ -1,12 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { socialImageAlt, socialImagePath, twitterCard } from "./site-social-metadata";
+import { siteMetadataBase, socialImageAlt, socialImagePath, socialImageUrl, twitterCard } from "./site-social-metadata";
 
 describe("site social metadata", () => {
   it("uses a large image card with stable public metadata", () => {
     expect(twitterCard.card).toBe("summary_large_image");
     expect(twitterCard.title).toContain("赛界 PULSE");
-    expect(twitterCard.images).toEqual(["https://esports-schedule-two.vercel.app/esports-schedule-og.png"]);
+    expect(socialImageUrl).toBe(new URL(socialImagePath, siteMetadataBase).toString());
+    expect(twitterCard.images).toEqual([socialImageUrl]);
     expect(socialImageAlt).toContain("五大电竞赛事");
   });
 
