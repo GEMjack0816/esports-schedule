@@ -98,6 +98,14 @@ for (const profile of [
     status: await page.locator(".filter-panel select").nth(2).inputValue(),
     query: await queryInput.inputValue(),
   };
+  const unicodeBoundaryUrl = new URL(auditUrl);
+  const unicodeBoundaryText = `${"x".repeat(119)}😀tail`;
+  unicodeBoundaryUrl.searchParams.set("q", unicodeBoundaryText);
+  await page.goto(unicodeBoundaryUrl.toString(), { waitUntil: "networkidle", timeout: 120_000 });
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("q") === "x".repeat(119));
+  const unicodeFilterBoundarySafe = await page.locator('.filter-panel input[type="search"], .filter-panel input:not([type])').first().inputValue() === "x".repeat(119)
+    && new URL(page.url()).searchParams.get("q") === "x".repeat(119);
+  await page.goto(auditUrl.toString(), { waitUntil: "networkidle", timeout: 120_000 });
   const historyGameSelect = page.locator(".filter-panel select").nth(0);
   await historyGameSelect.selectOption("valorant");
   await page.waitForFunction(() => new URL(location.href).searchParams.get("game") === "valorant");
@@ -301,6 +309,7 @@ for (const profile of [
     gameFilterCounts,
     statusFilterCounts,
     restoredFilterState,
+    unicodeFilterBoundarySafe,
     browserBackRestoresFilterState,
     browserForwardRestoresFilterState,
     queryEditsShareOneHistoryEntry,
@@ -373,6 +382,7 @@ for (const result of results) {
     || result.restoredFilterState.query !== "shareable-link-test") {
     failures.push(`${prefix}: shared URL filters were not restored`);
   }
+  if (!result.unicodeFilterBoundarySafe) failures.push(`${prefix}: a truncated emoji corrupted a shared filter URL`);
   if (!result.browserBackRestoresFilterState) failures.push(`${prefix}: browser back did not restore the previous filter state`);
   if (!result.browserForwardRestoresFilterState) failures.push(`${prefix}: browser forward did not restore the next filter state`);
   if (!result.queryEditsShareOneHistoryEntry) failures.push(`${prefix}: typing a query created more than one history entry`);

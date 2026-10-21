@@ -7,6 +7,7 @@ import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 import {
   applyScheduleFilters,
+  boundScheduleFilterText,
   DEFAULT_SCHEDULE_FILTERS,
   MAX_SCHEDULE_FILTER_TEXT_LENGTH,
   parseScheduleFilters,
@@ -204,7 +205,7 @@ export function ScheduleDashboard({
   }
 
   function updateQuery(nextQuery: string) {
-    const boundedQuery = nextQuery.slice(0, MAX_SCHEDULE_FILTER_TEXT_LENGTH);
+    const boundedQuery = boundScheduleFilterText(nextQuery);
     clearShareFeedback();
     if (!queryHistoryEntryPushed.current) {
       pushFilterHistoryEntry({ ...filters, query: boundedQuery });

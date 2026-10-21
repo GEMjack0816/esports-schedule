@@ -34,6 +34,12 @@ const matchStatuses: readonly MatchStatus[] = [
   "unknown",
 ];
 
+export function boundScheduleFilterText(value: string): string {
+  const bounded = value.slice(0, MAX_SCHEDULE_FILTER_TEXT_LENGTH);
+  // Avoid leaving a lone high surrogate when a shared URL is cut mid-emoji.
+  return /[\uD800-\uDBFF]$/.test(bounded) ? bounded.slice(0, -1) : bounded;
+}
+
 function isCalendarDate(value: string | null): value is string {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const [year, month, day] = value.split("-").map(Number);
@@ -57,11 +63,11 @@ export function parseScheduleFilters(params: URLSearchParams): ScheduleFilters {
     game: rawGame === "all" || !rawGame
       ? "all"
       : gameKeys.includes(rawGame as GameKey) ? rawGame as GameKey : "all",
-    league: rawLeague && rawLeague !== "all" ? rawLeague.slice(0, MAX_SCHEDULE_FILTER_TEXT_LENGTH) : "all",
+    league: rawLeague && rawLeague !== "all" ? boundScheduleFilterText(rawLeague) : "all",
     status: rawStatus === "all" || !rawStatus
       ? "all"
       : matchStatuses.includes(rawStatus as MatchStatus) ? rawStatus as MatchStatus : "all",
-    query: rawQuery?.trim().slice(0, MAX_SCHEDULE_FILTER_TEXT_LENGTH) ?? "",
+    query: rawQuery ? boundScheduleFilterText(rawQuery.trim()) : "",
     selectedDate: isCalendarDate(params.get("date")) ? params.get("date")! : "",
   };
 }
@@ -75,9 +81,9 @@ export function applyScheduleFilters(
 
   if (filters.range !== DEFAULT_SCHEDULE_FILTERS.range) params.set("range", filters.range);
   if (filters.game !== "all") params.set("game", filters.game);
-  if (filters.league !== "all") params.set("league", filters.league.slice(0, MAX_SCHEDULE_FILTER_TEXT_LENGTH));
+  if (filters.league !== "all") params.set("league", boundScheduleFilterText(filters.league));
   if (filters.status !== "all") params.set("status", filters.status);
-  const query = filters.query.trim().slice(0, MAX_SCHEDULE_FILTER_TEXT_LENGTH);
+  const query = boundScheduleFilterText(filters.query.trim());
   if (query) params.set("q", query);
   if (isCalendarDate(filters.selectedDate)) params.set("date", filters.selectedDate);
 

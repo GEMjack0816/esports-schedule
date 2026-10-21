@@ -32,6 +32,21 @@ describe("shareable schedule filter state", () => {
     expect(parsed.league).toBe(longValue.slice(0, 120));
   });
 
+  it("does not split a surrogate pair when a shared filter reaches the length limit", () => {
+    const boundaryValue = `${"x".repeat(119)}😀tail`;
+    const params = new URLSearchParams(
+      `q=${encodeURIComponent(boundaryValue)}&league=${encodeURIComponent(boundaryValue)}`,
+    );
+
+    const parsed = parseScheduleFilters(params);
+    expect(parsed.query).toBe("x".repeat(119));
+    expect(parsed.league).toBe("x".repeat(119));
+
+    const canonical = applyScheduleFilters(new URLSearchParams(), parsed);
+    expect(parseScheduleFilters(canonical)).toEqual(parsed);
+    expect(canonical.toString()).not.toContain("%EF%BF%BD");
+  });
+
   it("round-trips all active filters while preserving non-filter parameters", () => {
     const filters = {
       range: "history" as const,
