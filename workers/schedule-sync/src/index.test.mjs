@@ -2,6 +2,25 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createScheduleSyncWorker, invokeScheduleSync } from "./index.mjs";
 
 const syncSecret = "test-only-secret-never-logged";
+const healthUrl = "https://esports-schedule-two.vercel.app/api/health/data-coverage";
+const pandaGames = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"];
+
+function healthResponse(overrides = {}, status = 200) {
+  return new Response(JSON.stringify({
+    demoMode: false,
+    mode: "live",
+    stale: false,
+    refreshInProgress: false,
+    providers: { pandascore: "connected" },
+    sourceFetchedAt: "2026-10-18T09:55:00.000Z",
+    snapshotAgeSeconds: 300,
+    games: Object.fromEntries(pandaGames.map((game) => [game, { syncStatus: "normal" }])),
+    ...overrides,
+  }), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
 
 function response(overrides = {}, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify({
@@ -379,6 +398,70 @@ describe("schedule sync Worker client", () => {
     expect(record).toMatchObject({ code: "network_failure", httpStatus: null });
     expect(JSON.stringify(record)).not.toContain(syncSecret);
     expect(JSON.stringify(record)).not.toContain("transport");
+  });
+
+  it("skips the authenticated sync when the no-store health probe confirms all games are fresh", async () => {
+    const requests = [];
+    const log = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const worker = createScheduleSyncWorker({
+      nowImpl: () => Date.parse("2026-10-18T10:00:00.000Z"),
+      fetchImpl: async (url, options) => {
+        requests.push({ url, options });
+        return healthResponse();
+      },
+      log,
+    });
+
+    const result = await worker.scheduled({ scheduledTime: 1, noRetry: vi.fn() }, { CRON_SECRET: syncSecret });
+
+    expect(result).toEqual({ outcome: "skipped_fresh", snapshotAgeSeconds: 300 });
+    expect(requests).toHaveLength(1);
+    expect(requests[0].url).toBe(healthUrl);
+    expect(requests[0].options.headers).toEqual({ accept: "application/json", "cache-control": "no-store" });
+    expect(requests[0].options.headers).not.toHaveProperty("authorization");
+    expect(log.log).toHaveBeenCalledTimes(1);
+    expect(log.log.mock.calls[0][0]).toContain('"outcome":"skipped_fresh"');
+  });
+
+  it("runs the authenticated sync when the health probe reports stale data", async () => {
+    const requests = [];
+    const worker = createScheduleSyncWorker({
+      nowImpl: () => Date.parse("2026-10-18T10:00:00.000Z"),
+      fetchImpl: async (url, options) => {
+        requests.push({ url, options });
+        return url === healthUrl
+          ? healthResponse({ stale: true, snapshotAgeSeconds: 901, sourceFetchedAt: "2026-10-18T09:44:59.000Z" })
+          : response();
+      },
+      log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+    await expect(worker.scheduled({ scheduledTime: 1, noRetry: vi.fn() }, { CRON_SECRET: syncSecret }))
+      .resolves.toMatchObject({ outcome: "success", generation: 12 });
+    expect(requests.map(({ url }) => url)).toEqual([healthUrl, "https://esports-schedule-two.vercel.app/api/cron/sync"]);
+    expect(requests[1].options.headers.authorization).toBe(`Bearer ${syncSecret}`);
+  });
+
+  it("fails toward sync when health is unavailable or not a trustworthy five-game snapshot", async () => {
+    for (const health of [
+      healthResponse({}, 503),
+      healthResponse({ games: { lol: { syncStatus: "normal" } } }),
+      healthResponse({ sourceFetchedAt: "2099-01-01T00:00:00.000Z" }),
+    ]) {
+      const requests = [];
+      const worker = createScheduleSyncWorker({
+        nowImpl: () => Date.parse("2026-10-18T10:00:00.000Z"),
+        fetchImpl: async (url) => {
+          requests.push(url);
+          return url === healthUrl ? health : response();
+        },
+        log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      });
+
+      await expect(worker.scheduled({ scheduledTime: 1, noRetry: vi.fn() }, { CRON_SECRET: syncSecret }))
+        .resolves.toMatchObject({ outcome: "success" });
+      expect(requests).toEqual([healthUrl, "https://esports-schedule-two.vercel.app/api/cron/sync"]);
+    }
   });
 
   it("uses a strict no-store response policy and a bounded parser", async () => {

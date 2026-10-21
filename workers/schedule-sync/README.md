@@ -4,6 +4,8 @@ This Worker is an independent, best-effort backup trigger for the existing prote
 
 The schedule is `5,20,35,50 * * * *` UTC, intentionally offset from the current GitHub workflow at `*/15 * * * *`. If the GitHub workflow cadence changes, re-check the two schedules for overlap. Either scheduler may miss or delay an invocation; this Worker does **not** establish a hard 15-minute freshness SLA.
 
+Before invoking the authenticated sync endpoint, the Worker makes a bounded, unauthenticated, no-store request to the public data-coverage health endpoint. It skips the sync only when the response confirms live non-demo data, a fresh snapshot within the application's 15-minute window, no refresh in progress, and normal status for all five games. If the health request fails, is malformed, or cannot prove every condition, the Worker proceeds with the bounded sync attempt; the health check is only a duplicate-work optimization, never a reason to suppress recovery.
+
 The Worker has no public HTTP route (`workers_dev` is disabled). Its only configuration is a Cron Trigger. It sends an authenticated `GET` to the existing production sync endpoint with the bearer secret in the `Authorization` header, never in the URL. Logs contain only a sanitized result summary and never the response body, request headers, or secret.
 
 Retries are bounded. A completed structured `failed` or `not-configured` response is terminal for that invocation and is not immediately resubmitted, avoiding amplification of provider throttling or database outages. Unstructured transient 5xx responses retain the bounded retry policy.

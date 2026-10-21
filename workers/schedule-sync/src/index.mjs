@@ -1,4 +1,5 @@
 const SYNC_URL = "https://esports-schedule-two.vercel.app/api/cron/sync";
+const HEALTH_URL = "https://esports-schedule-two.vercel.app/api/health/data-coverage";
 const MAX_BODY_BYTES = 32 * 1024;
 // A byte limit alone does not bound streams that yield arbitrarily many empty
 // or tiny chunks. Cap parser work and per-chunk bookkeeping as well.
@@ -6,6 +7,11 @@ const MAX_BODY_CHUNKS = 1_024;
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [500, 1_000];
 const REQUEST_TIMEOUT_MS = 300_000;
+const HEALTH_REQUEST_TIMEOUT_MS = 10_000;
+// Match the application's per-game freshness window. The health probe must
+// confirm every PandaScore game is fresh before the backup trigger can skip.
+const FRESHNESS_LIMIT_SECONDS = 15 * 60;
+const PANDA_GAMES = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"];
 // Cloudflare Cron invocations have a 15-minute wall-time ceiling. Keep an
 // explicit total budget below it so retries cannot be cut off by the platform.
 const INVOCATION_BUDGET_MS = 14 * 60_000;
@@ -165,6 +171,57 @@ function isCompletedSyncFailure(payload) {
     && Array.isArray(payload.errors);
 }
 
+function getFreshScheduleAgeSeconds(payload, now) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)
+    || payload.demoMode !== false
+    || payload.mode !== "live"
+    || payload.stale !== false
+    || payload.refreshInProgress !== false
+    || payload.providers?.pandascore !== "connected"
+    || !Number.isInteger(payload.snapshotAgeSeconds)
+    || payload.snapshotAgeSeconds < 0
+    || payload.snapshotAgeSeconds > FRESHNESS_LIMIT_SECONDS
+    || typeof payload.sourceFetchedAt !== "string"
+    || !Number.isFinite(Date.parse(payload.sourceFetchedAt))
+    || !payload.games || typeof payload.games !== "object" || Array.isArray(payload.games)) {
+    return null;
+  }
+
+  const sourceFetchedAt = Date.parse(payload.sourceFetchedAt);
+  // Reject clock-skewed/future timestamps and do not infer freshness from a
+  // boolean alone. The app's age metric and timestamp must agree within a
+  // small tolerance, and all five games must report normal synchronization.
+  const timestampAgeSeconds = (now - sourceFetchedAt) / 1_000;
+  if (timestampAgeSeconds < -60
+    || Math.abs(timestampAgeSeconds - payload.snapshotAgeSeconds) > 60) {
+    return null;
+  }
+  if (!PANDA_GAMES.every((game) => payload.games[game]?.syncStatus === "normal")) return null;
+
+  return payload.snapshotAgeSeconds;
+}
+
+async function getFreshScheduleAge({ fetchImpl, nowImpl, timeoutSignalImpl }) {
+  try {
+    const response = await fetchImpl(HEALTH_URL, {
+      method: "GET",
+      headers: { accept: "application/json", "cache-control": "no-store" },
+      redirect: "error",
+      signal: timeoutSignalImpl(HEALTH_REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      cancelResponseBodyWithoutBlocking(response);
+      return null;
+    }
+    const payload = await readJsonBody(response);
+    return getFreshScheduleAgeSeconds(payload, nowImpl());
+  } catch {
+    // This is best-effort optimization only: if health cannot be trusted,
+    // proceed with the bounded authenticated sync instead of skipping it.
+    return null;
+  }
+}
+
 export async function invokeScheduleSync({
   fetchImpl = fetch,
   secret,
@@ -248,7 +305,13 @@ export async function invokeScheduleSync({
   throw new SyncInvocationError("retry_budget_exhausted");
 }
 
-export function createScheduleSyncWorker({ fetchImpl = fetch, log = console, waitImpl = pause } = {}) {
+export function createScheduleSyncWorker({
+  fetchImpl = fetch,
+  log = console,
+  waitImpl = pause,
+  nowImpl = Date.now,
+  timeoutSignalImpl = (milliseconds) => AbortSignal.timeout(milliseconds),
+} = {}) {
   return {
     async fetch() {
       return new Response("Not Found", { status: 404 });
@@ -263,7 +326,10 @@ export function createScheduleSyncWorker({ fetchImpl = fetch, log = console, wai
         : null;
 
       try {
-        const result = await invokeScheduleSync({ fetchImpl, secret: env.CRON_SECRET, waitImpl });
+        const freshAgeSeconds = await getFreshScheduleAge({ fetchImpl, nowImpl, timeoutSignalImpl });
+        const result = freshAgeSeconds === null
+          ? await invokeScheduleSync({ fetchImpl, secret: env.CRON_SECRET, waitImpl, nowImpl, timeoutSignalImpl })
+          : { outcome: "skipped_fresh", snapshotAgeSeconds: freshAgeSeconds };
         const summary = { event: "schedule_sync", scheduledTime, ...result };
         if (result.outcome === "skipped_busy" || result.outcome === "partial") {
           log.warn(JSON.stringify(summary));
