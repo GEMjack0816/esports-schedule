@@ -270,6 +270,7 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (prefix.startsWith("forced-colors") && result.forcedColorsStyles === null) failures.push(`${prefix}: forced-colors inspection targets are missing`);
   if (result.forcedColorsStyles) {
     if (!result.forcedColorsStyles?.mediaActive) failures.push(`${prefix}: forced-colors media query is inactive`);
     if (!result.forcedColorsStyles?.heroTextColor || result.forcedColorsStyles.heroTextColor === "transparent") failures.push(`${prefix}: hero text color is not visible`);
