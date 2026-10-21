@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { sql } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { getDatabase } from "@/db";
 import type { DrizzleReviewRepository } from "./repository";
 import type { MatchSubmissionInput } from "@/lib/submissions";
 import {
@@ -40,6 +42,25 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       DrizzleReviewRepository: new (await import("./repository")).DrizzleReviewRepository(),
     });
     cleanup = postgres(testUrl!, { max: 1, prepare: false });
+  });
+
+  it("applies bounded statement, row-lock, and idle-transaction timeouts", async () => {
+    const rows = await getDatabase().execute<{
+      statement_timeout: string;
+      lock_timeout: string;
+      idle_in_transaction_session_timeout: string;
+    }>(sql`
+      select
+        current_setting('statement_timeout') as statement_timeout,
+        current_setting('lock_timeout') as lock_timeout,
+        current_setting('idle_in_transaction_session_timeout') as idle_in_transaction_session_timeout
+    `);
+
+    expect(rows[0]).toEqual({
+      statement_timeout: "30s",
+      lock_timeout: "5s",
+      idle_in_transaction_session_timeout: "30s",
+    });
   });
 
   afterAll(async () => {
