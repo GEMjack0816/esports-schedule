@@ -63,7 +63,7 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     });
   });
 
-  it("classifies a real PostgreSQL idle-transaction termination as a timeout", async () => {
+  it("sanitizes the driver connection error after an idle transaction is terminated", async () => {
     const idleTimeoutClient = postgres(testUrl!, {
       max: 1,
       prepare: false,
@@ -83,7 +83,10 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     }
 
     expect(capturedError).toBeDefined();
-    expect(safeDatabaseErrorCode(capturedError)).toBe("TIMEOUT");
+    // postgres-js reports CONNECTION_CLOSED after the idle server session is
+    // terminated, not SQLSTATE 25P03. Keep this indistinguishable from other
+    // connection failures rather than misclassifying network drops as timeout.
+    expect(safeDatabaseErrorCode(capturedError)).toBe("UNAVAILABLE");
   });
 
   afterAll(async () => {
