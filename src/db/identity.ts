@@ -16,8 +16,10 @@ function normalizeDatabaseHostname(hostname: string): string {
 }
 
 /**
- * Returns a stable, non-reversible fingerprint of the database destination.
- * Credentials, query parameters, and URL fragments are intentionally excluded.
+ * Returns a stable SHA-256 fingerprint for comparing database destinations.
+ * It is not a confidentiality boundary: known candidate hosts and database
+ * names can be hashed and compared. Credentials, query parameters, and URL
+ * fragments are intentionally excluded.
  */
 export function fingerprintDatabaseTarget(
   databaseUrl: string | undefined,

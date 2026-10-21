@@ -3,8 +3,11 @@
 `GET /api/health/data-coverage` adds `database.targetFingerprint` only when
 `VERCEL_ENV=preview`. Production responses do not include this field.
 
-The fingerprint is SHA-256 over the lowercase PostgreSQL hostname, normalized
-port, a NUL byte, and the decoded database name. An omitted port is normalized
+The fingerprint is a SHA-256 equality-check value over the lowercase PostgreSQL hostname, normalized
+port, a NUL byte, and the decoded database name. It is **not a secret or a
+confidentiality control**: anyone who knows or guesses a candidate endpoint and
+database name can compute a matching value. Keep returning it only to an
+authenticated Preview admin; never use it as authorization. An omitted port is normalized
 to `PGPORT` when set, otherwise PostgreSQL's default `5432`. For Neon hosts, the
 `-pooler` hostname suffix is normalized away because pooled and direct URIs
 address the same endpoint. It excludes the username, password, query parameters,
