@@ -42,7 +42,8 @@ describe("groupMatchesByDate", () => {
   });
 
   it("does not repeatedly iterate and copy a large same-day group", () => {
-    const matches = Array.from({ length: 400 }, (_, index) =>
+    // Exercise a same-day batch at the size of a large production snapshot.
+    const matches = Array.from({ length: 3_300 }, (_, index) =>
       match(String(index), "2026-10-18T12:00:00.000Z"),
     );
     const originalIterator = Array.prototype[Symbol.iterator];
@@ -72,6 +73,6 @@ describe("groupMatchesByDate", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0][1]).toHaveLength(matches.length);
     expect(groups[0][1][0].id).toBe("0");
-    expect(groups[0][1].at(-1)?.id).toBe("399");
+    expect(groups[0][1].at(-1)?.id).toBe("3299");
   });
 });
