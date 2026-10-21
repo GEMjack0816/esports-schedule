@@ -86,16 +86,23 @@ for (const profile of [
     forcedColorsStyles = await page.evaluate(() => {
       const heroText = document.querySelector(".hero-copy h1 span");
       const select = document.querySelector(".filter-panel select");
+      const activeRange = document.querySelector(".range-tabs button.active");
       const focused = document.activeElement;
-      if (!(heroText instanceof HTMLElement) || !(select instanceof HTMLSelectElement)) return null;
+      if (!(heroText instanceof HTMLElement) || !(select instanceof HTMLSelectElement)
+        || !(activeRange instanceof HTMLButtonElement)) return null;
       const heroStyle = getComputedStyle(heroText);
       const selectStyle = getComputedStyle(select);
+      const activeRangeStyle = getComputedStyle(activeRange);
       const focusStyle = getComputedStyle(focused);
       return {
         mediaActive: matchMedia("(forced-colors: active)").matches,
+        heroTextColor: heroStyle.color,
+        heroTextFillColor: heroStyle.webkitTextFillColor,
         heroTextStrokeWidth: heroStyle.webkitTextStrokeWidth,
         selectAppearance: selectStyle.appearance,
         selectBackgroundImage: selectStyle.backgroundImage,
+        activeRangeBorderColor: activeRangeStyle.borderBottomColor,
+        activeRangeBorderWidth: activeRangeStyle.borderBottomWidth,
         focusVisible: focused.matches(":focus-visible"),
         focusOutlineStyle: focusStyle.outlineStyle,
         focusOutlineWidth: focusStyle.outlineWidth,
@@ -264,9 +271,13 @@ for (const result of results) {
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (prefix === "forced-colors") {
     if (!result.forcedColorsStyles?.mediaActive) failures.push(`${prefix}: forced-colors media query is inactive`);
+    if (!result.forcedColorsStyles?.heroTextColor || result.forcedColorsStyles.heroTextColor === "transparent") failures.push(`${prefix}: hero text color is not visible`);
+    if (!result.forcedColorsStyles?.heroTextFillColor || result.forcedColorsStyles.heroTextFillColor === "transparent" || result.forcedColorsStyles.heroTextFillColor === "rgba(0, 0, 0, 0)") failures.push(`${prefix}: hero text fill is not visible`);
     if (result.forcedColorsStyles?.heroTextStrokeWidth !== "0px") failures.push(`${prefix}: hero text outline is not disabled`);
     if (result.forcedColorsStyles?.selectAppearance !== "auto") failures.push(`${prefix}: native select affordance is not restored`);
     if (result.forcedColorsStyles?.selectBackgroundImage !== "none") failures.push(`${prefix}: custom select background remains active`);
+    if (!result.forcedColorsStyles?.activeRangeBorderColor || result.forcedColorsStyles.activeRangeBorderColor === "transparent" || result.forcedColorsStyles.activeRangeBorderColor === "rgba(0, 0, 0, 0)") failures.push(`${prefix}: active range marker is not visible`);
+    if (result.forcedColorsStyles?.activeRangeBorderWidth !== "2px") failures.push(`${prefix}: active range marker width is unexpected`);
     if (!result.forcedColorsStyles?.focusVisible) failures.push(`${prefix}: keyboard tab did not produce a focus-visible target`);
     if (result.forcedColorsStyles?.focusOutlineStyle !== "solid") failures.push(`${prefix}: visible focus outline is missing`);
     if (result.forcedColorsStyles?.focusOutlineWidth !== "2px") failures.push(`${prefix}: focus outline width is unexpected`);
