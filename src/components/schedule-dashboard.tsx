@@ -297,14 +297,14 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
 
           {payload.warning && <div className="data-notice" role="status"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" /><path d="M10 6.5v4.2M10 13.7h.01" /></svg><span>{payload.warning}</span></div>}
 
-          <div className="data-summary" aria-label="数据覆盖信息">
+          <div className="data-summary" role="group" aria-label="数据覆盖信息">
             <span>源快照时间 <strong>{formatDateTime(payload.coverage.sourceFetchedAt, timeZone)}</strong></span>
             <span>最近同步尝试 <strong>{formatDateTime(payload.coverage.lastAttemptAt, timeZone)}</strong></span>
             <span>当前收录范围 <strong>{formatDateTime(payload.coverage.range.earliestMatchAt, timeZone)} — {formatDateTime(payload.coverage.range.latestMatchAt, timeZone)}</strong></span>
             <Link href="/submit-match" prefetch={false}>提交遗漏比赛</Link>
           </div>
 
-          <div className="sync-status-grid" aria-label="各游戏数据同步状态">
+          <div className="sync-status-grid" role="group" aria-label="各游戏数据同步状态">
             {Object.entries(games).map(([key, value]) => {
               const coverage = payload.coverage.games[key as GameKey];
               const syncStatus = coverage?.syncStatus ?? "failed";
