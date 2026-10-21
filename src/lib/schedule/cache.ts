@@ -1,6 +1,7 @@
 import { getCache } from "@vercel/functions";
 import type { PandaGameSnapshot } from "./pandascore";
 import { normalizePandaGameSnapshot } from "./snapshot";
+import { decodeRuntimeSnapshot, encodeRuntimeSnapshot } from "./cache-payload";
 import type { PandaGameKey } from "./types";
 import { pandaGameKeys } from "./types";
 
@@ -135,7 +136,7 @@ export async function releasePandaScoreSyncLock(owner: string): Promise<void> {
 export async function readPandaScoreGameSnapshot(game: PandaGameKey): Promise<PandaGameSnapshot | null> {
   try {
     const cached = await scheduleCache().get(snapshotKey(game));
-    return normalizePandaGameSnapshot(cached, game);
+    return normalizePandaGameSnapshot(await decodeRuntimeSnapshot(cached), game);
   } catch {
     console.warn(`[schedule-cache] ${game} last-success cache could not be read`);
     return null;
@@ -153,7 +154,12 @@ export async function readAllPandaScoreGameSnapshots(): Promise<Partial<Record<P
 
 export async function writePandaScoreGameSnapshot(value: PandaGameSnapshot): Promise<boolean> {
   try {
-    await scheduleCache().set(snapshotKey(value.game), value, {
+    const payload = await encodeRuntimeSnapshot(value);
+    if (payload === null) {
+      console.warn(`[schedule-cache] ${value.game} cache payload exceeds safe limit; using persistent snapshot`);
+      return false;
+    }
+    await scheduleCache().set(snapshotKey(value.game), payload, {
       name: `PandaScore ${value.game} last successful fixtures`,
       tags: ["pandascore-fixtures", `schedule-${value.game}`],
       ttl: CACHE_TTL_SECONDS,

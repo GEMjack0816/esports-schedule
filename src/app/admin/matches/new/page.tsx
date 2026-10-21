@@ -28,11 +28,16 @@ const blank: PublishedMatchWrite = {
 
 export default async function NewManualMatchPage() {
   await requireAdminPage("/admin/matches/new");
+  const operationKey = crypto.randomUUID();
 
   async function create(form: FormData) {
     "use server";
     const session = await requireAdminAction("/admin/matches/new");
-    const row = await createManualMatch(publishedFromForm(form), session.sub);
+    const row = await createManualMatch(
+      publishedFromForm(form),
+      session.sub,
+      form.get("operationKey"),
+    );
     redirect(`/admin/matches/${row.id}`);
   }
 
@@ -41,9 +46,11 @@ export default async function NewManualMatchPage() {
       <AdminNav />
       <h1>新建人工比赛</h1>
       <form action={create} className="admin-edit-form">
+        <input type="hidden" name="operationKey" value={operationKey} />
         <PublishedMatchFields value={blank} />
         <button className="admin-primary" type="submit">发布比赛</button>
       </form>
     </main>
   );
 }
+

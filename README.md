@@ -28,6 +28,8 @@ Vercel Cron（每日保底） ──────┼─> /api/cron/sync
 
 `pandascore_game_snapshots` 每个游戏保存一行规范化 JSONB 快照、源时间、成功/尝试/错误元数据和 fencing generation。读取 Runtime Cache 时会先用五行轻量 generation 查询核对版本；只有缓存缺失或版本不一致才读取完整 JSONB 并回填缓存。PostgreSQL JSONB 会通过 TOAST 管理较大的单游戏值；五行主键读取避免逐比赛查询和写放大。同步失败、持久写失败或 API 返回异常空列表时不会清空该游戏最后成功快照。五个游戏使用 `Promise.allSettled()` 隔离失败。人工王者荣耀数据和 `manual-matches.json` 在 API 数据之后合并，不会被同步删除。
 
+Runtime Cache 大快照使用有界 gzip 编码，压缩后仍超限时继续读取 PostgreSQL 完整快照，不截断比赛；格式兼容、解码上限和测试说明见 [缓存快照编码](docs/runtime-snapshot-cache.md)。
+
 `/api/cron/sync` 返回 `lockAcquired`、`gamesAttempted`、`gamesSucceeded`、`gamesFailed`、`snapshotsPersisted`、时间和安全错误代码。GitHub Actions 使用 `scripts/validate-sync-response.mjs` 解析 JSON；HTTP 2xx 但未取得有效更新不再被判定为同步成功。锁竞争明确报告为 `busy`，不冒充一次刷新。
 
 ## 状态标准化
@@ -97,10 +99,17 @@ npm start
 ```powershell
 Invoke-RestMethod http://localhost:3000/api/health/data-coverage
 npm run verify:browser -- http://localhost:3000
+npm run verify:range-controls -- http://localhost:3000
 npm run verify:production -- http://localhost:3000 <expected-git-sha>
 ```
 
 没有 `PANDASCORE_TOKEN` 时，本地只返回可用的上次缓存/人工数据并明确标记数据源未配置，不会生成模拟比赛。不要为了测试把真实 Token 写入仓库。
+
+`verify:range-controls` 仅接受 loopback 地址，使用全新无登录态浏览器检查 1440px/390px 下刷新与搜索控件的可访问名称、时间范围的方向键/Home/End 导航、单一 Tab 停靠点、tabpanel 关联，以及快捷范围清除日期覆盖；不提交比赛或执行管理员操作。
+
+`npm run verify:list-window` 在构建后自行启动随机端口的 `127.0.0.1` 服务，不接受目标 URL，拒绝本地 `.env`（`.env.example` 除外），服务进程不继承数据库/OAuth/PandaScore/cron 凭据。全新 1440px/390px 浏览器上下文仅通过内存中的合成赛程验证 200 → 400 → 450 条渲染、筛选后重置、控制台和关键请求错误及横向溢出；外部请求和写请求全部阻断，不保存登录态、截图或响应。
+
+PR/main 的代码质量 CI 在既有测试、构建和凭据扫描后，通过已锁定的 `playwright-core` CLI 安装 Chromium headless shell，并运行该隔离浏览器回归。Linux 本地可先执行 `node node_modules/playwright-core/cli.js install --with-deps --only-shell chromium`；Windows 使用系统 Chrome 或显式 `CHROME_PATH`。这不是受保护 Preview 的 OAuth/数据库 E2E，不代替独立 Preview 验收，也不触发生产同步 workflow。
 
 ## Vercel 部署后验证
 
