@@ -294,7 +294,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
                 mode: payload.mode,
                 stale: payload.stale,
                 refreshInProgress: payload.coverage.refreshInProgress,
-                gameStatuses: Object.values(payload.coverage.games).map((game) => game.syncStatus),
+                gameStates: Object.values(payload.coverage.games).map(({ syncStatus, lastError }) => ({ syncStatus, lastError })),
               })}</span>
             </div>
           </div>
