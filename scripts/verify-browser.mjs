@@ -78,6 +78,29 @@ for (const profile of [
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+  const scheduleTargetViolations = await page.evaluate(() => {
+    const selectors = [
+      ".site-header .brand",
+      ".theme-button",
+      ".refresh-button",
+      ".range-tabs button",
+      ".filter-panel input",
+      ".filter-panel select",
+      ".watch-link",
+      ".empty-state button",
+    ];
+    return selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector))
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden"
+          && (rect.width < 44 || rect.height < 44);
+      })
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        return `${selector} ${Math.round(rect.width)}x${Math.round(rect.height)}`;
+      }));
+  });
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
 
@@ -154,6 +177,21 @@ for (const profile of [
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
+  const submissionTargetViolations = await page.evaluate(() => {
+    const selectors = [".back-link", ".submit-form input", ".submit-form select", ".submit-actions button"];
+    return selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector))
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return !element.closest(".submission-honeypot")
+          && rect.width > 0 && rect.height > 0 && style.visibility !== "hidden"
+          && (rect.width < 44 || rect.height < 44);
+      })
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        return `${selector} ${Math.round(rect.width)}x${Math.round(rect.height)}`;
+      }));
+  });
   const adminResponse = await page.goto(`${baseUrl}/admin`, {
     waitUntil: "networkidle",
     timeout: 120_000,
@@ -184,6 +222,8 @@ for (const profile of [
     gameOptions,
     gameFilterCounts,
     statusFilterCounts,
+    scheduleTargetViolations,
+    submissionTargetViolations,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -235,6 +275,12 @@ for (const result of results) {
   if (result.forbiddenHtmlPhrases.length > 0) failures.push(`${prefix}: demo text in HTML`);
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
+  if (result.scheduleTargetViolations.length > 0) {
+    failures.push(`${prefix}: schedule targets under 44px: ${result.scheduleTargetViolations.join(", ")}`);
+  }
+  if (result.submissionTargetViolations.length > 0) {
+    failures.push(`${prefix}: submission targets under 44px: ${result.submissionTargetViolations.join(", ")}`);
+  }
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
