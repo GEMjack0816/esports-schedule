@@ -84,6 +84,20 @@ for (const profile of [
   const gameFilterCounts = {};
   const statusFilterCounts = {};
   await page.getByRole("tab", { name: /全部收录/ }).click();
+  const dateHeadingSemantics = await page.locator(".date-group").evaluateAll((sections) => ({
+    count: sections.length,
+    allNamed: sections.every((section) => {
+      const heading = section.querySelector(":scope > .date-divider > h3");
+      return !!heading?.id
+        && heading.textContent?.trim() !== ""
+        && section.getAttribute("aria-labelledby") === heading.id;
+    }),
+    eventHeadingsAreH4: sections.every((section) =>
+      Array.from(section.querySelectorAll(".match-card")).every((card) =>
+        !!card.querySelector(".match-event-cell h4") && !card.querySelector(".match-event-cell h3"),
+      ),
+    ),
+  }));
   const gameSelect = page.locator(".filter-panel select").nth(0);
   for (const game of ["lol", "valorant", "honor-of-kings", "cs2", "dota2"]) {
     await gameSelect.selectOption(game);
@@ -184,6 +198,7 @@ for (const profile of [
     gameOptions,
     gameFilterCounts,
     statusFilterCounts,
+    dateHeadingSemantics,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -235,6 +250,12 @@ for (const result of results) {
   if (result.forbiddenHtmlPhrases.length > 0) failures.push(`${prefix}: demo text in HTML`);
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
+  if (result.dateHeadingSemantics.count > 0 && !result.dateHeadingSemantics.allNamed) {
+    failures.push(`${prefix}: unnamed date group heading`);
+  }
+  if (result.dateHeadingSemantics.count > 0 && !result.dateHeadingSemantics.eventHeadingsAreH4) {
+    failures.push(`${prefix}: incorrect match event heading level`);
+  }
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);

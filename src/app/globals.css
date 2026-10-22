@@ -196,6 +196,7 @@ a { color: inherit; text-decoration: none; }
 
 .date-group + .date-group { margin-top: 34px; }
 .date-divider { height: 32px; display: flex; align-items: center; gap: 14px; color: var(--muted-bright); font-size: 11px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; }
+.date-divider h3 { margin: 0; font: inherit; }
 .date-divider i { height: 1px; background: var(--line-soft); flex: 1; }
 .date-divider em { color: var(--muted); font-style: normal; font-family: var(--font-geist-mono), monospace; font-weight: 400; }
 
@@ -210,7 +211,7 @@ a { color: inherit; text-decoration: none; }
 .match-event-cell { display: flex; align-items: center; gap: 13px; border-right: 1px solid var(--line-soft); }
 .match-event-cell > div { min-width: 0; }
 .game-chip { flex: none; min-width: 42px; height: 25px; display: grid; place-items: center; border: 1px solid color-mix(in srgb, var(--game-color), transparent 55%); color: var(--game-color); background: color-mix(in srgb, var(--game-color), transparent 91%); font: 650 9px var(--font-geist-mono), monospace; letter-spacing: .05em; }
-.match-event-cell h3 { margin: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.match-event-cell h4 { margin: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .match-event-cell p { margin: 6px 0 0; color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .match-teams-cell { display: flex; flex-direction: column; justify-content: center; gap: 11px; border-right: 1px solid var(--line-soft); }
 .team-row { display: grid; grid-template-columns: 30px minmax(0, 1fr) 26px; gap: 10px; align-items: center; color: var(--muted-bright); }

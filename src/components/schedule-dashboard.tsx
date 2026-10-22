@@ -129,7 +129,7 @@ function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string 
       </div>
       <div className="match-event-cell">
         <span className="game-chip" style={{ "--game-color": game.color } as React.CSSProperties}>{game.short}</span>
-        <div><h3>{match.league}</h3><p>{[match.tournament, match.stage].filter(Boolean).join(" · ") || "赛程待更新"}</p></div>
+        <div><h4>{match.league}</h4><p>{[match.tournament, match.stage].filter(Boolean).join(" · ") || "赛程待更新"}</p></div>
       </div>
       <div className="match-teams-cell">
         <TeamRow team={match.homeTeam} score={scoreA} winning={firstWins} />
@@ -336,8 +336,8 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
 
           <div className="match-list" aria-live="polite">
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
-              <section className="date-group" key={key}>
-                <div className="date-divider"><span>{formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
+              <section className="date-group" key={key} aria-labelledby={`date-group-${key}`}>
+                <div className="date-divider"><h3 id={`date-group-${key}`}>{formatDate(matches[0].startTimeUtc, timeZone)}</h3><i aria-hidden="true" /><em>{matches.length} 场</em></div>
                 {matches.map((match) => <MatchCard match={match} timeZone={timeZone} key={match.id} />)}
               </section>
             )) : (
