@@ -21,6 +21,16 @@ for (const executablePath of executableCandidates) {
 if (!browser) throw launchError || new Error("No supported browser executable found");
 
 const results = [];
+const rangeButton = (page, label) => page.locator(".range-tabs button").filter({ hasText: label });
+async function clickRange(page, label) {
+  await rangeButton(page, label).click();
+}
+async function rangeIsActive(page, label) {
+  const button = rangeButton(page, label);
+  return await button.getAttribute("aria-selected") === "true"
+    || await button.getAttribute("aria-pressed") === "true";
+}
+
 for (const profile of [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile-390", width: 390, height: 844 },
@@ -83,7 +93,7 @@ for (const profile of [
 
   const gameFilterCounts = {};
   const statusFilterCounts = {};
-  await page.getByRole("tab", { name: /全部收录/ }).click();
+  await clickRange(page, /全部收录/);
   const gameSelect = page.locator(".filter-panel select").nth(0);
   for (const game of ["lol", "valorant", "honor-of-kings", "cs2", "dota2"]) {
     await gameSelect.selectOption(game);
@@ -96,7 +106,34 @@ for (const profile of [
     statusFilterCounts[status] = await page.locator(".match-card").count();
   }
   await statusSelect.selectOption("all");
-  await page.getByRole("tab", { name: /^今日/ }).click();
+
+  const datePicker = page.locator('.date-field input[type="date"]');
+  const firstAvailableDate = await datePicker.getAttribute("min");
+  if (!firstAvailableDate) throw new Error("No bounded fixture date available for filter interaction verification");
+  await datePicker.fill(firstAvailableDate);
+  const specificDateState = {
+    selectedDate: await datePicker.inputValue(),
+    allRangeSelected: await rangeIsActive(page, /全部收录/),
+  };
+
+  await clickRange(page, /^明日/);
+  const quickRangeState = {
+    selectedDateCleared: await datePicker.inputValue() === "",
+    tomorrowRangeSelected: await rangeIsActive(page, /^明日/),
+  };
+
+  const searchInput = page.locator(".search-field input");
+  await searchInput.fill(`codex-no-match-${Date.now()}`);
+  await page.getByRole("button", { name: "清除筛选" }).click();
+  const resetFilterState = {
+    allRangeSelected: await rangeIsActive(page, /全部收录/),
+    selectedDateCleared: await datePicker.inputValue() === "",
+    searchCleared: await searchInput.inputValue() === "",
+    gameReset: await gameSelect.inputValue() === "all",
+    leagueReset: await page.locator(".filter-panel select").nth(1).inputValue() === "all",
+    statusReset: await statusSelect.inputValue() === "all",
+  };
+  await clickRange(page, /^今日/);
 
   const apiResponsePromise = page.waitForResponse(
     (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
@@ -184,6 +221,7 @@ for (const profile of [
     gameOptions,
     gameFilterCounts,
     statusFilterCounts,
+    filterStateTransitions: { specificDateState, quickRangeState, resetFilterState },
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -236,6 +274,19 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (result.filterStateTransitions.specificDateState.selectedDate === "") {
+    failures.push(`${prefix}: date picker did not retain the selected date`);
+  }
+  if (!result.filterStateTransitions.specificDateState.allRangeSelected) {
+    failures.push(`${prefix}: specific date did not activate the all-range base`);
+  }
+  if (!result.filterStateTransitions.quickRangeState.selectedDateCleared
+    || !result.filterStateTransitions.quickRangeState.tomorrowRangeSelected) {
+    failures.push(`${prefix}: selecting a quick range did not clear the specific date`);
+  }
+  if (Object.values(result.filterStateTransitions.resetFilterState).some((reset) => !reset)) {
+    failures.push(`${prefix}: clear-filters did not reset every filter`);
+  }
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
