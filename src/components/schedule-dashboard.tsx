@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { groupMatchesByDate } from "@/lib/schedule/grouping";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -213,16 +214,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   }, [game, league, payload.matches, query, range, selectedDate, sevenDaysOut, status, timeZone, today, tomorrow]);
 
   const grouped = useMemo(() => {
-    const groups = new Map<string, EsportsMatch[]>();
-    for (const match of filtered) {
-      const key = matchDateKey(match, timeZone);
-      groups.set(key, [...(groups.get(key) ?? []), match]);
-    }
-    return [...groups.entries()].sort(([a], [b]) => {
-      if (a === "unscheduled") return 1;
-      if (b === "unscheduled") return -1;
-      return range === "history" ? b.localeCompare(a) : a.localeCompare(b);
-    });
+    return groupMatchesByDate(filtered, timeZone, range === "history" ? "descending" : "ascending");
   }, [filtered, range, timeZone]);
 
   const liveCount = payload.matches.filter((match) => match.status === "running").length;
