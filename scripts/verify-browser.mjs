@@ -34,6 +34,7 @@ async function rangeIsActive(page, label) {
 for (const profile of [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile-390", width: 390, height: 844 },
+  { name: "mobile-320", width: 320, height: 760 },
 ]) {
   const context = await browser.newContext({
     viewport: { width: profile.width, height: profile.height },
@@ -265,6 +266,7 @@ for (const result of results) {
   const prefix = result.profile;
   if (result.status !== 200) failures.push(`${prefix}: homepage HTTP ${result.status}`);
   if (result.horizontalOverflow) failures.push(`${prefix}: horizontal overflow`);
+  if (result.overflowElements.length > 0) failures.push(`${prefix}: controls clipped outside the viewport`);
   if (!result.hasCoverageSummary) failures.push(`${prefix}: missing coverage summary`);
   if (!result.hasSubmitLink) failures.push(`${prefix}: missing submission link`);
   if (!result.hasProfessionalCoverageCopy) failures.push(`${prefix}: missing coverage copy`);

@@ -330,6 +330,13 @@ a { color: inherit; text-decoration: none; }
   .sync-status-grid { grid-template-columns: 1fr; }
 }
 
+@media (max-width: 360px) {
+  .range-tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); overflow-x: visible; }
+  .range-tabs button { gap: 2px; }
+  .range-tabs button span { font-size: 10px; }
+  .range-tabs button em { min-width: 19px; padding: 0 4px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
