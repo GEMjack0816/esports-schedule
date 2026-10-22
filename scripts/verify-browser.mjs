@@ -75,6 +75,12 @@ for (const profile of [
   const bodyText = await page.locator("body").innerText();
   const html = await page.content();
   const homepageCommit = await page.locator("#esports-schedule-version").getAttribute("data-git-commit");
+  const homepageMetadata = await page.evaluate(() => ({
+    title: document.title,
+    canonical: document.querySelector('link[rel="canonical"]')?.getAttribute("href") ?? null,
+    openGraphTitle: document.querySelector('meta[property="og:title"]')?.getAttribute("content") ?? null,
+    openGraphUrl: document.querySelector('meta[property="og:url"]')?.getAttribute("content") ?? null,
+  }));
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
   const crawlerMetadata = await page.evaluate(async () => {
@@ -227,6 +233,7 @@ for (const profile of [
     optionalResourceFailureSamples: optionalResourceFailures.slice(0, 5),
     browserResourceWarningCount: browserResourceWarnings.length,
     submitFields,
+    homepageMetadata,
     submissionMetadata,
     anonymousAdminStatus: adminResponse?.status() ?? null,
     anonymousAdminAtLogin: new URL(page.url()).pathname === "/admin/login",
@@ -277,6 +284,12 @@ for (const result of results) {
   if (!result.versionMatchesHomepage) failures.push(`${prefix}: homepage/version commit mismatch`);
   if (!result.healthVersionMatches) failures.push(`${prefix}: health/version commit mismatch`);
   if (result.submitFields < 6) failures.push(`${prefix}: submission form incomplete`);
+  if (!result.homepageMetadata.title
+    || result.homepageMetadata.canonical !== "https://esports-schedule-two.vercel.app"
+    || !result.homepageMetadata.openGraphTitle
+    || result.homepageMetadata.openGraphUrl !== result.homepageMetadata.canonical) {
+    failures.push(`${prefix}: homepage canonical and Open Graph metadata should match the public homepage`);
+  }
   if (!result.submissionMetadata.title.includes("提交遗漏比赛")
     || !result.submissionMetadata.canonical?.endsWith("/submit-match")
     || !result.submissionMetadata.openGraphTitle?.includes("提交遗漏比赛")
