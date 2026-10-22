@@ -98,6 +98,32 @@ for (const profile of [
   await statusSelect.selectOption("all");
   await page.getByRole("tab", { name: /^今日/ }).click();
 
+  // Client-only fixture: exercise the missing-time live-match case without writing to any backend.
+  await page.route("**/api/matches", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    body.matches = [...body.matches, {
+      id: "browser-verification-live-without-time",
+      provider: "manual",
+      providerMatchId: "browser-verification-live-without-time",
+      game: "lol",
+      tournament: null,
+      league: "Browser verification fixture",
+      stage: null,
+      homeTeam: { name: "Codex live fixture", acronym: "CLF", logo: "/team-placeholder.svg" },
+      awayTeam: { name: "Verification opponent", acronym: "VO", logo: "/team-placeholder.svg" },
+      homeScore: null,
+      awayScore: null,
+      bestOf: null,
+      status: "running",
+      startTimeUtc: null,
+      streams: [],
+      lastUpdatedAt: new Date().toISOString(),
+    }];
+    await route.fulfill({ response, body: JSON.stringify(body) });
+  });
+
   const apiResponsePromise = page.waitForResponse(
     (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
     { timeout: 120_000 },
@@ -116,6 +142,11 @@ for (const profile of [
       return response.json();
     });
   }
+  await statusSelect.selectOption("running");
+  const todayRunningVisible = await page.locator(".match-card").count();
+  const injectedLiveFixtureVisible = await page.locator(".match-card")
+    .filter({ hasText: "Codex live fixture" }).count() === 1;
+  await statusSelect.selectOption("all");
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -184,6 +215,9 @@ for (const profile of [
     gameOptions,
     gameFilterCounts,
     statusFilterCounts,
+    todayRunningVisible,
+    expectedRunningFixturesAfterMock: apiBody.matches.filter((match) => match.status === "running").length,
+    injectedLiveFixtureVisible,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -236,6 +270,8 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (result.todayRunningVisible !== result.expectedRunningFixturesAfterMock) failures.push(`${prefix}: Today range hides running matches outside today's date or without a start time`);
+  if (!result.injectedLiveFixtureVisible) failures.push(`${prefix}: browser-only no-time live fixture is not visible in Today`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
