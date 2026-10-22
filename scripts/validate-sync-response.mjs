@@ -60,7 +60,7 @@ export function validateSyncResponse(payload, httpStatus) {
     return { ok: false, message: "sync did not report a valid error summary" };
   }
   if (payload.status !== "success" && payload.status !== "partial") {
-    return { ok: false, message: `sync reported logical status ${String(payload.status)}` };
+    return { ok: false, message: "sync reported an unrecognized logical status" };
   }
   if ((payload.status === "success" && (payload.gamesFailed !== 0 || payload.errors.length !== 0))
     || (payload.status === "partial" && payload.errors.length === 0)) {

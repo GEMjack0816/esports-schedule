@@ -113,6 +113,19 @@ describe("sync workflow response validation", () => {
     }, 200).ok).toBe(false);
   });
 
+  it("does not echo an untrusted logical status into CI logs", () => {
+    const result = validateSyncResponse({
+      ...success,
+      status: "private-response-marker\nBearer should-not-be-logged",
+    }, 200);
+
+    expect(result).toEqual({
+      ok: false,
+      message: "sync reported an unrecognized logical status",
+    });
+    expect(result.message).not.toContain("private-response-marker");
+  });
+
   it("rejects a logical success that did not persist a snapshot", () => {
     expect(validateSyncResponse({ ...success, snapshotsPersisted: 0 }, 200).ok).toBe(false);
   });
