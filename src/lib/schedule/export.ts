@@ -35,6 +35,58 @@ const headers = [
   "比赛 ID",
 ];
 
+const credentialParameters = new Set([
+  "access_token",
+  "accesstoken",
+  "api_key",
+  "apikey",
+  "auth",
+  "authorization",
+  "client_secret",
+  "clientsecret",
+  "code",
+  "credential",
+  "idtoken",
+  "jwt",
+  "oauth_token",
+  "oauthtoken",
+  "password",
+  "passwd",
+  "refreshtoken",
+  "secret",
+  "sig",
+  "signature",
+  "token",
+  "state",
+]);
+
+function hasCredentialParameter(parameters: URLSearchParams): boolean {
+  return [...parameters.keys()].some((key) => {
+    const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return credentialParameters.has(key.toLowerCase())
+      || credentialParameters.has(normalized)
+      || /(?:token|secret|password|passwd|credential|authorization|signature|jwt)$/.test(normalized)
+      || /(?:api|access|client|private)key$/.test(normalized);
+  });
+}
+
+function safeStreamUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    const fragmentParameters = url.hash.slice(1).split("?").at(-1) ?? "";
+    if (
+      url.protocol !== "https:"
+      || url.username
+      || url.password
+      || hasCredentialParameter(url.searchParams)
+      || hasCredentialParameter(new URLSearchParams(fragmentParameters))
+    ) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 function csvCell(value: string | number | null): string {
   const text = value === null ? "" : String(value);
   // Spreadsheet applications may evaluate untrusted text as a formula even
@@ -93,7 +145,7 @@ export function createScheduleCsv(matches: EsportsMatch[], timeZone: string): st
       score,
       match.bestOf === null ? "待定" : `BO${match.bestOf}`,
       statusLabels[match.status],
-      match.streams.map((stream) => stream.url).join(" "),
+      match.streams.map((stream) => safeStreamUrl(stream.url)).filter(Boolean).join(" "),
       match.id,
     ].map(csvCell).join(",");
   });

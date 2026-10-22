@@ -63,6 +63,27 @@ describe("createScheduleCsv", () => {
     expect(csv).toContain('"\'\u007F@SUM(1,1)"');
   });
 
+  it("omits stream URLs containing credentials and keeps safe HTTPS stream URLs", () => {
+    const csv = createScheduleCsv([match({
+      streams: [
+        { label: "userinfo", url: "https://viewer:private-password@example.com/watch" },
+        { label: "snake case", url: "https://example.com/watch?refresh_token=private-refresh-token" },
+        { label: "camel case", url: "https://example.com/watch?clientSecret=private-client-secret" },
+        { label: "fragment", url: "https://example.com/watch#/open?access_token=private-fragment-token" },
+        { label: "insecure", url: "http://example.com/watch?token=private-token" },
+        { label: "malformed", url: "not a URL" },
+        { label: "safe", url: "https://example.com/channel/live" },
+      ],
+    })], "UTC");
+
+    expect(csv).toContain("https://example.com/channel/live");
+    expect(csv).not.toContain("private-password");
+    expect(csv).not.toContain("private-refresh-token");
+    expect(csv).not.toContain("private-client-secret");
+    expect(csv).not.toContain("private-fragment-token");
+    expect(csv).not.toContain("private-token");
+  });
+
   it("handles unscheduled matches and partial scores without throwing", () => {
     const csv = createScheduleCsv([match({
       game: "honor-of-kings",
