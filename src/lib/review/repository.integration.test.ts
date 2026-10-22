@@ -715,6 +715,33 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect(status.retryAfter).toBeInstanceOf(Date);
     expect(status.retryAfter!.getTime()).toBeGreaterThan(Date.now());
     expect(await repository.claimManualMatchCacheDeliveryRetry()).toBe("deferred");
+
+    const revision = await cleanup`select revision from manual_match_cache_outbox where delivered_at is null order by revision desc limit 1`;
+    await cleanup`
+      update manual_match_cache_outbox
+      set retry_after = now() - interval '1 second'
+      where revision = ${revision[0].revision}
+    `;
+    expect(await repository.claimManualMatchCacheDeliveryRetry()).toBe("claimed");
+    const [retried] = await cleanup`
+      select attempt_count, retry_after from manual_match_cache_outbox where revision = ${revision[0].revision}
+    `;
+    expect(retried.attempt_count).toBe(2);
+    expect(retried.retry_after.getTime()).toBeGreaterThan(Date.now());
+
+    await cleanup`
+      update manual_match_cache_outbox
+      set attempt_count = 50, retry_after = now() - interval '1 second'
+      where revision = ${revision[0].revision}
+    `;
+    expect(await repository.claimManualMatchCacheDeliveryRetry()).toBe("claimed");
+    const [capped] = await cleanup`
+      select attempt_count, retry_after from manual_match_cache_outbox where revision = ${revision[0].revision}
+    `;
+    expect(capped.attempt_count).toBe(51);
+    expect(capped.retry_after.getTime()).toBeLessThanOrEqual(Date.now() + 257_000);
+    expect(capped.retry_after.getTime()).toBeGreaterThan(Date.now());
+    await repository.markManualMatchCacheDelivered(Number(revision[0].revision));
   });
 
   it("limits delivered outbox cleanup to one bounded batch and preserves newer pending rows", async () => {
