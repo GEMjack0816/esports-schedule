@@ -61,6 +61,29 @@ describe("bounded Runtime Cache snapshot codec", () => {
     expect(estimateSnapshotJsonBytes(accessor)).toBeNull();
   });
 
+  it.each([
+    ["Object.prototype", Object.prototype],
+    ["Array.prototype", Array.prototype],
+  ])("fails closed when %s supplies an inherited toJSON hook", async (_name, prototype) => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(prototype, "toJSON");
+    let hookCalled = false;
+    Object.defineProperty(prototype, "toJSON", {
+      configurable: true,
+      value: () => { hookCalled = true; return null; },
+    });
+
+    let encoded: unknown;
+    try {
+      encoded = await encodeRuntimeSnapshot(testPandaSnapshot());
+    } finally {
+      if (originalDescriptor) Object.defineProperty(prototype, "toJSON", originalDescriptor);
+      else Reflect.deleteProperty(prototype, "toJSON");
+    }
+
+    expect(encoded).toBeNull();
+    expect(hookCalled).toBe(false);
+  });
+
   it("accepts the maximum supported depth and rejects one level beyond it", () => {
     const nested = (levels: number) => {
       let value: unknown = "leaf";
@@ -154,3 +177,4 @@ describe("bounded Runtime Cache snapshot codec", () => {
     expect(await readPandaScoreGameSnapshot("lol")).toBeNull();
   });
 });
+

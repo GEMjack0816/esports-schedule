@@ -27,6 +27,11 @@ export function estimateSnapshotJsonBytes(
   maxBytes: number = MAX_DECODED_SNAPSHOT_BYTES,
 ): number | null {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) return null;
+  // JSON.stringify also invokes inherited toJSON hooks. If either built-in
+  // prototype has been extended, the preflight could otherwise measure a
+  // different value from the one actually serialized.
+  if (Object.prototype.hasOwnProperty.call(Object.prototype, "toJSON")
+    || Object.prototype.hasOwnProperty.call(Array.prototype, "toJSON")) return null;
 
   let bytes = 0;
   let nodes = 0;
@@ -176,3 +181,4 @@ export async function decodeRuntimeSnapshot(value: unknown): Promise<unknown | n
     return null;
   }
 }
+
