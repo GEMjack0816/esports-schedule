@@ -2,11 +2,20 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
-import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
-import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { EsportsMatch, GameKey, MatchStatus } from "@/lib/schedule";
+import type { SchedulePageData, SchedulePageQuery, ScheduleRangeKey } from "@/lib/schedule/page-types";
+import {
+  isCurrentSchedulePageRequest,
+  isSchedulePageForCurrentFilters,
+  schedulePageRequestKey,
+} from "@/lib/schedule/client-page-request";
+import { groupScheduleMatches } from "@/lib/schedule/client-grouping";
+import { ScheduleResultStatus } from "@/components/schedule-result-status";
+import { scheduleResultAnnouncementUpdate } from "@/lib/schedule/announcements";
+import { dateKeyInTimeZone } from "@/lib/schedule/time";
+import { rangeForNavigationKey, scheduleRangeTabs } from "@/lib/schedule/range-navigation";
 
-type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
 
 const subscribeToTimeZone = () => () => undefined;
@@ -73,10 +82,6 @@ function formatDateTime(value: string | null, timeZone: string): string {
 function initials(name: string): string {
   const asciiInitials = name.split(/\s+/).map((part) => part[0]).join("").slice(0, 3);
   return asciiInitials || name.slice(0, 2);
-}
-
-function matchDateKey(match: EsportsMatch, timeZone: string): string {
-  return match.startTimeUtc ? dateKeyInTimeZone(match.startTimeUtc, timeZone) : "unscheduled";
 }
 
 function MatchStatusBadge({ status }: { status: MatchStatus }) {
@@ -149,15 +154,40 @@ function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string 
   );
 }
 
-export function ScheduleDashboard({ initialData }: { initialData: SchedulePayload }) {
+function pageUrl(query: SchedulePageQuery): string {
+  const params = new URLSearchParams({
+    range: query.range,
+    timeZone: query.timeZone,
+    game: query.game,
+    league: query.league,
+    status: query.status,
+    q: query.query,
+    limit: String(query.limit),
+  });
+  if (query.selectedDate) params.set("date", query.selectedDate);
+  if (query.cursor) params.set("cursor", query.cursor);
+  return `/api/matches/page?${params.toString()}`;
+}
+
+export function ScheduleDashboard({ initialData }: { initialData: SchedulePageData }) {
   const [payload, setPayload] = useState(initialData);
-  const [range, setRange] = useState<RangeKey>("today");
+  const [range, setRange] = useState<ScheduleRangeKey>("today");
   const [game, setGame] = useState<GameKey | "all">("all");
   const [league, setLeague] = useState("all");
   const [status, setStatus] = useState<MatchStatus | "all">("all");
   const [query, setQuery] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
+  const rangeId = useId();
+  const rangePanelId = `${rangeId}-panel`;
   const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [requestError, setRequestError] = useState(false);
+  const [paginationRestartedFor, setPaginationRestartedFor] = useState<string | null>(null);
+  const activeController = useRef<AbortController | null>(null);
+  const requestSerial = useRef(0);
+  const initialRequestSkipped = useRef(false);
+  const loadingMoreRef = useRef(false);
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
@@ -165,76 +195,186 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   );
   const theme = useSyncExternalStore(subscribeToTheme, getBrowserTheme, getServerTheme);
 
-  const today = addDaysKey(0, timeZone);
-  const tomorrow = addDaysKey(1, timeZone);
-  const sevenDaysOut = addDaysKey(6, timeZone);
-
-  const rangeCounts = useMemo(() => {
-    const counts: Record<RangeKey, number> = { today: 0, tomorrow: 0, seven: 0, history: 0, all: 0 };
-    for (const match of payload.matches) {
-      const key = matchDateKey(match, timeZone);
-      counts.all += 1;
-      if (key === today) counts.today += 1;
-      if (key === tomorrow) counts.tomorrow += 1;
-      if (key >= today && key <= sevenDaysOut) counts.seven += 1;
-      if (key < today) counts.history += 1;
-    }
-    return counts;
-  }, [payload.matches, sevenDaysOut, timeZone, today, tomorrow]);
-
-  const leagues = useMemo(
-    () => [...new Set(payload.matches.map((match) => match.league))].sort(),
-    [payload.matches],
+  const requestQuery = useMemo<SchedulePageQuery>(() => ({
+    range,
+    timeZone,
+    game,
+    league,
+    status,
+    query,
+    selectedDate: selectedDate || null,
+    cursor: null,
+    limit: payload.page.limit,
+  }), [game, league, payload.page.limit, query, range, selectedDate, status, timeZone]);
+  const requestKey = schedulePageRequestKey(requestQuery);
+  const initialPayloadKey = schedulePageRequestKey({
+    range: "today",
+    timeZone: initialData.timeZone,
+    game: "all",
+    league: "all",
+    status: "all",
+    query: "",
+    selectedDate: null,
+  });
+  const [loadedRequestKey, setLoadedRequestKey] = useState(initialPayloadKey);
+  const payloadMatchesFilters = isSchedulePageForCurrentFilters(loadedRequestKey, requestKey);
+  const [announcedMatchCount, setAnnouncedMatchCount] = useState<number | null>(null);
+  useEffect(
+    () => scheduleResultAnnouncementUpdate(
+      payloadMatchesFilters ? payload.page.total : null,
+      setAnnouncedMatchCount,
+    ),
+    [payload.page.total, payloadMatchesFilters, requestKey],
   );
+  const currentRequestKey = useRef(requestKey);
+  useLayoutEffect(() => {
+    currentRequestKey.current = requestKey;
+  }, [requestKey]);
 
-  const filtered = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase();
-    return payload.matches.filter((match) => {
-      const key = matchDateKey(match, timeZone);
-      const inRange = selectedDate
-        ? key === selectedDate
-        : range === "all"
-          ? true
-          : range === "today"
-            ? key === today
-            : range === "tomorrow"
-              ? key === tomorrow
-              : range === "seven"
-                ? key >= today && key <= sevenDaysOut
-                : key < today;
-      const haystack = [match.homeTeam.name, match.awayTeam.name, match.league, match.tournament || "", match.stage || ""]
-        .join(" ").toLocaleLowerCase();
-      return inRange
-        && (game === "all" || match.game === game)
-        && (league === "all" || match.league === league)
-        && (status === "all" || match.status === status)
-        && (!normalizedQuery || haystack.includes(normalizedQuery));
-    });
-  }, [game, league, payload.matches, query, range, selectedDate, sevenDaysOut, status, timeZone, today, tomorrow]);
+  useEffect(() => {
+    if (!initialRequestSkipped.current) {
+      initialRequestSkipped.current = true;
+      if (requestQuery.timeZone === initialData.timeZone
+        && requestQuery.range === "today"
+        && requestQuery.game === "all"
+        && requestQuery.league === "all"
+        && requestQuery.status === "all"
+        && !requestQuery.query
+        && !requestQuery.selectedDate) return;
+    }
+
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
+    const serial = ++requestSerial.current;
+    const controller = new AbortController();
+    activeController.current?.abort();
+    activeController.current = controller;
+    const delay = requestQuery.query.trim() ? 250 : 0;
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      setRequestError(false);
+      try {
+        const response = await fetch(pageUrl(requestQuery), { cache: "no-store", signal: controller.signal });
+        if (!response.ok) throw new Error("schedule page request failed");
+        const next = await response.json() as SchedulePageData;
+        if (isCurrentSchedulePageRequest(serial, requestSerial.current, requestKey, currentRequestKey.current)) {
+          setPayload(next);
+          setLoadedRequestKey(requestKey);
+        }
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")
+          && isCurrentSchedulePageRequest(serial, requestSerial.current, requestKey, currentRequestKey.current)) {
+          setRequestError(true);
+        }
+      } finally {
+        if (isCurrentSchedulePageRequest(serial, requestSerial.current, requestKey, currentRequestKey.current)) {
+          setLoading(false);
+        }
+      }
+    }, delay);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+      if (activeController.current === controller) activeController.current = null;
+    };
+  }, [initialData.timeZone, requestKey, requestQuery]);
+
+  const filtered = payload.matches;
+  const leagues = payload.leagues;
 
   const grouped = useMemo(() => {
-    const groups = new Map<string, EsportsMatch[]>();
-    for (const match of filtered) {
-      const key = matchDateKey(match, timeZone);
-      groups.set(key, [...(groups.get(key) ?? []), match]);
-    }
-    return [...groups.entries()].sort(([a], [b]) => {
-      if (a === "unscheduled") return 1;
-      if (b === "unscheduled") return -1;
-      return range === "history" ? b.localeCompare(a) : a.localeCompare(b);
-    });
+    return groupScheduleMatches(filtered, timeZone, range);
   }, [filtered, range, timeZone]);
 
-  const liveCount = payload.matches.filter((match) => match.status === "running").length;
-  const upcomingCount = payload.matches.filter((match) => match.status === "scheduled").length;
+  const liveCount = payload.liveCount;
+  const upcomingCount = payload.upcomingCount;
 
   async function refreshSchedule() {
     setRefreshing(true);
+    setLoading(true);
+    // A refresh supersedes any in-flight pagination request. Its finally block
+    // is intentionally guarded by the request serial, so release the pagination
+    // state here rather than leaving the Load More control stuck as busy.
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
+    const serial = ++requestSerial.current;
+    const controller = new AbortController();
+    activeController.current?.abort();
+    activeController.current = controller;
+    setRequestError(false);
     try {
-      const response = await fetch("/api/matches", { cache: "no-store" });
-      if (response.ok) setPayload((await response.json()) as SchedulePayload);
+      const response = await fetch(pageUrl(requestQuery), { cache: "no-store", signal: controller.signal });
+      if (!response.ok) throw new Error("schedule page request failed");
+      const next = await response.json() as SchedulePageData;
+      if (serial === requestSerial.current && requestKey === currentRequestKey.current) {
+        setPayload(next);
+        setLoadedRequestKey(requestKey);
+        setPaginationRestartedFor(null);
+      }
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")
+        && serial === requestSerial.current && requestKey === currentRequestKey.current) setRequestError(true);
     } finally {
+      if (serial === requestSerial.current) setLoading(false);
       setRefreshing(false);
+      if (activeController.current === controller) activeController.current = null;
+    }
+  }
+
+  async function loadMoreMatches() {
+    const cursor = payload.page.nextCursor;
+    if (!cursor || loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    const serial = ++requestSerial.current;
+    const controller = new AbortController();
+    activeController.current?.abort();
+    activeController.current = controller;
+    setRequestError(false);
+    try {
+      const response = await fetch(pageUrl({ ...requestQuery, cursor }), { cache: "no-store", signal: controller.signal });
+      if (response.status === 409) {
+        const body = await response.json() as { error?: string };
+        if (body.error !== "SCHEDULE_CHANGED") throw new Error("schedule page changed unexpectedly");
+        if (serial !== requestSerial.current || requestKey !== currentRequestKey.current) return;
+
+        const restartedResponse = await fetch(pageUrl({ ...requestQuery, cursor: null }), {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!restartedResponse.ok) throw new Error("schedule page restart failed");
+        const restarted = await restartedResponse.json() as SchedulePageData;
+        if (serial === requestSerial.current && requestKey === currentRequestKey.current) {
+          setPayload(restarted);
+          setLoadedRequestKey(requestKey);
+          setPaginationRestartedFor(requestKey);
+          setRequestError(false);
+        }
+        return;
+      }
+      if (!response.ok) throw new Error("schedule page request failed");
+      const next = await response.json() as SchedulePageData;
+      if (serial === requestSerial.current && requestKey === currentRequestKey.current) {
+        setPayload((current) => {
+          const knownIds = new Set(current.matches.map((match) => match.id));
+          const newMatches = next.matches.filter((match) => {
+            if (knownIds.has(match.id)) return false;
+            knownIds.add(match.id);
+            return true;
+          });
+          return { ...next, matches: [...current.matches, ...newMatches] };
+        });
+        setLoadedRequestKey(requestKey);
+      }
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")
+        && serial === requestSerial.current && requestKey === currentRequestKey.current) setRequestError(true);
+    } finally {
+      if (serial === requestSerial.current) {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
+      if (activeController.current === controller) activeController.current = null;
     }
   }
 
@@ -264,7 +404,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           <button className="theme-button" type="button" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}>
             <span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
           </button>
-          <button className="refresh-button" type="button" onClick={refreshSchedule} disabled={refreshing}>
+          <button className="refresh-button" type="button" onClick={refreshSchedule} disabled={refreshing || loading}>
             <svg className={refreshing ? "is-spinning" : ""} viewBox="0 0 18 18" aria-hidden="true"><path d="M14.6 6.5A6 6 0 1 0 15 10M14.6 3.5v3h-3" /></svg>
             <span>{refreshing ? "更新中" : "刷新"}</span>
           </button>
@@ -319,9 +459,27 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           </div>
 
           <div className="range-tabs" role="tablist" aria-label="选择时间范围">
-            {([ ["today", "今日"], ["tomorrow", "明日"], ["seven", "未来 7 天"], ["history", "历史比赛"], ["all", "全部收录"] ] as const).map(([key, label]) => (
-              <button key={key} role="tab" aria-selected={range === key} className={range === key ? "active" : ""} type="button" onClick={() => setRange(key)}>
-                <span>{label}</span><em>{rangeCounts[key]}</em>
+            {scheduleRangeTabs.map(([key, label]) => (
+              <button
+                key={key}
+                id={`${rangeId}-${key}`}
+                role="tab"
+                aria-selected={range === key}
+                aria-controls={rangePanelId}
+                tabIndex={range === key ? 0 : -1}
+                className={range === key ? "active" : ""}
+                type="button"
+                onClick={() => { setSelectedDate(""); setRange(key); }}
+                onKeyDown={(event) => {
+                  const nextRange = rangeForNavigationKey(key, event.key);
+                  if (!nextRange) return;
+                  event.preventDefault();
+                  setSelectedDate("");
+                  setRange(nextRange);
+                  document.getElementById(`${rangeId}-${nextRange}`)?.focus();
+                }}
+              >
+                <span>{label}</span><em>{payload.rangeCounts[key]}</em>
               </button>
             ))}
           </div>
@@ -331,18 +489,33 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <label><span className="sr-only">游戏</span><select value={game} onChange={(event) => setGame(event.target.value as GameKey | "all")}><option value="all">全部游戏</option>{Object.entries(games).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
             <label><span className="sr-only">赛事</span><select value={league} onChange={(event) => setLeague(event.target.value)}><option value="all">全部赛事</option>{leagues.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
             <label><span className="sr-only">状态</span><select value={status} onChange={(event) => setStatus(event.target.value as MatchStatus | "all")}><option value="all">全部状态</option>{Object.entries(statusMeta).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
-            <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt?.slice(0, 10)} max={payload.coverage.range.latestMatchAt?.slice(0, 10)} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
+            <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt ? dateKeyInTimeZone(payload.coverage.range.earliestMatchAt, timeZone) : undefined} max={payload.coverage.range.latestMatchAt ? dateKeyInTimeZone(payload.coverage.range.latestMatchAt, timeZone) : undefined} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
           </div>
 
-          <div className="match-list" aria-live="polite">
+          <ScheduleResultStatus count={announcedMatchCount} />
+          <div className="match-list" id={rangePanelId} role="tabpanel" aria-labelledby={`${rangeId}-${range}`} tabIndex={0} aria-busy={loading || loadingMore}>
+            {!payloadMatchesFilters && <div className="data-notice" role={requestError ? "alert" : "status"}>
+              {requestError
+                ? "当前筛选加载失败，下面显示的是上一组筛选结果；请重试。"
+                : "筛选更新中，下面暂时保留上一组筛选结果。"}
+            </div>}
+            {requestError && payloadMatchesFilters && <div className="data-notice" role="alert">赛程筛选暂时失败，已保留当前结果，请重试。</div>}
+            {paginationRestartedFor === requestKey && <div className="data-notice" role="status">赛程在浏览期间更新，已从最新结果重新载入。</div>}
+            {loading && <div className="results-meta" role="status">{payloadMatchesFilters ? "正在更新筛选结果…" : "正在更新筛选结果，列表暂为上一组结果…"}</div>}
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
               <section className="date-group" key={key}>
-                <div className="date-divider"><span>{formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
+                <div className="date-divider"><span>{key === "live" ? "正在进行" : formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
                 {matches.map((match) => <MatchCard match={match} timeZone={timeZone} key={match.id} />)}
               </section>
             )) : (
-              <div className="empty-state"><span className="empty-glyph">⌁</span><h3>没有找到符合条件的比赛</h3><p>试试切换时间范围，或清除部分筛选条件。</p><button type="button" onClick={resetFilters}>清除筛选</button></div>
+              <div className="empty-state"><span className="empty-glyph">⌁</span><h3>{loading ? "正在加载比赛" : "没有找到符合条件的比赛"}</h3><p>{loading ? "正在读取当前筛选范围。" : "试试切换时间范围，或清除部分筛选条件。"}</p>{!loading && <button type="button" onClick={resetFilters}>清除筛选</button>}</div>
             )}
+          </div>
+          <div className="match-page-footer">
+            <span className="results-meta">{payloadMatchesFilters ? "已载入" : "上一组筛选结果：已载入"} {payload.matches.length} / {payload.page.total} 场</span>
+            {payloadMatchesFilters && payload.page.nextCursor && <button className="load-more-button" type="button" onClick={loadMoreMatches} disabled={loadingMore || loading}>
+              {loadingMore ? "加载中…" : `加载更多（${Math.min(payload.page.limit, payload.page.total - payload.matches.length)} 场）`}
+            </button>}
           </div>
         </section>
       </main>

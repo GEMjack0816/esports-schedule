@@ -68,5 +68,28 @@ jobs:
       - name: Build the production bundle
         run: npm run build
 
+      - name: Install Chromium for browser regression
+        run: npx playwright-core install --with-deps chromium
+
+      - name: Verify desktop/mobile schedule flow and stale pagination recovery
+        run: |
+          set -eu
+          npx next start --hostname 127.0.0.1 > /tmp/esports-schedule-next.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3000/api/version > /dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Next.js production server did not become ready within 60 seconds."
+            exit 1
+          fi
+          npm run verify:browser -- http://127.0.0.1:3000
+
       - name: Scan client assets for server credentials
         run: npm run test:client-bundle

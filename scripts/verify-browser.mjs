@@ -4,13 +4,22 @@ import { chromium } from "playwright-core";
 
 const baseUrl = process.argv[2] || "http://localhost:3000";
 const executableCandidates = [
+  process.env.CHROME_PATH,
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-];
+].filter(Boolean);
 
 let browser;
 let launchError;
+if (!process.env.CHROME_PATH) {
+  try {
+    browser = await chromium.launch({ headless: true });
+  } catch (error) {
+    launchError = error;
+  }
+}
 for (const executablePath of executableCandidates) {
+  if (browser) break;
   try {
     browser = await chromium.launch({ executablePath, headless: true });
     break;
@@ -33,14 +42,28 @@ for (const profile of [
   const page = await context.newPage();
   const errors = [];
   const criticalRequestFailures = [];
+  const resultAnnouncementFailures = [];
   const optionalResourceFailures = [];
   const browserResourceWarnings = [];
-  const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage"];
+  let expectScheduleChanged = false;
+  let failNextCs2Filter = false;
+  let delayNextPaginationResponse = false;
+  let delayedPaginationRequestStarted = false;
+  let serveRefreshAfterPagination = false;
+  let returnNextPageAfterRefresh = false;
+  let expectedFilterFailureResponse = false;
+  let expectedFilterFailureConsole = false;
+  const criticalPaths = ["/api/matches", "/api/matches/page", "/api/version", "/api/health/data-coverage"];
   const auditUrl = new URL(baseUrl);
   auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const text = message.text();
+    if (expectScheduleChanged && /status of 409 \(Conflict\)/i.test(text)) return;
+    if (expectedFilterFailureConsole && /status of 503/i.test(text)) {
+      expectedFilterFailureConsole = false;
+      return;
+    }
     if (/^Failed to load resource: net::ERR_/.test(text)) {
       browserResourceWarnings.push(text);
       return;
@@ -66,8 +89,13 @@ for (const profile of [
       candidateUrl.origin === auditUrl.origin
       && criticalPaths.includes(candidateUrl.pathname)
       && candidate.status() >= 400
+      && !(candidateUrl.pathname === "/api/matches/page" && candidate.status() === 409 && expectScheduleChanged)
+      && !(candidateUrl.pathname === "/api/matches/page" && candidate.status() === 503 && expectedFilterFailureResponse)
     ) {
       criticalRequestFailures.push(`${candidate.request().method()} ${candidateUrl.pathname} HTTP ${candidate.status()}`);
+    }
+    if (candidateUrl.pathname === "/api/matches/page" && candidate.status() === 503 && expectedFilterFailureResponse) {
+      expectedFilterFailureResponse = false;
     }
   });
 
@@ -83,19 +111,77 @@ for (const profile of [
 
   const gameFilterCounts = {};
   const statusFilterCounts = {};
+  let keyboardRangeNavigationWorks = false;
+  const todayRangeTab = page.getByRole("tab", { name: /今日/ });
+  const tomorrowRangeTab = page.getByRole("tab", { name: /明日/ });
+  const allRangeTab = page.getByRole("tab", { name: /全部收录/ });
+  const rangeTabIsFocusedAndSelected = async (tab) => {
+    const tabId = await tab.getAttribute("id");
+    const panelId = await tab.getAttribute("aria-controls");
+    if (!tabId || !panelId) return false;
+    const tabIndexes = await page.locator('.range-tabs [role="tab"]').evaluateAll((tabs) =>
+      tabs.map((item) => item.getAttribute("tabindex")),
+    );
+    const panel = page.locator(`[id="${panelId}"]`);
+    return await page.evaluate((expectedId) => document.activeElement?.id === expectedId, tabId)
+      && await tab.getAttribute("aria-selected") === "true"
+      && await tab.getAttribute("tabindex") === "0"
+      && tabIndexes.filter((value) => value === "0").length === 1
+      && await panel.getAttribute("role") === "tabpanel"
+      && await panel.getAttribute("aria-labelledby") === tabId;
+  };
+  await todayRangeTab.focus();
+  await page.keyboard.press("ArrowRight");
+  const arrowFocused = await rangeTabIsFocusedAndSelected(tomorrowRangeTab);
+  await page.keyboard.press("End");
+  const endFocused = await rangeTabIsFocusedAndSelected(allRangeTab);
+  await page.keyboard.press("ArrowRight");
+  const wrappedFocused = await rangeTabIsFocusedAndSelected(todayRangeTab);
+  await page.keyboard.press("Home");
+  const homeFocused = await rangeTabIsFocusedAndSelected(todayRangeTab);
+  keyboardRangeNavigationWorks = arrowFocused && endFocused && wrappedFocused && homeFocused;
+  async function selectFilterAndWait(select, filterName, filterValue) {
+    const responsePromise = page.waitForResponse((candidate) => {
+      const candidateUrl = new URL(candidate.url());
+      return candidateUrl.origin === auditUrl.origin
+        && candidateUrl.pathname === "/api/matches/page"
+        && candidateUrl.searchParams.get(filterName) === filterValue;
+    });
+    await select.selectOption(filterValue);
+    const filterResponse = await responsePromise;
+    if (!filterResponse.ok()) {
+      criticalRequestFailures.push(`GET /api/matches/page HTTP ${filterResponse.status()}`);
+    }
+    await page.waitForFunction(() => document.querySelector(".match-list")?.getAttribute("aria-busy") === "false");
+    if (filterResponse.ok()) {
+      const body = await filterResponse.json();
+      const expectedAnnouncement = body.page?.total === 0
+        ? "没有符合条件的比赛。"
+        : `筛选结果：${body.page.total} 场比赛。`;
+      try {
+        await page.waitForFunction(
+          (expected) => document.querySelector(".schedule-result-status")?.textContent?.trim() === expected,
+          expectedAnnouncement,
+          { timeout: 5_000 },
+        );
+      } catch {
+        resultAnnouncementFailures.push(`${filterName}=${filterValue}: result count was not announced`);
+      }
+    }
+  }
   await page.getByRole("tab", { name: /全部收录/ }).click();
   const gameSelect = page.locator(".filter-panel select").nth(0);
   for (const game of ["lol", "valorant", "honor-of-kings", "cs2", "dota2"]) {
-    await gameSelect.selectOption(game);
+    await selectFilterAndWait(gameSelect, "game", game);
     gameFilterCounts[game] = await page.locator(".match-card").count();
   }
-  await gameSelect.selectOption("all");
+  await selectFilterAndWait(gameSelect, "game", "all");
   const statusSelect = page.locator(".filter-panel select").nth(2);
   for (const status of ["running", "finished", "scheduled"]) {
-    await statusSelect.selectOption(status);
+    await selectFilterAndWait(statusSelect, "status", status);
     statusFilterCounts[status] = await page.locator(".match-card").count();
   }
-  await statusSelect.selectOption("all");
+  await selectFilterAndWait(statusSelect, "status", "all");
   await page.getByRole("tab", { name: /^今日/ }).click();
 
   const apiResponsePromise = page.waitForResponse(
@@ -152,6 +238,235 @@ for (const profile of [
   } catch (error) {
     errors.push(`version-health:${error instanceof Error ? error.message : "request failed"}`);
   }
+
+  function cursorRegressionMatch(id, teamName) {
+    return {
+      id,
+      provider: "pandascore",
+      providerMatchId: id,
+      game: "lol",
+      tournament: "Cursor consistency test",
+      league: "LCK",
+      stage: null,
+      homeTeam: { name: teamName, logo: "/team-placeholder.svg" },
+      awayTeam: { name: `${teamName} opponent`, logo: "/team-placeholder.svg" },
+      homeScore: null,
+      awayScore: null,
+      bestOf: 3,
+      status: "scheduled",
+      startTimeUtc: "2026-10-14T12:00:00.000Z",
+      streams: [],
+      lastUpdatedAt: "2026-10-14T12:00:00.000Z",
+    };
+  }
+  let paginationRestartWorked = false;
+  let refreshRestoredPagination = false;
+  let failedFilterRetainedResultsSafely = false;
+  let injectMissingTimeLiveFixture = true;
+  await page.route("**/api/matches/page?*", async (route) => {
+    const url = new URL(route.request().url());
+    if (injectMissingTimeLiveFixture
+      && url.searchParams.get("range") === "today"
+      && url.searchParams.get("status") === "running"
+      && !url.searchParams.has("cursor")) {
+      const response = await route.fetch();
+      if (!response.ok()) return route.fulfill({ response });
+      const body = await response.json();
+      body.matches = [...body.matches, {
+        id: "browser-verification-live-without-time",
+        provider: "manual",
+        providerMatchId: "browser-verification-live-without-time",
+        game: "lol",
+        tournament: null,
+        league: "Browser verification fixture",
+        stage: null,
+        homeTeam: { name: "Codex live fixture", acronym: "CLF", logo: "/team-placeholder.svg" },
+        awayTeam: { name: "Verification opponent", acronym: "VO", logo: "/team-placeholder.svg" },
+        homeScore: null,
+        awayScore: null,
+        bestOf: null,
+        status: "running",
+        startTimeUtc: null,
+        streams: [],
+        lastUpdatedAt: new Date().toISOString(),
+      }];
+      body.page.total += 1;
+      body.rangeCounts.today += 1;
+      body.rangeCounts.all += 1;
+      body.liveCount += 1;
+      injectMissingTimeLiveFixture = false;
+      return route.fulfill({ response, body: JSON.stringify(body) });
+    }
+    if (failNextCs2Filter && url.searchParams.get("game") === "cs2") {
+      failNextCs2Filter = false;
+      expectedFilterFailureResponse = true;
+      expectedFilterFailureConsole = true;
+      return route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "TEMPORARILY_UNAVAILABLE" }),
+      });
+    }
+    if (url.searchParams.has("cursor") && delayNextPaginationResponse && !delayedPaginationRequestStarted) {
+      delayedPaginationRequestStarted = true;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      try {
+        return await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ...apiBody, matches: [], page: { limit: 50, total: 2, nextCursor: "unused-cursor" } }),
+        });
+      } catch {
+        // The browser should abort this request when Refresh supersedes it.
+        return;
+      }
+    }
+    if (url.searchParams.has("cursor") && returnNextPageAfterRefresh) {
+      returnNextPageAfterRefresh = false;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...apiBody,
+          matches: [
+            cursorRegressionMatch("refreshed-match", "Duplicate Refreshed Snapshot Copy"),
+            cursorRegressionMatch("recovered-page-match", "Recovered Page Team"),
+            cursorRegressionMatch("recovered-page-match", "Duplicate Recovered Page Copy"),
+          ],
+          page: { limit: 50, total: 2, nextCursor: null },
+          rangeCounts: { today: 1, tomorrow: 0, seven: 1, history: 0, all: 2 },
+          liveCount: 0,
+          upcomingCount: 1,
+          leagues: ["LCK"],
+          timeZone: url.searchParams.get("timeZone") || "UTC",
+        }),
+      });
+    }
+    if (!url.searchParams.has("cursor") && serveRefreshAfterPagination) {
+      serveRefreshAfterPagination = false;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...apiBody,
+          matches: [cursorRegressionMatch("refreshed-match", "Refreshed Snapshot Team")],
+          page: { limit: 50, total: 2, nextCursor: "fixture-after-refresh" },
+          rangeCounts: { today: 1, tomorrow: 0, seven: 1, history: 0, all: 2 },
+          liveCount: 0,
+          upcomingCount: 1,
+          leagues: ["LCK"],
+          timeZone: url.searchParams.get("timeZone") || "UTC",
+        }),
+      });
+    }
+    const regressionQuery = url.searchParams.get("range") === "all"
+      && url.searchParams.get("game") === "all"
+      && url.searchParams.get("league") === "all"
+      && url.searchParams.get("status") === "all"
+      && !url.searchParams.get("q")
+      && !url.searchParams.has("date");
+    if (!regressionQuery) return route.continue();
+
+    if (url.searchParams.has("cursor")) {
+      expectScheduleChanged = true;
+      return route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "SCHEDULE_CHANGED" }),
+      });
+    }
+
+    const restarted = expectScheduleChanged;
+    const matches = [cursorRegressionMatch(
+      restarted ? "fresh-match" : "old-match",
+      restarted ? "Fresh Snapshot Team" : "Old Snapshot Team",
+    )];
+    const body = {
+      ...apiBody,
+      matches,
+      page: {
+        limit: Number(url.searchParams.get("limit")) || 50,
+        total: 2,
+        nextCursor: restarted ? "fixture-current-cursor" : "fixture-stale-cursor",
+      },
+      rangeCounts: { today: 1, tomorrow: 0, seven: 1, history: 0, all: 2 },
+      liveCount: 0,
+      upcomingCount: 1,
+      leagues: ["LCK"],
+      timeZone: url.searchParams.get("timeZone") || "UTC",
+    };
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  });
+  await selectFilterAndWait(page.locator(".filter-panel select").nth(2), "status", "running");
+  const liveFixtureVisible = await page.locator(".date-group").first().locator(".match-card")
+    .filter({ hasText: "Codex live fixture" }).count() === 1;
+  const liveGroupHeading = await page.locator(".date-group").first().locator(".date-divider span").innerText();
+  const liveGroupHeadingExplicit = liveGroupHeading === "正在进行";
+  await selectFilterAndWait(page.locator(".filter-panel select").nth(2), "status", "all");
+  await page.getByRole("tab", { name: /全部收录/ }).click();
+  await page.waitForFunction(() => document.querySelector(".match-list")?.getAttribute("aria-busy") === "false");
+  await page.getByText("Old Snapshot Team", { exact: true }).waitFor();
+  const conflictResponse = page.waitForResponse((candidate) => {
+    const url = new URL(candidate.url());
+    return url.pathname === "/api/matches/page" && url.searchParams.has("cursor") && candidate.status() === 409;
+  });
+  await page.getByRole("button", { name: /加载更多/ }).click();
+  await conflictResponse;
+  await page.getByText("Fresh Snapshot Team", { exact: true }).waitFor();
+  const paginationNotice = page.locator('.data-notice[role="status"]').filter({ hasText: "已从最新结果重新载入" });
+  await paginationNotice.waitFor();
+  const paginationNoticeText = await paginationNotice.innerText();
+  const afterRestartText = (await page.locator(".match-card").allTextContents()).join(" ");
+  paginationRestartWorked = paginationNoticeText.includes("已从最新结果重新载入")
+    && afterRestartText.includes("Fresh Snapshot Team")
+    && !afterRestartText.includes("Old Snapshot Team");
+  expectScheduleChanged = false;
+
+  // A manual refresh cancels an in-flight Load More request. Verify the
+  // canceled request cannot leave pagination permanently marked as busy.
+  await page.waitForFunction(() => document.querySelector(".match-list")?.getAttribute("aria-busy") === "false");
+  await page.getByText("Fresh Snapshot Team", { exact: true }).waitFor();
+  delayNextPaginationResponse = true;
+  const delayedPageRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/matches/page" && url.searchParams.has("cursor");
+  });
+  await page.getByRole("button", { name: /加载更多/ }).click();
+  await delayedPageRequest;
+  const refreshButton = page.locator(".refresh-button");
+  await page.waitForFunction(() => {
+    const button = document.querySelector(".refresh-button");
+    return button instanceof HTMLButtonElement && !button.disabled;
+  });
+  serveRefreshAfterPagination = true;
+  await refreshButton.click();
+  await page.waitForFunction(() =>
+    document.querySelector(".refresh-button span")?.textContent === "刷新"
+      && document.querySelector(".match-list")?.getAttribute("aria-busy") === "false",
+  );
+  const loadMoreAfterRefresh = page.getByRole("button", { name: /加载更多/ });
+  const paginationUnlocked = await loadMoreAfterRefresh.isEnabled();
+  if (paginationUnlocked) {
+    returnNextPageAfterRefresh = true;
+    await loadMoreAfterRefresh.click();
+    await page.getByText("Recovered Page Team", { exact: true }).waitFor();
+    refreshRestoredPagination = await page.getByText("Recovered Page Team", { exact: true }).count() === 1
+      && await page.getByText("Refreshed Snapshot Team", { exact: true }).count() === 1
+      && await page.getByText("Duplicate Refreshed Snapshot Copy", { exact: true }).count() === 0
+      && await page.getByText("Duplicate Recovered Page Copy", { exact: true }).count() === 0;
+  }
+
+  failNextCs2Filter = true;
+  const failedFilterResponse = page.waitForResponse((candidate) => {
+    const url = new URL(candidate.url());
+    return url.pathname === "/api/matches/page" && url.searchParams.get("game") === "cs2";
+  });
+  await gameSelect.selectOption("cs2");
+  await failedFilterResponse;
+  await page.locator('.data-notice[role="alert"]').filter({ hasText: "上一组筛选结果" }).waitFor();
+  failedFilterRetainedResultsSafely = await page.getByRole("button", { name: /加载更多/ }).count() === 0
+    && (await page.locator(".match-card").allTextContents()).join(" ").includes("Recovered Page Team");
+
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
   const adminResponse = await page.goto(`${baseUrl}/admin`, {
@@ -204,6 +519,8 @@ for (const profile of [
     healthVersionMatches:
       healthResult.body.version?.gitCommitSha === versionResult.body.gitCommitSha,
     criticalRequestFailures,
+    resultAnnouncementFailures,
+    keyboardRangeNavigationWorks,
     optionalResourceFailureCount: optionalResourceFailures.length,
     optionalResourceFailureSamples: optionalResourceFailures.slice(0, 5),
     browserResourceWarningCount: browserResourceWarnings.length,
@@ -213,6 +530,11 @@ for (const profile of [
     anonymousAdminContainsPrivateData:
       adminBody.includes("最近操作") || adminBody.includes("待审核提交"),
     anonymousAdminApiStatus: adminLegacyResponse.status(),
+    paginationRestartWorked,
+    refreshRestoredPagination,
+    failedFilterRetainedResultsSafely,
+    liveFixtureVisible,
+    liveGroupHeadingExplicit,
     errors,
     screenshot,
   });
@@ -247,8 +569,15 @@ for (const result of results) {
   if (!result.anonymousAdminAtLogin) failures.push(`${prefix}: anonymous admin page was not redirected to login`);
   if (result.anonymousAdminContainsPrivateData) failures.push(`${prefix}: anonymous admin page exposed private data`);
   if (result.anonymousAdminApiStatus !== 401) failures.push(`${prefix}: anonymous admin API HTTP ${result.anonymousAdminApiStatus}`);
+  if (!result.keyboardRangeNavigationWorks) failures.push(`${prefix}: keyboard range-tab navigation failed`);
+  if (!result.paginationRestartWorked) failures.push(`${prefix}: stale pagination did not restart from the latest result set`);
+  if (!result.refreshRestoredPagination) failures.push(`${prefix}: refresh during pagination left Load More unavailable`);
+  if (!result.failedFilterRetainedResultsSafely) failures.push(`${prefix}: failed filter exposed a stale pagination cursor or ambiguous previous results`);
+  if (!result.liveFixtureVisible) failures.push(`${prefix}: undated running match was not visible in Today`);
+  if (!result.liveGroupHeadingExplicit) failures.push(`${prefix}: running match group was not labeled as in progress`);
   failures.push(...result.errors.map((error) => `${prefix}: ${error}`));
   failures.push(...result.criticalRequestFailures.map((error) => `${prefix}: ${error}`));
+  failures.push(...result.resultAnnouncementFailures.map((error) => `${prefix}: ${error}`));
 }
 
 if (failures.length > 0) {
