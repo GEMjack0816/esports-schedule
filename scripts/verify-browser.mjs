@@ -242,10 +242,12 @@ for (const result of results) {
   if (result.crawlerMetadata.robotsStatus !== 200 || result.crawlerMetadata.sitemapStatus !== 200) {
     failures.push(`${prefix}: crawler metadata routes should return HTTP 200`);
   }
-  if (!result.crawlerMetadata.robotsText.includes("Disallow: /admin")
-    || !result.crawlerMetadata.robotsText.includes("Disallow: /api")
-    || !result.crawlerMetadata.robotsText.includes("/sitemap.xml")) {
-    failures.push(`${prefix}: robots.txt must exclude private routes and advertise the sitemap`);
+  const blocksAllCrawlers = result.crawlerMetadata.robotsText.includes("Disallow: /");
+  const allowsOnlyPublicRoutes = result.crawlerMetadata.robotsText.includes("Disallow: /admin")
+    && result.crawlerMetadata.robotsText.includes("Disallow: /api")
+    && result.crawlerMetadata.robotsText.includes("/sitemap.xml");
+  if (!blocksAllCrawlers && !allowsOnlyPublicRoutes) {
+    failures.push(`${prefix}: robots.txt must either block non-production crawlers or exclude private routes and advertise the sitemap`);
   }
   if (!result.crawlerMetadata.sitemapText.includes("esports-schedule-two.vercel.app/")
     || !result.crawlerMetadata.sitemapText.includes("/submit-match")) {

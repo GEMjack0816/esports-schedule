@@ -1,16 +1,24 @@
 import { describe, expect, it } from "vitest";
-import robots from "./robots";
+import { getRobots } from "./robots";
 import sitemap from "./sitemap";
 import { PUBLIC_SITE_URL } from "@/lib/site";
 
 describe("public crawler metadata", () => {
   it("allows public pages and disallows administrator and API routes", () => {
-    const result = robots();
+    const result = getRobots("production");
     const rules = Array.isArray(result.rules) ? result.rules[0] : result.rules;
 
     expect(rules).toMatchObject({ userAgent: "*", allow: "/" });
     expect(rules.disallow).toEqual(expect.arrayContaining(["/admin", "/api"]));
     expect(result.sitemap).toBe(`${PUBLIC_SITE_URL}/sitemap.xml`);
+  });
+
+  it.each(["preview", "development", undefined])("prevents indexing outside production (%s)", (environment) => {
+    const result = getRobots(environment);
+    const rules = Array.isArray(result.rules) ? result.rules[0] : result.rules;
+
+    expect(rules).toMatchObject({ userAgent: "*", disallow: "/" });
+    expect(result.sitemap).toBeUndefined();
   });
 
   it("lists only stable public page URLs on the canonical HTTPS origin", () => {
