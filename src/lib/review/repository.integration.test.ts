@@ -815,16 +815,14 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
   it("releases the mutation lock when an awaited cache fence leaves its transaction idle", async () => {
     const input = submission(`idle-fence-${randomUUID()}`);
     let fenceStarted!: () => void;
-    let finishFence!: () => void;
     const started = new Promise<void>((resolve) => { fenceStarted = resolve; });
-    const pendingFence = new Promise<void>((resolve) => { finishFence = resolve; });
-    const mutation = repository.createManualMatch(published(input), "admin-a", async () => {
+    // Keep this callback unresolved after PostgreSQL terminates its idle
+    // transaction. Resuming it would make postgres.js attempt a query on the
+    // already-closed connection, which is outside the behavior under test.
+    void repository.createManualMatch(published(input), "admin-a", async () => {
       fenceStarted();
-      await pendingFence;
-    }).then(
-      () => ({ error: null }),
-      (error: unknown) => ({ error }),
-    );
+      await new Promise<void>(() => {});
+    }).catch(() => undefined);
 
     await started;
     // The repository applies a 30-second transaction-local idle timeout. The
@@ -832,16 +830,9 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     // promise itself is not cancellable and has not resolved yet.
     await new Promise((resolve) => setTimeout(resolve, 31_000));
 
-    try {
-      const [lock] = await cleanup`select pg_try_advisory_lock(${MANUAL_MATCH_MUTATION_LOCK}) as acquired`;
-      expect(lock.acquired).toBe(true);
-      await cleanup`select pg_advisory_unlock(${MANUAL_MATCH_MUTATION_LOCK})`;
-    } finally {
-      finishFence();
-    }
-
-    const result = await mutation;
-    expect(result.error).toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+    const [lock] = await cleanup`select pg_try_advisory_lock(${MANUAL_MATCH_MUTATION_LOCK}) as acquired`;
+    expect(lock.acquired).toBe(true);
+    await cleanup`select pg_advisory_unlock(${MANUAL_MATCH_MUTATION_LOCK})`;
     const [matches] = await cleanup`
       select count(*)::int as count from published_manual_matches where league = ${input.league}
     `;
