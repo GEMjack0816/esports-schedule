@@ -67,13 +67,15 @@ export function safeDatabaseErrorCode(error: unknown): string {
   if (error instanceof Error && error.message === "DATABASE_NOT_CONFIGURED") {
     return "NOT_CONFIGURED";
   }
-  if (error && typeof error === "object") {
-    const code = (error as { code?: unknown }).code;
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current && typeof current === "object"; depth += 1) {
+    const code = (current as { code?: unknown }).code;
     if (code === "23505") return "DUPLICATE";
     if (code === "23503") return "FOREIGN_KEY";
     if (code === "23514") return "CONSTRAINT";
     if (code === "57014" || code === "25P03") return "TIMEOUT";
     if (code === "55P03") return "LOCK_TIMEOUT";
+    current = (current as { cause?: unknown }).cause;
   }
   return "UNAVAILABLE";
 }

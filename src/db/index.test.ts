@@ -20,6 +20,13 @@ describe("safeDatabaseErrorCode", () => {
     expect(safeDatabaseErrorCode({ code: "55P03" })).toBe("LOCK_TIMEOUT");
   });
 
+  it("classifies wrapped PostgreSQL errors without exposing the wrapped error", () => {
+    expect(safeDatabaseErrorCode({
+      message: "Failed query: private SQL text",
+      cause: { code: "57014", message: "private database details" },
+    })).toBe("TIMEOUT");
+  });
+
   it("does not expose unknown database error codes", () => {
     expect(safeDatabaseErrorCode({ code: "XX999", message: "private driver detail" })).toBe("UNAVAILABLE");
   });

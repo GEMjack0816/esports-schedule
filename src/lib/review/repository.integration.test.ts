@@ -90,10 +90,36 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
   });
 
   it("cancels a slow statement using a transaction-local timeout", async () => {
-    await expect(withDatabaseTimeouts(
+    const capturedError = await withDatabaseTimeouts(
       (tx) => tx.execute(sql`select pg_sleep(0.2)`),
       { statementTimeoutMs: 50, lockTimeoutMs: 100 },
-    )).rejects.toMatchObject({ code: "57014" });
+    ).then(() => null, (error: unknown) => error);
+    expect(capturedError).toBeDefined();
+    expect(safeDatabaseErrorCode(capturedError)).toBe("TIMEOUT");
+  }, 10_000);
+
+  it("bounds advisory lock waits with a transaction-local lock timeout", async () => {
+    let releaseLockOwner!: () => void;
+    let reportLockAcquired!: () => void;
+    const lockOwnerWait = new Promise<void>((resolve) => { releaseLockOwner = resolve; });
+    const lockAcquired = new Promise<void>((resolve) => { reportLockAcquired = resolve; });
+    const lockKey = BigInt("72840192611");
+    const lockOwner = withDatabaseTimeouts(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(${lockKey})`);
+      reportLockAcquired();
+      await lockOwnerWait;
+    });
+
+    await lockAcquired;
+    const capturedError = await withDatabaseTimeouts(
+      (tx) => tx.execute(sql`select pg_advisory_xact_lock(${lockKey})`),
+      { statementTimeoutMs: 1_000, lockTimeoutMs: 50 },
+    ).then(() => null, (error: unknown) => error);
+    releaseLockOwner();
+    await lockOwner;
+
+    expect(capturedError).toBeDefined();
+    expect(safeDatabaseErrorCode(capturedError)).toBe("LOCK_TIMEOUT");
   }, 10_000);
 
   it("sanitizes the driver connection error after an idle transaction is terminated", async () => {
