@@ -35,12 +35,19 @@ for (const profile of [
   const criticalRequestFailures = [];
   const optionalResourceFailures = [];
   const browserResourceWarnings = [];
+  let expectedRefreshError = false;
+  let expectedRefreshNetworkFailure = false;
+  let expected503ConsoleErrors = 0;
   const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage"];
   const auditUrl = new URL(baseUrl);
   auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const text = message.text();
+    if (expected503ConsoleErrors > 0 && /status of 503 \(Service Unavailable\)/.test(text)) {
+      expected503ConsoleErrors -= 1;
+      return;
+    }
     if (/^Failed to load resource: net::ERR_/.test(text)) {
       browserResourceWarnings.push(text);
       return;
@@ -50,6 +57,10 @@ for (const profile of [
   page.on("pageerror", (error) => errors.push(`page:${error.message}`));
   page.on("requestfailed", (request) => {
     const failedUrl = new URL(request.url());
+    if (expectedRefreshNetworkFailure && failedUrl.origin === auditUrl.origin && failedUrl.pathname === "/api/matches") {
+      expectedRefreshNetworkFailure = false;
+      return;
+    }
     if (request.failure()?.errorText === "net::ERR_ABORTED") {
       optionalResourceFailures.push(`${request.method()} ${failedUrl.pathname} aborted`);
       return;
@@ -67,6 +78,10 @@ for (const profile of [
       && criticalPaths.includes(candidateUrl.pathname)
       && candidate.status() >= 400
     ) {
+      if (expectedRefreshError && candidateUrl.pathname === "/api/matches" && candidate.status() === 503) {
+        expectedRefreshError = false;
+        return;
+      }
       criticalRequestFailures.push(`${candidate.request().method()} ${candidateUrl.pathname} HTTP ${candidate.status()}`);
     }
   });
@@ -106,6 +121,14 @@ for (const profile of [
   let outageFixtureRequests = 0;
   await page.route("**/api/matches", async (route) => {
     if (route.request().method() !== "GET") return route.continue();
+    if (outageFixtureRequests === 2) {
+      outageFixtureRequests += 1;
+      return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+    }
+    if (outageFixtureRequests === 3) {
+      outageFixtureRequests += 1;
+      return route.abort("failed");
+    }
     const response = await route.fetch();
     const body = await response.json();
     outageFixtureRequests += 1;
@@ -153,6 +176,26 @@ for (const profile of [
   await page.getByRole("heading", { name: "没有找到符合条件的比赛" }).waitFor({ state: "visible" });
   const retryRecoveredStateVisible = await page.getByText("Browser verification retry recovered").isVisible();
   const retryRequestCount = outageFixtureRequests;
+  expectedRefreshError = true;
+  expected503ConsoleErrors += 1;
+  const failedRefreshResponsePromise = page.waitForResponse(
+    (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
+    { timeout: 120_000 },
+  );
+  await page.locator(".refresh-button").click();
+  const failedRefreshResponse = await failedRefreshResponsePromise;
+  await page.getByText("暂时无法重新获取赛程，请稍后重试。").waitFor({ state: "visible" });
+  const refreshFailureHandled = failedRefreshResponse.status() === 503
+    && await page.getByText("暂时无法重新获取赛程，请稍后重试。").isVisible();
+  expectedRefreshNetworkFailure = true;
+  const failedNetworkRequestPromise = page.waitForEvent("requestfailed", {
+    predicate: (request) => request.url().includes("/api/matches"),
+    timeout: 120_000,
+  });
+  await page.locator(".refresh-button").click();
+  await failedNetworkRequestPromise;
+  await page.getByText("暂时无法重新获取赛程，请检查网络后重试。").waitFor({ state: "visible" });
+  const refreshNetworkFailureHandled = await page.getByText("暂时无法重新获取赛程，请检查网络后重试。").isVisible();
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -230,6 +273,9 @@ for (const profile of [
     retryRequestCount,
     retryResponseStatus: retryResponse.status(),
     retryMode: retryBody.mode,
+    refreshFailureHandled,
+    failedRefreshStatus: failedRefreshResponse.status(),
+    refreshNetworkFailureHandled,
     refreshedApiDeployment: apiBody.deployment,
     apiBodyReadFallback,
     healthStatus: healthResult.status,
@@ -285,6 +331,10 @@ for (const result of results) {
     || result.retryResponseStatus !== 200 || result.retryMode !== "live") {
     failures.push(`${prefix}: unavailable retry did not consume a recovered schedule response`);
   }
+  if (!result.refreshFailureHandled || result.failedRefreshStatus !== 503) {
+    failures.push(`${prefix}: refresh HTTP failure was not handled with user feedback`);
+  }
+  if (!result.refreshNetworkFailureHandled) failures.push(`${prefix}: network refresh failure was not handled with user feedback`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
   if (result.versionStatus !== 200) failures.push(`${prefix}: version HTTP ${result.versionStatus}`);
