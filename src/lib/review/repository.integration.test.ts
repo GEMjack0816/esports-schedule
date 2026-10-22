@@ -10,6 +10,7 @@ import {
 import type { PublicSubmissionPolicy, SubmissionControlWindowKind } from "./submission-protection";
 import type { PublishedMatchWrite } from "./types";
 import type { LegacySubmissionImportRecord } from "./types";
+import { createSubmissionFingerprint } from "@/lib/submissions";
 import {
   preserveLastSuccessfulPublicMatches,
   synchronizePublishedManualMatchesSnapshot,
@@ -235,6 +236,63 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       where actor_id = ${actorId} and action = 'legacy_submissions.imported'
     `;
     expect(audit?.after_json).toEqual(counts);
+  });
+
+  it("bounds lock waits while importing a legacy row that conflicts with an uncommitted insert", async () => {
+    const record = legacyRecord(`lock-timeout-${randomUUID()}`);
+    const fingerprint = createSubmissionFingerprint(record.input);
+    const blocker = postgres(testUrl!, { max: 1, prepare: false });
+    let rowInserted!: () => void;
+    let releaseBlocker!: () => void;
+    let insertFailed!: (error: unknown) => void;
+    const inserted = new Promise<void>((resolve, reject) => {
+      rowInserted = resolve;
+      insertFailed = reject;
+    });
+    const release = new Promise<void>((resolve) => { releaseBlocker = resolve; });
+    const blockerTransaction = blocker.begin(async (tx) => {
+      try {
+        await tx`insert into match_submissions (
+          id, game, league, team_a, team_b, scheduled_at, best_of, source_url,
+          notes, status, fingerprint, submitted_at, updated_at
+        ) values (
+          ${record.id}::uuid, ${record.input.game}, ${record.input.league},
+          ${record.input.teamA}, ${record.input.teamB}, ${record.input.scheduledAt}::timestamptz,
+          ${record.input.bestOf}, ${record.input.sourceUrl}, ${record.input.notes},
+          'pending', ${fingerprint}, ${record.submittedAt}::timestamptz,
+          ${record.submittedAt}::timestamptz
+        )`;
+        rowInserted();
+      } catch (error) {
+        insertFailed(error);
+        throw error;
+      }
+      await release;
+    });
+    // Attach a handler immediately; the test awaits this transaction after releasing it.
+    void blockerTransaction.catch(() => undefined);
+
+    try {
+      await inserted;
+      const importAttempt = repository.importLegacySubmissions("lock-timeout-test", [record], 1, 0)
+        .then(() => ({ kind: "resolved" as const }), (error: unknown) => ({ kind: "rejected" as const, error }));
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      const outcome = await Promise.race([
+        importAttempt,
+        new Promise<{ kind: "deadline" }>((resolve) => {
+          deadlineTimer = setTimeout(() => resolve({ kind: "deadline" }), 6_500);
+        }),
+      ]);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      expect(outcome.kind).toBe("rejected");
+      if (outcome.kind === "rejected") {
+        expect(outcome.error).toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+      }
+    } finally {
+      releaseBlocker();
+      await blockerTransaction.catch(() => undefined);
+      await blocker.end();
+    }
   });
 
   it("makes repeated legacy import attempts idempotent by preserving row ids and unique fingerprints", async () => {

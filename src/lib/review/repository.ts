@@ -56,6 +56,10 @@ type CreateOptions = {
   submittedAt?: Date;
 };
 
+// Match the application's bounded database budget for transactional review work.
+const LEGACY_IMPORT_STATEMENT_TIMEOUT_MS = 30_000;
+const LEGACY_IMPORT_LOCK_TIMEOUT_MS = 5_000;
+
 function submissionValues(input: MatchSubmissionInput, updatedAt = new Date()) {
   return {
     game: input.game,
@@ -360,6 +364,14 @@ export class DrizzleReviewRepository {
   ): Promise<LegacyImportCounts> {
     try {
       return await getDatabase().transaction(async (tx) => {
+        // Legacy imports are admin-triggered but may contain many cached rows.
+        // Bound query execution and lock waits so a blocked batch cannot occupy
+        // a serverless function indefinitely.
+        await tx.execute(sql`select
+          set_config('statement_timeout', ${`${LEGACY_IMPORT_STATEMENT_TIMEOUT_MS}ms`}, true),
+          set_config('lock_timeout', ${`${LEGACY_IMPORT_LOCK_TIMEOUT_MS}ms`}, true)
+        `);
+
         const counts: LegacyImportCounts = { scanned, imported: 0, duplicate: 0, invalid };
         for (const record of records) {
           const rows = await tx
