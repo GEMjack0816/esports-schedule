@@ -56,16 +56,22 @@ export function validateSyncResponse(payload, httpStatus) {
   if (!isCanonicalUtcTimestamp(payload.lastSuccessfulSyncAt)) {
     return { ok: false, message: "sync did not report a canonical UTC lastSuccessfulSyncAt" };
   }
+  if (!Array.isArray(payload.errors)) {
+    return { ok: false, message: "sync did not report a valid error summary" };
+  }
   if (payload.status !== "success" && payload.status !== "partial") {
     return { ok: false, message: `sync reported logical status ${String(payload.status)}` };
   }
-  if ((payload.status === "success" && payload.gamesFailed !== 0)
-    || (payload.status === "partial" && payload.gamesFailed === 0)) {
+  if ((payload.status === "success" && (payload.gamesFailed !== 0 || payload.errors.length !== 0))
+    || (payload.status === "partial" && payload.errors.length === 0)) {
     return { ok: false, message: "sync status does not match game outcome counts" };
   }
+  const diagnosticSummary = payload.errors.length > 0
+    ? `, ${payload.errors.length} sync diagnostic(s)`
+    : "";
   return {
     ok: true,
-    message: `${payload.status}: ${payload.gamesSucceeded} games updated, ${payload.gamesFailed} failed`,
+    message: `${payload.status}: ${payload.gamesSucceeded} games updated, ${payload.gamesFailed} failed${diagnosticSummary}`,
   };
 }
 
