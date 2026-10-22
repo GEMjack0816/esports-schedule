@@ -101,8 +101,10 @@ for (const profile of [
   }
   await statusSelect.selectOption("all");
   const todayRangeButton = rangeFilterGroup.getByRole("button", { name: /^今日/ });
-  await todayRangeButton.click();
+  await todayRangeButton.focus();
+  await page.keyboard.press("Space");
   const todayRangePressed = await todayRangeButton.getAttribute("aria-pressed");
+  const allRangePressedAfterKeyboardToggle = await allRangeButton.getAttribute("aria-pressed");
 
   const apiResponsePromise = page.waitForResponse(
     (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
@@ -191,7 +193,10 @@ for (const profile of [
     gameFilterCounts,
     statusFilterCounts,
     rangeFilterGroupExposed,
-    rangeButtonsExposePressedState: allRangePressed === "true" && todayRangePressed === "true",
+    rangeButtonsExposePressedState:
+      allRangePressed === "true"
+      && todayRangePressed === "true"
+      && allRangePressedAfterKeyboardToggle === "false",
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
