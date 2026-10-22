@@ -22,6 +22,9 @@ describe("isMatchInScheduleRange", () => {
     expect(isMatchInScheduleRange("running", "unscheduled", "tomorrow", today, tomorrow, sevenDaysOut)).toBe(false);
     expect(isMatchInScheduleRange("running", "unscheduled", "seven", today, tomorrow, sevenDaysOut)).toBe(false);
     expect(isMatchInScheduleRange("running", "unscheduled", "history", today, tomorrow, sevenDaysOut)).toBe(false);
+    expect(isMatchInScheduleRange("running", "2026-10-21", "history", today, tomorrow, sevenDaysOut)).toBe(false);
+    expect(isMatchInScheduleRange("running", today, "seven", today, tomorrow, sevenDaysOut)).toBe(false);
+    expect(isMatchInScheduleRange("running", tomorrow, "tomorrow", today, tomorrow, sevenDaysOut)).toBe(false);
   });
 
   it("preserves calendar range semantics for scheduled and finished fixtures", () => {

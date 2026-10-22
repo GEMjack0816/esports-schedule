@@ -12,7 +12,8 @@ export function isMatchInScheduleRange(
   sevenDaysOut: string,
 ): boolean {
   if (range === "all") return true;
-  if (range === "today") return dateKey === today || status === "running";
+  if (status === "running") return range === "today";
+  if (range === "today") return dateKey === today;
   if (range === "tomorrow") return dateKey === tomorrow;
   if (range === "seven") return dateKey >= today && dateKey <= sevenDaysOut;
   return dateKey < today;
