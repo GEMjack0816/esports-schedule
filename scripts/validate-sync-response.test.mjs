@@ -107,6 +107,8 @@ describe("sync workflow response validation", () => {
   it("rejects impossible game counts and statuses that contradict the counts", () => {
     const invalidPayloads = [
       { ...success, gamesAttempted: 4, gamesSucceeded: 5, gamesFailed: -1 },
+      { ...success, gamesAttempted: 4, gamesSucceeded: 4, gamesFailed: 0, snapshotsPersisted: 4 },
+      { ...success, status: "partial", gamesAttempted: 6, gamesSucceeded: 5, gamesFailed: 1 },
       { ...success, gamesFailed: -1, gamesAttempted: 4 },
       { ...success, status: "success", gamesSucceeded: 4, gamesFailed: 1 },
       { ...success, status: "partial", gamesSucceeded: 5, gamesFailed: 0 },

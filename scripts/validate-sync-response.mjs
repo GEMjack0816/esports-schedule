@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
+// Keep aligned with pandaGameKeys in src/lib/schedule/types.ts; this workflow must cover all games.
+const EXPECTED_SYNC_GAME_COUNT = 5;
+
 function isCanonicalUtcTimestamp(value) {
   if (typeof value !== "string") return false;
   const parsed = new Date(value);
@@ -31,8 +34,8 @@ export function validateSyncResponse(payload, httpStatus) {
   if (!Number.isSafeInteger(payload.generation) || payload.generation < 1) {
     return { ok: false, message: "sync did not report a valid fencing generation" };
   }
-  if (!Number.isInteger(payload.gamesAttempted) || payload.gamesAttempted < 1) {
-    return { ok: false, message: "sync did not report attempted games" };
+  if (payload.gamesAttempted !== EXPECTED_SYNC_GAME_COUNT) {
+    return { ok: false, message: "sync did not attempt the complete five-game catalog" };
   }
   if (!Number.isInteger(payload.gamesSucceeded)
     || payload.gamesSucceeded < 1
