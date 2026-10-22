@@ -87,13 +87,15 @@ describe("schedule freshness monitor validation", () => {
       resolve(process.cwd(), ".github/workflows/monitor-schedule-freshness.yml"),
       "utf8",
     );
-    const references = [...workflow.matchAll(/^\\s*uses:\\s*([^\\s#]+)/gm)]
-      .map(([, reference]) => reference);
+    const references = workflow
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("uses:"))
+      .map((line) => line.slice("uses:".length).trim().split(" #", 1)[0]);
 
     expect(references).toEqual([
       "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
     ]);
     expect(workflow).toContain("persist-credentials: false");
   });
-
 });
