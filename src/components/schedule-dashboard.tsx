@@ -504,7 +504,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
             {loading && <div className="results-meta" role="status">{payloadMatchesFilters ? "正在更新筛选结果…" : "正在更新筛选结果，列表暂为上一组结果…"}</div>}
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
               <section className="date-group" key={key}>
-                <div className="date-divider"><span>{formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
+                <div className="date-divider"><span>{key === "live" ? "正在进行" : formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
                 {matches.map((match) => <MatchCard match={match} timeZone={timeZone} key={match.id} />)}
               </section>
             )) : (

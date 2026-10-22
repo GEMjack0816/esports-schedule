@@ -262,8 +262,41 @@ for (const profile of [
   let paginationRestartWorked = false;
   let refreshRestoredPagination = false;
   let failedFilterRetainedResultsSafely = false;
+  let injectMissingTimeLiveFixture = true;
   await page.route("**/api/matches/page?*", async (route) => {
     const url = new URL(route.request().url());
+    if (injectMissingTimeLiveFixture
+      && url.searchParams.get("range") === "today"
+      && url.searchParams.get("status") === "running"
+      && !url.searchParams.has("cursor")) {
+      const response = await route.fetch();
+      if (!response.ok()) return route.fulfill({ response });
+      const body = await response.json();
+      body.matches = [...body.matches, {
+        id: "browser-verification-live-without-time",
+        provider: "manual",
+        providerMatchId: "browser-verification-live-without-time",
+        game: "lol",
+        tournament: null,
+        league: "Browser verification fixture",
+        stage: null,
+        homeTeam: { name: "Codex live fixture", acronym: "CLF", logo: "/team-placeholder.svg" },
+        awayTeam: { name: "Verification opponent", acronym: "VO", logo: "/team-placeholder.svg" },
+        homeScore: null,
+        awayScore: null,
+        bestOf: null,
+        status: "running",
+        startTimeUtc: null,
+        streams: [],
+        lastUpdatedAt: new Date().toISOString(),
+      }];
+      body.page.total += 1;
+      body.rangeCounts.today += 1;
+      body.rangeCounts.all += 1;
+      body.liveCount += 1;
+      injectMissingTimeLiveFixture = false;
+      return route.fulfill({ response, body: JSON.stringify(body) });
+    }
     if (failNextCs2Filter && url.searchParams.get("game") === "cs2") {
       failNextCs2Filter = false;
       expectedFilterFailureResponse = true;
@@ -364,6 +397,12 @@ for (const profile of [
     };
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
   });
+  await selectFilterAndWait(page.locator(".filter-panel select").nth(2), "status", "running");
+  const liveFixtureVisible = await page.locator(".date-group").first().locator(".match-card")
+    .filter({ hasText: "Codex live fixture" }).count() === 1;
+  const liveGroupHeading = await page.locator(".date-group").first().locator(".date-divider span").innerText();
+  const liveGroupHeadingExplicit = liveGroupHeading === "正在进行";
+  await selectFilterAndWait(page.locator(".filter-panel select").nth(2), "status", "all");
   await page.getByRole("tab", { name: /全部收录/ }).click();
   await page.waitForFunction(() => document.querySelector(".match-list")?.getAttribute("aria-busy") === "false");
   await page.getByText("Old Snapshot Team", { exact: true }).waitFor();
@@ -494,6 +533,8 @@ for (const profile of [
     paginationRestartWorked,
     refreshRestoredPagination,
     failedFilterRetainedResultsSafely,
+    liveFixtureVisible,
+    liveGroupHeadingExplicit,
     errors,
     screenshot,
   });
@@ -532,6 +573,8 @@ for (const result of results) {
   if (!result.paginationRestartWorked) failures.push(`${prefix}: stale pagination did not restart from the latest result set`);
   if (!result.refreshRestoredPagination) failures.push(`${prefix}: refresh during pagination left Load More unavailable`);
   if (!result.failedFilterRetainedResultsSafely) failures.push(`${prefix}: failed filter exposed a stale pagination cursor or ambiguous previous results`);
+  if (!result.liveFixtureVisible) failures.push(`${prefix}: undated running match was not visible in Today`);
+  if (!result.liveGroupHeadingExplicit) failures.push(`${prefix}: running match group was not labeled as in progress`);
   failures.push(...result.errors.map((error) => `${prefix}: ${error}`));
   failures.push(...result.criticalRequestFailures.map((error) => `${prefix}: ${error}`));
   failures.push(...result.resultAnnouncementFailures.map((error) => `${prefix}: ${error}`));

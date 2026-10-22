@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { EsportsMatch } from "./types";
 import { groupScheduleMatches } from "./client-grouping";
 
-function match(id: string, startTimeUtc: string | null): EsportsMatch {
+function match(id: string, startTimeUtc: string | null, status: EsportsMatch["status"] = "scheduled"): EsportsMatch {
   return {
     id,
     provider: "pandascore",
@@ -16,7 +16,7 @@ function match(id: string, startTimeUtc: string | null): EsportsMatch {
     homeScore: null,
     awayScore: null,
     bestOf: 3,
-    status: "scheduled",
+    status,
     startTimeUtc,
     streams: [],
     lastUpdatedAt: "2026-03-08T00:00:00.000Z",
@@ -47,5 +47,30 @@ describe("client schedule grouping", () => {
     ], "UTC", "history");
 
     expect(groups.map(([key]) => key)).toEqual(["2026-03-09", "2026-03-07", "unscheduled"]);
+  });
+
+  it("groups running matches first even when their scheduled date is old or missing", () => {
+    const groups = groupScheduleMatches([
+      match("scheduled-today", "2026-03-08T12:00:00.000Z"),
+      match("live-undated", null, "running"),
+      match("live-yesterday", "2026-03-07T12:00:00.000Z", "running"),
+      match("unscheduled", null),
+    ], "UTC", "today");
+
+    expect(groups.map(([key, items]) => [key, items.map((item) => item.id)])).toEqual([
+      ["live", ["live-undated", "live-yesterday"]],
+      ["2026-03-08", ["scheduled-today"]],
+      ["unscheduled", ["unscheduled"]],
+    ]);
+  });
+
+  it("keeps a live group first while preserving newest-first history order", () => {
+    const groups = groupScheduleMatches([
+      match("older", "2026-03-07T12:00:00.000Z"),
+      match("live", "2026-03-06T12:00:00.000Z", "running"),
+      match("newer", "2026-03-09T12:00:00.000Z"),
+    ], "UTC", "history");
+
+    expect(groups.map(([key]) => key)).toEqual(["live", "2026-03-09", "2026-03-07"]);
   });
 });
