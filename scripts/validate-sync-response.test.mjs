@@ -15,6 +15,7 @@ const success = {
   gamesFailed: 0,
   snapshotsPersisted: 5,
   lastSuccessfulSyncAt: "2026-08-30T00:00:00.000Z",
+  errors: [],
 };
 
 describe("sync workflow response validation", () => {
@@ -82,7 +83,19 @@ describe("sync workflow response validation", () => {
       gamesSucceeded: 4,
       gamesFailed: 1,
       snapshotsPersisted: 4,
+      errors: [{ game: "lol", code: "PROVIDER_HTTP_503", httpStatus: 503 }],
     }, 200).ok).toBe(true);
+  });
+
+  it("accepts a partial cache-write diagnostic when every durable game snapshot succeeded", () => {
+    expect(validateSyncResponse({
+      ...success,
+      status: "partial",
+      errors: [{ game: "lol", code: "CACHE_WRITE", httpStatus: null }],
+    }, 200)).toEqual({
+      ok: true,
+      message: "partial: 5 games updated, 0 failed, 1 sync diagnostic(s)",
+    });
   });
 
   it("rejects success or partial responses without a valid fencing generation", () => {
@@ -110,6 +123,9 @@ describe("sync workflow response validation", () => {
       { ...success, gamesAttempted: 4, gamesSucceeded: 4, gamesFailed: 0, snapshotsPersisted: 4 },
       { ...success, status: "partial", gamesAttempted: 6, gamesSucceeded: 5, gamesFailed: 1 },
       { ...success, gamesFailed: -1, gamesAttempted: 4 },
+      { ...success, status: "success", gamesSucceeded: 4, gamesFailed: 1 },
+      { ...success, status: "partial", gamesSucceeded: 5, gamesFailed: 0, errors: [] },
+      { ...success, status: "success", errors: [{ game: "lol", code: "CACHE_WRITE" }] },
       { ...success, status: "success", gamesSucceeded: 4, gamesFailed: 1 },
       { ...success, status: "partial", gamesSucceeded: 5, gamesFailed: 0 },
     ];
