@@ -35,7 +35,7 @@ for (const profile of [
   const criticalRequestFailures = [];
   const optionalResourceFailures = [];
   const browserResourceWarnings = [];
-  const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage"];
+  const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage", "/robots.txt", "/sitemap.xml"];
   const auditUrl = new URL(baseUrl);
   auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
   page.on("console", (message) => {
@@ -77,6 +77,18 @@ for (const profile of [
   const homepageCommit = await page.locator("#esports-schedule-version").getAttribute("data-git-commit");
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
+  const crawlerMetadata = await page.evaluate(async () => {
+    const [robotsResponse, sitemapResponse] = await Promise.all([
+      fetch("/robots.txt", { cache: "no-store" }),
+      fetch("/sitemap.xml", { cache: "no-store" }),
+    ]);
+    return {
+      robotsStatus: robotsResponse.status,
+      robotsText: await robotsResponse.text(),
+      sitemapStatus: sitemapResponse.status,
+      sitemapText: await sitemapResponse.text(),
+    };
+  });
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -167,6 +179,7 @@ for (const profile of [
   results.push({
     profile: profile.name,
     status: response?.status() ?? null,
+    crawlerMetadata,
     horizontalOverflow: layout.scrollWidth > layout.clientWidth,
     scrollWidth: layout.scrollWidth,
     clientWidth: layout.clientWidth,
@@ -226,6 +239,18 @@ const failures = [];
 for (const result of results) {
   const prefix = result.profile;
   if (result.status !== 200) failures.push(`${prefix}: homepage HTTP ${result.status}`);
+  if (result.crawlerMetadata.robotsStatus !== 200 || result.crawlerMetadata.sitemapStatus !== 200) {
+    failures.push(`${prefix}: crawler metadata routes should return HTTP 200`);
+  }
+  if (!result.crawlerMetadata.robotsText.includes("Disallow: /admin")
+    || !result.crawlerMetadata.robotsText.includes("Disallow: /api")
+    || !result.crawlerMetadata.robotsText.includes("/sitemap.xml")) {
+    failures.push(`${prefix}: robots.txt must exclude private routes and advertise the sitemap`);
+  }
+  if (!result.crawlerMetadata.sitemapText.includes("esports-schedule-two.vercel.app/")
+    || !result.crawlerMetadata.sitemapText.includes("/submit-match")) {
+    failures.push(`${prefix}: sitemap must include the canonical public routes`);
+  }
   if (result.horizontalOverflow) failures.push(`${prefix}: horizontal overflow`);
   if (!result.hasCoverageSummary) failures.push(`${prefix}: missing coverage summary`);
   if (!result.hasSubmitLink) failures.push(`${prefix}: missing submission link`);
