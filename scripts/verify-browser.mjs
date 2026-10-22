@@ -102,6 +102,18 @@ for (const profile of [
     (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
     { timeout: 120_000 },
   );
+  // Client-only outage fixture: validate first-snapshot empty-state copy without mutating the backend.
+  await page.route("**/api/matches", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    body.matches = [];
+    body.mode = "unavailable";
+    body.demoMode = false;
+    body.stale = true;
+    body.warning = "Browser verification outage fixture";
+    await route.fulfill({ response, body: JSON.stringify(body) });
+  });
   await page.locator(".refresh-button").click();
   const apiResponse = await apiResponsePromise;
   let apiBody;
@@ -116,6 +128,10 @@ for (const profile of [
       return response.json();
     });
   }
+  await page.getByRole("heading", { name: "赛程数据暂不可用" }).waitFor({ state: "visible" });
+  const unavailableEmptyStateVisible = await page.getByRole("heading", { name: "赛程数据暂不可用" }).count() === 1;
+  const unavailableRetryVisible = await page.getByRole("button", { name: "重新检查赛程" }).isVisible();
+  const unavailableOffersFilterReset = await page.getByRole("button", { name: "清除筛选" }).isVisible();
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -189,6 +205,9 @@ for (const profile of [
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
     refreshedApiStale: apiBody.stale,
+    unavailableEmptyStateVisible,
+    unavailableRetryVisible,
+    unavailableOffersFilterReset,
     refreshedApiDeployment: apiBody.deployment,
     apiBodyReadFallback,
     healthStatus: healthResult.status,
@@ -237,6 +256,9 @@ for (const result of results) {
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
+  if (!result.unavailableEmptyStateVisible || !result.unavailableRetryVisible || result.unavailableOffersFilterReset) {
+    failures.push(`${prefix}: unavailable empty state is misleading or lacks retry action`);
+  }
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
   if (result.versionStatus !== 200) failures.push(`${prefix}: version HTTP ${result.versionStatus}`);
