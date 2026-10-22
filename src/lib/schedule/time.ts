@@ -1,5 +1,3 @@
-const DAY_MS = 86_400_000;
-
 export function dateKeyInTimeZone(value: string | Date, timeZone: string): string {
   const date = typeof value === "string" ? new Date(value) : value;
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -13,5 +11,14 @@ export function dateKeyInTimeZone(value: string | Date, timeZone: string): strin
 }
 
 export function addDaysKey(days: number, timeZone: string, now = Date.now()): string {
-  return dateKeyInTimeZone(new Date(now + days * DAY_MS), timeZone);
+  const [year, month, day] = dateKeyInTimeZone(new Date(now), timeZone).split("-").map(Number);
+  const target = new Date(0);
+  target.setUTCFullYear(year, month - 1, day + days);
+  target.setUTCHours(0, 0, 0, 0);
+  return dateKeyInTimeZone(target, "UTC");
+}
+
+export function dateInputBound(value: string | null | undefined, timeZone: string): string | undefined {
+  if (!value || !Number.isFinite(Date.parse(value))) return undefined;
+  return dateKeyInTimeZone(value, timeZone);
 }
