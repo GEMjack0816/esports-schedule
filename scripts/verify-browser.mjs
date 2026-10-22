@@ -268,4 +268,3 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log("Browser verification passed.");
-
