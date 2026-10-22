@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   cached: vi.fn(),
   cacheStatus: vi.fn(),
   snapshot: vi.fn(),
+  claim: vi.fn(),
   delivered: vi.fn(),
   failed: vi.fn(),
   counts: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock("@/db", () => ({ isDatabaseConfigured: () => true }));
 vi.mock("./repository", () => ({ getReviewRepository: () => ({
   getManualMatchCacheStatus: mocks.cacheStatus,
   readManualMatchCacheSnapshot: mocks.snapshot,
+  claimManualMatchCacheDeliveryRetry: mocks.claim,
   markManualMatchCacheDelivered: mocks.delivered,
   markManualMatchCacheDeliveryFailed: mocks.failed,
   getSubmissionCounts: mocks.counts,
@@ -45,6 +47,7 @@ describe("manual match cache authoritative version checks", () => {
     mocks.cached.mockResolvedValue({ matches: [], fetchedAt: new Date().toISOString(), revision: 4 });
     mocks.cacheStatus.mockResolvedValue({ revision: 5, pendingRevisions: 0 });
     mocks.snapshot.mockResolvedValue({ rows: [], revision: 5, pendingRevisions: 1 });
+    mocks.claim.mockResolvedValue("claimed");
     mocks.get.mockResolvedValue({ revision: 4 });
     mocks.set.mockResolvedValue(undefined);
     mocks.delivered.mockResolvedValue(undefined);
@@ -126,6 +129,53 @@ describe("manual match cache authoritative version checks", () => {
     expect(duringOutage.state.cacheRevision).toBe(5);
   });
 
+  it("rebuilds a missing Runtime Cache snapshot even when its fence and Next Data Cache are current", async () => {
+    const runtimeCache = new Map<string, unknown>([
+      ["published-manual-matches-fence-v1", { revision: 5 }],
+    ]);
+    mocks.get.mockImplementation(async (key: string) => runtimeCache.get(key) ?? null);
+    mocks.set.mockImplementation(async (key: string, value: unknown) => {
+      runtimeCache.set(key, value);
+    });
+    mocks.cacheStatus.mockResolvedValue({ revision: 5, pendingRevisions: 0, retryAfter: null });
+    mocks.cached.mockResolvedValue({ matches: [], fetchedAt: "current Next Data Cache", revision: 5 });
+    mocks.snapshot.mockImplementation(async (writeFence?: (revision: number) => Promise<void>) => {
+      await writeFence?.(5);
+      return { rows: [], revision: 5, pendingRevisions: 0, fenceWritten: true };
+    });
+
+    const result = await getPublishedDatabaseMatches();
+
+    expect(result.state.cacheRevision).toBe(5);
+    expect(runtimeCache.get("published-manual-matches-v1:5")).toMatchObject({ revision: 5 });
+    expect(mocks.snapshot).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry a pending Runtime Cache delivery before its database-backed retry time", async () => {
+    mocks.get.mockImplementation(async (key: string) => key === "published-manual-matches-fence-v1"
+      ? { revision: 5 }
+      : null);
+    mocks.cacheStatus.mockResolvedValue({
+      revision: 5,
+      pendingRevisions: 1,
+      retryAfter: new Date(Date.now() + 60_000),
+    });
+    mocks.cached.mockResolvedValue({
+      matches: [],
+      fetchedAt: "current Next Data Cache",
+      revision: 5,
+      pendingCacheRevisions: 1,
+    });
+
+    const result = await getPublishedDatabaseMatches();
+
+    expect(result.state.status).toBe("connected");
+    expect(result.state.pendingCacheRevisions).toBe(1);
+    expect(mocks.cached).toHaveBeenCalledOnce();
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+    expect(mocks.claim).not.toHaveBeenCalled();
+  });
+
   it("does not acknowledge snapshot delivery when a missing fence cannot be restored", async () => {
     mocks.cacheStatus.mockResolvedValue({ revision: 5, pendingRevisions: 1 });
     mocks.snapshot.mockResolvedValue({
@@ -159,10 +209,20 @@ describe("manual match cache authoritative version checks", () => {
 
   it("reuses the payload when its revision matches PostgreSQL", async () => {
     mocks.cacheStatus.mockResolvedValue({ revision: 4, pendingRevisions: 0 });
+    const currentSnapshot = {
+      matches: [],
+      fetchedAt: "current Runtime Cache",
+      revision: 4,
+      pendingCacheRevisions: 0,
+    };
+    mocks.get.mockImplementation(async (key: string) => key === "published-manual-matches-fence-v1"
+      ? { revision: 4 }
+      : currentSnapshot);
     const result = await getPublishedDatabaseMatches();
     expect(result.state.cacheRevision).toBe(4);
     expect(mocks.cacheStatus).toHaveBeenCalledOnce();
     expect(mocks.snapshot).not.toHaveBeenCalled();
+    expect(result.matches).toEqual([]);
   });
 
   it("keeps a newer Runtime Cache revision after PostgreSQL restores an older revision with pending delivery", async () => {

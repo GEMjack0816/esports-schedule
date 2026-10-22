@@ -175,6 +175,7 @@ export const manualMatchCacheOutbox = pgTable("manual_match_cache_outbox", {
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   deliveredAt: timestamp("delivered_at", { withTimezone: true, mode: "date" }),
   attemptCount: integer("attempt_count").notNull().default(0),
+  retryAfter: timestamp("retry_after", { withTimezone: true, mode: "date" }),
   lastErrorCode: text("last_error_code"),
 }, (table) => [
   check("manual_match_cache_outbox_attempt_count_check", sql`${table.attemptCount} >= 0`),

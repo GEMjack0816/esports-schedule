@@ -59,6 +59,12 @@ type CreateOptions = {
 };
 
 export type ManualMatchCacheFence = (revision: number) => Promise<void>;
+export type ManualMatchCacheStatus = {
+  revision: number;
+  pendingRevisions: number;
+  retryAfter: Date | null;
+};
+export type ManualMatchDeliveryClaim = "claimed" | "deferred" | "none";
 const noCacheFence: ManualMatchCacheFence = async () => {};
 export const MANUAL_MATCH_MUTATION_LOCK = 7_214_603_119;
 const MANUAL_MATCH_LOCK_TIMEOUT_MS = 2_500;
@@ -721,7 +727,7 @@ export class DrizzleReviewRepository {
     try {
       await getDatabase().update(manualMatchCacheOutbox).set({
         deliveredAt: new Date(),
-        attemptCount: sql`${manualMatchCacheOutbox.attemptCount} + 1`,
+        retryAfter: null,
         lastErrorCode: null,
       }).where(and(
         isNull(manualMatchCacheOutbox.deliveredAt),
@@ -748,7 +754,6 @@ export class DrizzleReviewRepository {
   async markManualMatchCacheDeliveryFailed(revision: number): Promise<void> {
     try {
       await getDatabase().update(manualMatchCacheOutbox).set({
-        attemptCount: sql`${manualMatchCacheOutbox.attemptCount} + 1`,
         lastErrorCode: "RUNTIME_CACHE_WRITE_FAILED",
       }).where(and(
         isNull(manualMatchCacheOutbox.deliveredAt),
@@ -756,6 +761,44 @@ export class DrizzleReviewRepository {
       ));
     } catch {
       console.warn("[review-db] manual match cache delivery failure could not be recorded");
+    }
+  }
+
+  async claimManualMatchCacheDeliveryRetry(): Promise<ManualMatchDeliveryClaim> {
+    try {
+      // Claim only the newest pending complete-snapshot intent. The update is
+      // atomic across serverless instances; a lease/backoff is persisted before
+      // the Runtime Cache call so concurrent public reads cannot all retry it.
+      const [row] = await getDatabase().execute(sql`
+        with candidate as (
+          select revision, attempt_count
+          from manual_match_cache_outbox
+          where delivered_at is null
+          order by revision desc
+          limit 1
+          for update skip locked
+        )
+        update manual_match_cache_outbox as outbox
+        set attempt_count = candidate.attempt_count + 1,
+            retry_after = now() + make_interval(
+              secs => least(300, power(2, least(candidate.attempt_count, 8))::integer)
+            )
+        from candidate
+        where outbox.revision = candidate.revision
+          and outbox.delivered_at is null
+          and (outbox.retry_after is null or outbox.retry_after <= now())
+        returning outbox.revision
+      `);
+      if (row) return "claimed";
+
+      const [pending] = await getDatabase().select({ revision: manualMatchCacheOutbox.revision })
+        .from(manualMatchCacheOutbox)
+        .where(isNull(manualMatchCacheOutbox.deliveredAt))
+        .orderBy(desc(manualMatchCacheOutbox.revision))
+        .limit(1);
+      return pending ? "deferred" : "none";
+    } catch (error) {
+      translateDatabaseError(error);
     }
   }
 
@@ -767,7 +810,7 @@ export class DrizzleReviewRepository {
     }
   }
 
-  async getManualMatchCacheStatus(): Promise<{ revision: number; pendingRevisions: number }> {
+  async getManualMatchCacheStatus(): Promise<ManualMatchCacheStatus> {
     try {
       const db = getDatabase();
       // This status is checked on every public schedule read. Keep it to one
@@ -778,11 +821,14 @@ export class DrizzleReviewRepository {
           (select case when is_called then last_value else 0 end
             from public.manual_match_cache_revision_seq) as revision,
           (select count(*) from public.manual_match_cache_outbox
-            where delivered_at is null) as pending_revisions
+            where delivered_at is null) as pending_revisions,
+          (select retry_after from public.manual_match_cache_outbox
+            where delivered_at is null order by revision desc limit 1) as retry_after
       `);
       return {
         revision: Number(row?.revision ?? 0),
         pendingRevisions: Number(row?.pending_revisions ?? 0),
+        retryAfter: row?.retry_after ? new Date(row.retry_after as string | Date) : null,
       };
     } catch (error) {
       translateDatabaseError(error);

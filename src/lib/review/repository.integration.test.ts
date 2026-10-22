@@ -699,6 +699,24 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect(status.pendingRevisions).toBe(1);
   });
 
+  it("atomically leases a pending Runtime Cache retry to only one concurrent reader", async () => {
+    const input = submission("cache-retry-lease-" + randomUUID());
+    const fence = vi.fn<(revision: number) => Promise<void>>().mockResolvedValue(undefined);
+    const match = await repository.createManualMatch(published(input), "admin-a", fence);
+    manualMatchIds.push(match.id);
+
+    const claims = await Promise.all(Array.from({ length: 12 }, () =>
+      repository.claimManualMatchCacheDeliveryRetry()));
+
+    expect(claims.filter((claim) => claim === "claimed")).toHaveLength(1);
+    expect(claims.filter((claim) => claim === "deferred")).toHaveLength(11);
+    const status = await repository.getManualMatchCacheStatus();
+    expect(status.pendingRevisions).toBe(1);
+    expect(status.retryAfter).toBeInstanceOf(Date);
+    expect(status.retryAfter!.getTime()).toBeGreaterThan(Date.now());
+    expect(await repository.claimManualMatchCacheDeliveryRetry()).toBe("deferred");
+  });
+
   it("limits delivered outbox cleanup to one bounded batch and preserves newer pending rows", async () => {
     const historicalEventIds = Array.from({ length: 150 }, () => randomUUID());
     const currentEventId = randomUUID();

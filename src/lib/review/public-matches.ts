@@ -7,7 +7,7 @@ import type { EsportsMatch } from "@/lib/schedule/types";
 import { uniqueAndSort } from "@/lib/schedule/utils";
 import { isDatabaseConfigured } from "@/db";
 import { getReviewRepository } from "./repository";
-import type { ManualMatchCacheFence } from "./repository";
+import type { ManualMatchCacheFence, ManualMatchCacheStatus } from "./repository";
 import type { SubmissionCounts } from "./types";
 
 const CACHE_KEY = "published-manual-matches-v1";
@@ -22,6 +22,10 @@ export type CachedPublicMatches = {
   revision: number;
   pendingCacheRevisions?: number;
 };
+
+function deliveryRetryIsDue(status: ManualMatchCacheStatus): boolean {
+  return !status.retryAfter || status.retryAfter.getTime() <= Date.now();
+}
 
 export type DatabasePublicState = {
   configured: boolean;
@@ -176,13 +180,29 @@ async function writeRuntimeFallback(value: CachedPublicMatches): Promise<void> {
   });
 }
 
+type ManualMatchSnapshotRepository = Pick<ReturnType<typeof getReviewRepository>,
+  "readManualMatchCacheSnapshot" | "markManualMatchCacheDelivered" | "markManualMatchCacheDeliveryFailed"
+> & Partial<Pick<ReturnType<typeof getReviewRepository>, "claimManualMatchCacheDeliveryRetry">>;
+
 export async function synchronizePublishedManualMatchesSnapshot(
-  repository: Pick<ReturnType<typeof getReviewRepository>,
-    "readManualMatchCacheSnapshot" | "markManualMatchCacheDelivered" | "markManualMatchCacheDeliveryFailed"
-  > = getReviewRepository(),
+  repository: ManualMatchSnapshotRepository = getReviewRepository(),
   write: (value: CachedPublicMatches) => Promise<void> = writeRuntimeFallback,
   writeFence: ManualMatchCacheFence = async () => undefined,
 ): Promise<CachedPublicMatches & { cacheSynchronized: boolean }> {
+  const claim = await repository.claimManualMatchCacheDeliveryRetry?.() ?? "none";
+  if (claim === "deferred") {
+    // Another request owns the retry lease or the persisted backoff has not
+    // elapsed. Return an authoritative DB snapshot without repeating the
+    // Runtime Cache write.
+    const snapshot = await repository.readManualMatchCacheSnapshot();
+    return {
+      matches: uniqueAndSort(snapshot.rows.map(publishedRowToMatch)),
+      fetchedAt: new Date().toISOString(),
+      revision: snapshot.revision,
+      pendingCacheRevisions: snapshot.pendingRevisions,
+      cacheSynchronized: false,
+    };
+  }
   // Fence restoration must happen while the repository still holds its
   // serialized mutation lock; writing it after this read returns can regress a
   // newer mutation's fence.
@@ -248,13 +268,15 @@ export async function preserveLastSuccessfulPublicMatches(
 
 const readPublishedMatchesCached = unstable_cache(
   async (): Promise<CachedPublicMatches> => {
-    return synchronizePublishedManualMatchesSnapshot(
-      getReviewRepository(),
-      writeRuntimeFallback,
-      writeManualMatchCacheFence,
-    );
+    const snapshot = await getReviewRepository().readManualMatchCacheSnapshot();
+    return {
+      matches: uniqueAndSort(snapshot.rows.map(publishedRowToMatch)),
+      fetchedAt: new Date().toISOString(),
+      revision: snapshot.revision,
+      pendingCacheRevisions: snapshot.pendingRevisions,
+    };
   },
-  ["published-manual-matches-v1"],
+  ["published-manual-matches-v2"],
   {
     tags: ["published-manual-matches"],
     revalidate: 60,
@@ -263,7 +285,8 @@ const readPublishedMatchesCached = unstable_cache(
 
 async function readCurrentPublishedMatches(
   observeRevision: (revision: number) => void,
-  initialCacheStatus?: { revision: number; pendingRevisions: number },
+  initialCacheStatus: ManualMatchCacheStatus,
+  runtimeSnapshotMissing: boolean,
 ): Promise<
   CachedPublicMatches & { pendingCacheRevisions: number }
 > {
@@ -273,14 +296,31 @@ async function readCurrentPublishedMatches(
   // A matching Next Data Cache entry is not proof that the Runtime Cache
   // delivery succeeded: the outbox may still contain a pending revision.
   const repository = getReviewRepository();
-  const cacheStatus = initialCacheStatus ?? await repository.getManualMatchCacheStatus();
+  const cacheStatus = initialCacheStatus;
   const revision = cacheStatus.revision;
   observeRevision(revision);
   const cached = await readPublishedMatchesCached();
   const fence = await readCurrentFence();
-  if (cacheStatus.pendingRevisions > 0
+  if (cacheStatus.pendingRevisions > 0 && !deliveryRetryIsDue(cacheStatus)) {
+    if (cached.revision === revision && cached.revision >= publicState.cacheRevision) {
+      return { ...cached, pendingCacheRevisions: cacheStatus.pendingRevisions };
+    }
+    // The Next Data Cache entry is stale/missing while retry is deferred. Read
+    // the authoritative rows for this response, but leave the single retry
+    // attempt to the process that owns the database-backed lease.
+    const snapshot = await repository.readManualMatchCacheSnapshot();
+    observeRevision(snapshot.revision);
+    return {
+      matches: uniqueAndSort(snapshot.rows.map(publishedRowToMatch)),
+      fetchedAt: new Date().toISOString(),
+      revision: snapshot.revision,
+      pendingCacheRevisions: snapshot.pendingRevisions,
+    };
+  }
+  if ((cacheStatus.pendingRevisions > 0 && deliveryRetryIsDue(cacheStatus))
     || cached.revision !== revision
-    || shouldRefreshCachedSnapshot(cached.revision, fence)) {
+    || shouldRefreshCachedSnapshot(cached.revision, fence)
+    || (runtimeSnapshotMissing && cacheStatus.pendingRevisions === 0)) {
     const refreshed = await synchronizePublishedManualMatchesSnapshot(
       repository,
       writeRuntimeFallback,
@@ -330,7 +370,7 @@ export async function getPublishedDatabaseMatches(): Promise<{
 
   const repository = getReviewRepository();
   const runtimeSnapshot = await readLastSuccess(publicState.cacheRevision);
-  let cacheStatus: { revision: number; pendingRevisions: number };
+  let cacheStatus: ManualMatchCacheStatus;
   try {
     // Runtime Cache is isolated per region. Read PostgreSQL's monotonic
     // watermark before trusting a regional snapshot, so a mutation in another
@@ -383,7 +423,9 @@ export async function getPublishedDatabaseMatches(): Promise<{
 
   if (runtimeSnapshot
     && runtimeSnapshot.revision >= cacheStatus.revision
-    && (cacheStatus.pendingRevisions === 0 || runtimeSnapshot.revision > cacheStatus.revision)) {
+    && (cacheStatus.pendingRevisions === 0
+      || runtimeSnapshot.revision > cacheStatus.revision
+      || !deliveryRetryIsDue(cacheStatus))) {
     // A restored or lagging database watermark must not make a newer valid
     // regional snapshot lose to an older database snapshot, even while an
     // outbox row remains pending. Keep the process high-water mark as well so
@@ -412,7 +454,7 @@ export async function getPublishedDatabaseMatches(): Promise<{
       }
       observedRevision = Math.max(observedRevision, revision);
       observeManualMatchRevision(revision);
-    }, cacheStatus)),
+    }, cacheStatus, !runtimeSnapshot)),
     // If the full read fails after the committed watermark was observed,
     // never let a regressed regional fence authorize an older snapshot.
     () => readLastSuccess(observedRevision),

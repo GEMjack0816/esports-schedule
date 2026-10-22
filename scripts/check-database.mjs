@@ -63,6 +63,13 @@ try {
       and table_name = 'published_manual_matches'
       and column_name = 'operation_key'
   `;
+  const [cacheRetryColumn] = await client`
+    select data_type, is_nullable
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'manual_match_cache_outbox'
+      and column_name = 'retry_after'
+  `;
   if (missing.length > 0) {
     console.error(`FAIL missing required tables: ${missing.join(", ")}`);
     process.exitCode = 1;
@@ -75,8 +82,12 @@ try {
   } else if (!manualCacheSequence || operationKey?.data_type !== "uuid") {
     console.error("FAIL manual match cache revision or idempotency schema is missing.");
     process.exitCode = 1;
+  } else if (cacheRetryColumn?.data_type !== "timestamp with time zone"
+    || cacheRetryColumn?.is_nullable !== "YES") {
+    console.error("FAIL manual_match_cache_outbox.retry_after is missing or invalid.");
+    process.exitCode = 1;
   } else {
-    console.log(`PASS database reachable; ${requiredTables.length} required tables and sync fencing schema found.`);
+    console.log(`PASS database reachable; ${requiredTables.length} required tables, sync fencing, and cache retry schema found.`);
   }
 } catch {
   console.error("FAIL database connection or schema check failed.");
