@@ -5,7 +5,7 @@ const syncSecret = "test-only-secret-never-logged";
 const healthUrl = "https://esports-schedule-two.vercel.app/api/health/data-coverage";
 const pandaGames = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"];
 
-function healthResponse(overrides = {}, status = 200) {
+function healthResponse(overrides = {}, status = 200, cacheControl = "no-store, no-cache, must-revalidate") {
   return new Response(JSON.stringify({
     demoMode: false,
     mode: "live",
@@ -19,7 +19,10 @@ function healthResponse(overrides = {}, status = 200) {
     ...overrides,
   }), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      ...(cacheControl === null ? {} : { "cache-control": cacheControl }),
+    },
   });
 }
 
@@ -422,6 +425,26 @@ describe("schedule sync Worker client", () => {
     expect(requests[0].options.headers).not.toHaveProperty("authorization");
     expect(log.log).toHaveBeenCalledTimes(1);
     expect(log.log.mock.calls[0][0]).toContain('"outcome":"skipped_fresh"');
+  });
+
+  it.each([
+    ["missing", null],
+    ["cacheable", "public, max-age=300"],
+    ["contradictory", "no-store, s-maxage=300"],
+  ])("runs sync rather than trusting a %s health response", async (_description, cacheControl) => {
+    const requests = [];
+    const worker = createScheduleSyncWorker({
+      nowImpl: () => Date.parse("2026-10-18T10:00:00.000Z"),
+      fetchImpl: async (url) => {
+        requests.push(url);
+        return url === healthUrl ? healthResponse({}, 200, cacheControl) : response();
+      },
+      log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+    await expect(worker.scheduled({ scheduledTime: 1, noRetry: vi.fn() }, { CRON_SECRET: syncSecret }))
+      .resolves.toMatchObject({ outcome: "success", generation: 12 });
+    expect(requests).toEqual([healthUrl, "https://esports-schedule-two.vercel.app/api/cron/sync"]);
   });
 
   it("runs the authenticated sync when the health probe reports stale data", async () => {

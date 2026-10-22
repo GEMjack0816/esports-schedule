@@ -171,6 +171,17 @@ function isCompletedSyncFailure(payload) {
     && Array.isArray(payload.errors);
 }
 
+function hasStrictNoStorePolicy(cacheControl) {
+  if (typeof cacheControl !== "string") return false;
+  const directives = cacheControl.split(",").map((directive) => directive.trim().toLowerCase());
+  if (!directives.includes("no-store")) return false;
+
+  // Fail closed on contradictory freshness/cacheability directives. A stale
+  // cached health response must never suppress a scheduled sync.
+  return !directives.some((directive) =>
+    /^(?:public|max-age|s-maxage|stale-while-revalidate|stale-if-error)(?:\s*=|\s*$)/.test(directive));
+}
+
 const EXPLICIT_TIMEZONE_TIMESTAMP =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -237,7 +248,7 @@ async function getFreshScheduleAge({ fetchImpl, nowImpl, timeoutSignalImpl }) {
       redirect: "error",
       signal: timeoutSignalImpl(HEALTH_REQUEST_TIMEOUT_MS),
     });
-    if (!response.ok) {
+    if (!response.ok || !hasStrictNoStorePolicy(response.headers.get("cache-control"))) {
       cancelResponseBodyWithoutBlocking(response);
       return null;
     }
