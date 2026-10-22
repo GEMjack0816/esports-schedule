@@ -10,7 +10,7 @@ export function validateSyncResponse(payload, httpStatus) {
       return { ok: false, message: "sync busy response unexpectedly reported a generation" };
     }
     return httpStatus === 409
-      ? { ok: true, message: "sync busy: another refresh owns the lock" }
+      ? { ok: false, message: "sync skipped: another refresh owns the lock" }
       : { ok: false, message: `sync busy response used unexpected HTTP ${httpStatus}` };
   }
   if (httpStatus < 200 || httpStatus >= 300) {
