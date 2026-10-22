@@ -82,13 +82,17 @@ for (const profile of [
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
 
   const gameFilterCounts = {};
+  const filterResultAnnouncements = {};
   const statusFilterCounts = {};
   await page.getByRole("tab", { name: /全部收录/ }).click();
   const gameSelect = page.locator(".filter-panel select").nth(0);
   for (const game of ["lol", "valorant", "honor-of-kings", "cs2", "dota2"]) {
     await gameSelect.selectOption(game);
     gameFilterCounts[game] = await page.locator(".match-card").count();
+    filterResultAnnouncements[game] = await page.locator(".filter-result-status").innerText();
   }
+  const matchListLiveSetting = await page.locator(".match-list").getAttribute("aria-live");
+  const filterResultStatusRole = await page.locator(".filter-result-status").getAttribute("role");
   await gameSelect.selectOption("all");
   const statusSelect = page.locator(".filter-panel select").nth(2);
   for (const status of ["running", "finished", "scheduled"]) {
@@ -184,6 +188,9 @@ for (const profile of [
     gameOptions,
     gameFilterCounts,
     statusFilterCounts,
+    matchListLiveSetting,
+    filterResultStatusRole,
+    filterResultAnnouncements,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -235,6 +242,13 @@ for (const result of results) {
   if (result.forbiddenHtmlPhrases.length > 0) failures.push(`${prefix}: demo text in HTML`);
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
+  if (result.matchListLiveSetting !== null) failures.push(`${prefix}: the entire match list is still a live region`);
+  if (result.filterResultStatusRole !== "status") failures.push(`${prefix}: filter result count is not announced as a status`);
+  for (const [game, count] of Object.entries(result.gameFilterCounts)) {
+    if (result.filterResultAnnouncements[game] !== `${count} 场比赛符合当前筛选条件。`) {
+      failures.push(`${prefix}: filter result announcement does not match the ${game} result count`);
+    }
+  }
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
