@@ -56,6 +56,25 @@ describe("schedule freshness monitor validation", () => {
       .toBe("sourceFetchedAt is more than 60s in the future");
   });
 
+  it.each([
+    "2026-02-30T11:55:00.000Z",
+    "2026-10-22T11:55:00.000",
+    "2026-10-22T11:55:00.000+14:30",
+  ])("rejects malformed or ambiguous ISO timestamps: %s", (timestamp) => {
+    expect(validateScheduleFreshness(health({ sourceFetchedAt: timestamp }), 200, now))
+      .toMatchObject({ ok: false, message: "sourceFetchedAt is missing or invalid" });
+  });
+
+  it("rejects a timestamp even one millisecond beyond the freshness limit", () => {
+    const justExpired = new Date(now - DEFAULT_MAX_AGE_SECONDS * 1_000 - 1).toISOString();
+    expect(validateScheduleFreshness(health({ sourceFetchedAt: justExpired }), 200, now).ok).toBe(false);
+  });
+
+  it("accepts a timestamp exactly at the freshness limit", () => {
+    const boundary = new Date(now - DEFAULT_MAX_AGE_SECONDS * 1_000).toISOString();
+    expect(validateScheduleFreshness(health({ sourceFetchedAt: boundary }), 200, now).ok).toBe(true);
+  });
+
   it("checks each game's source and success timestamps rather than the aggregate maximum", () => {
     const games = health().games;
     const oldTime = new Date(now - 16 * 60_000).toISOString();

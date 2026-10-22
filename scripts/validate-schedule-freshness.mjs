@@ -4,19 +4,31 @@ import { pathToFileURL } from "node:url";
 export const PANDA_GAMES = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"];
 export const DEFAULT_MAX_AGE_SECONDS = 15 * 60;
 
-function validTimestamp(value) {
-  return typeof value === "string" && Number.isFinite(Date.parse(value));
-}
+const EXPLICIT_TIMEZONE_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:0\d|1[0-4]):[0-5]\d)$/;
 
-function getAgeSeconds(value, now) {
-  return Math.floor((now - Date.parse(value)) / 1_000);
+function validTimestamp(value) {
+  if (typeof value !== "string" || !EXPLICIT_TIMEZONE_TIMESTAMP.test(value)) return false;
+
+  const datePart = value.slice(0, 10);
+  const calendarDate = new Date(`${datePart}T00:00:00.000Z`);
+  if (!Number.isFinite(calendarDate.getTime()) || calendarDate.toISOString().slice(0, 10) !== datePart) {
+    return false;
+  }
+
+  const offset = value.match(/[+-](\d{2}):(\d{2})$/);
+  if (offset && Number(offset[1]) === 14 && Number(offset[2]) !== 0) return false;
+  return Number.isFinite(Date.parse(value));
 }
 
 function timestampAgeError(name, value, now, maxAgeSeconds) {
   if (!validTimestamp(value)) return `${name} is missing or invalid`;
-  const ageSeconds = getAgeSeconds(value, now);
-  if (ageSeconds < -60) return `${name} is more than 60s in the future`;
-  if (ageSeconds > maxAgeSeconds) return `${name} is ${ageSeconds}s old (maximum ${maxAgeSeconds}s)`;
+  const ageMilliseconds = now - Date.parse(value);
+  const ageSeconds = Math.ceil(ageMilliseconds / 1_000);
+  if (ageMilliseconds < -60_000) return `${name} is more than 60s in the future`;
+  if (ageMilliseconds > maxAgeSeconds * 1_000) {
+    return `${name} is ${ageSeconds}s old (maximum ${maxAgeSeconds}s)`;
+  }
   return null;
 }
 
