@@ -41,6 +41,14 @@ describe("groupMatchesByDate", () => {
       .toEqual(["2026-10-20", "2026-10-18", "unscheduled"]);
   });
 
+  it("groups malformed timestamps as unscheduled instead of throwing", () => {
+    const invalid = match("invalid", "not-a-valid-date");
+
+    expect(groupMatchesByDate([invalid], "Asia/Shanghai")).toEqual([
+      ["unscheduled", [invalid]],
+    ]);
+  });
+
   it("does not repeatedly iterate and copy a large same-day group", () => {
     // Exercise a same-day batch at the size of a large production snapshot.
     const matches = Array.from({ length: 3_300 }, (_, index) =>

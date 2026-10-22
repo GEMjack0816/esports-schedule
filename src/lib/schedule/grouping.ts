@@ -11,9 +11,10 @@ export function groupMatchesByDate(
   const groups = new Map<string, EsportsMatch[]>();
 
   for (const match of matches) {
-    const key = match.startTimeUtc
-      ? dateKeyInTimeZone(match.startTimeUtc, timeZone)
-      : "unscheduled";
+    const timestamp = match.startTimeUtc ? Date.parse(match.startTimeUtc) : Number.NaN;
+    const key = Number.isNaN(timestamp)
+      ? "unscheduled"
+      : dateKeyInTimeZone(new Date(timestamp), timeZone);
     const group = groups.get(key);
     if (group) group.push(match);
     else groups.set(key, [match]);
