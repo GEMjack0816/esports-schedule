@@ -35,7 +35,7 @@ for (const profile of [
   const criticalRequestFailures = [];
   const optionalResourceFailures = [];
   const browserResourceWarnings = [];
-  const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage"];
+  const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage", "/robots.txt", "/sitemap.xml"];
   const auditUrl = new URL(baseUrl);
   auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
   page.on("console", (message) => {
@@ -75,8 +75,26 @@ for (const profile of [
   const bodyText = await page.locator("body").innerText();
   const html = await page.content();
   const homepageCommit = await page.locator("#esports-schedule-version").getAttribute("data-git-commit");
+  const homepageMetadata = await page.evaluate(() => ({
+    title: document.title,
+    canonical: document.querySelector('link[rel="canonical"]')?.getAttribute("href") ?? null,
+    openGraphTitle: document.querySelector('meta[property="og:title"]')?.getAttribute("content") ?? null,
+    openGraphUrl: document.querySelector('meta[property="og:url"]')?.getAttribute("content") ?? null,
+  }));
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
+  const crawlerMetadata = await page.evaluate(async () => {
+    const [robotsResponse, sitemapResponse] = await Promise.all([
+      fetch("/robots.txt", { cache: "no-store" }),
+      fetch("/sitemap.xml", { cache: "no-store" }),
+    ]);
+    return {
+      robotsStatus: robotsResponse.status,
+      robotsText: await robotsResponse.text(),
+      sitemapStatus: sitemapResponse.status,
+      sitemapText: await sitemapResponse.text(),
+    };
+  });
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -154,6 +172,12 @@ for (const profile of [
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
+  const submissionMetadata = await page.evaluate(() => ({
+    title: document.title,
+    canonical: document.querySelector('link[rel="canonical"]')?.getAttribute("href") ?? null,
+    openGraphTitle: document.querySelector('meta[property="og:title"]')?.getAttribute("content") ?? null,
+    openGraphUrl: document.querySelector('meta[property="og:url"]')?.getAttribute("content") ?? null,
+  }));
   const adminResponse = await page.goto(`${baseUrl}/admin`, {
     waitUntil: "networkidle",
     timeout: 120_000,
@@ -167,6 +191,7 @@ for (const profile of [
   results.push({
     profile: profile.name,
     status: response?.status() ?? null,
+    crawlerMetadata,
     horizontalOverflow: layout.scrollWidth > layout.clientWidth,
     scrollWidth: layout.scrollWidth,
     clientWidth: layout.clientWidth,
@@ -208,6 +233,8 @@ for (const profile of [
     optionalResourceFailureSamples: optionalResourceFailures.slice(0, 5),
     browserResourceWarningCount: browserResourceWarnings.length,
     submitFields,
+    homepageMetadata,
+    submissionMetadata,
     anonymousAdminStatus: adminResponse?.status() ?? null,
     anonymousAdminAtLogin: new URL(page.url()).pathname === "/admin/login",
     anonymousAdminContainsPrivateData:
@@ -226,6 +253,20 @@ const failures = [];
 for (const result of results) {
   const prefix = result.profile;
   if (result.status !== 200) failures.push(`${prefix}: homepage HTTP ${result.status}`);
+  if (result.crawlerMetadata.robotsStatus !== 200 || result.crawlerMetadata.sitemapStatus !== 200) {
+    failures.push(`${prefix}: crawler metadata routes should return HTTP 200`);
+  }
+  const blocksAllCrawlers = result.crawlerMetadata.robotsText.includes("Disallow: /");
+  const allowsOnlyPublicRoutes = result.crawlerMetadata.robotsText.includes("Disallow: /admin")
+    && result.crawlerMetadata.robotsText.includes("Disallow: /api")
+    && result.crawlerMetadata.robotsText.includes("/sitemap.xml");
+  if (!blocksAllCrawlers && !allowsOnlyPublicRoutes) {
+    failures.push(`${prefix}: robots.txt must either block non-production crawlers or exclude private routes and advertise the sitemap`);
+  }
+  if (!result.crawlerMetadata.sitemapText.includes("esports-schedule-two.vercel.app/")
+    || !result.crawlerMetadata.sitemapText.includes("/submit-match")) {
+    failures.push(`${prefix}: sitemap must include the canonical public routes`);
+  }
   if (result.horizontalOverflow) failures.push(`${prefix}: horizontal overflow`);
   if (!result.hasCoverageSummary) failures.push(`${prefix}: missing coverage summary`);
   if (!result.hasSubmitLink) failures.push(`${prefix}: missing submission link`);
@@ -243,6 +284,18 @@ for (const result of results) {
   if (!result.versionMatchesHomepage) failures.push(`${prefix}: homepage/version commit mismatch`);
   if (!result.healthVersionMatches) failures.push(`${prefix}: health/version commit mismatch`);
   if (result.submitFields < 6) failures.push(`${prefix}: submission form incomplete`);
+  if (!result.homepageMetadata.title
+    || result.homepageMetadata.canonical !== "https://esports-schedule-two.vercel.app"
+    || !result.homepageMetadata.openGraphTitle
+    || result.homepageMetadata.openGraphUrl !== result.homepageMetadata.canonical) {
+    failures.push(`${prefix}: homepage canonical and Open Graph metadata should match the public homepage`);
+  }
+  if (!result.submissionMetadata.title.includes("提交遗漏比赛")
+    || !result.submissionMetadata.canonical?.endsWith("/submit-match")
+    || !result.submissionMetadata.openGraphTitle?.includes("提交遗漏比赛")
+    || !result.submissionMetadata.openGraphUrl?.endsWith("/submit-match")) {
+    failures.push(`${prefix}: submission page canonical and Open Graph metadata should match the page`);
+  }
   if (result.anonymousAdminStatus !== 200) failures.push(`${prefix}: admin login HTTP ${result.anonymousAdminStatus}`);
   if (!result.anonymousAdminAtLogin) failures.push(`${prefix}: anonymous admin page was not redirected to login`);
   if (result.anonymousAdminContainsPrivateData) failures.push(`${prefix}: anonymous admin page exposed private data`);
