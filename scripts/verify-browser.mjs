@@ -75,6 +75,7 @@ for (const profile of [
   const bodyText = await page.locator("body").innerText();
   const html = await page.content();
   const homepageCommit = await page.locator("#esports-schedule-version").getAttribute("data-git-commit");
+  const upcomingHeroText = await page.locator(".hero-stats .stat-card").nth(1).innerText();
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -172,6 +173,8 @@ for (const profile of [
     clientWidth: layout.clientWidth,
     overflowElements: layout.offenders,
     hasCoverageSummary: bodyText.includes("当前收录范围"),
+    hasExplicitUpcomingWindow: upcomingHeroText.includes("UP NEXT · 24H")
+      && upcomingHeroText.includes("24 小时内开赛"),
     hasSubmitLink: bodyText.includes("提交遗漏比赛"),
     hasProfessionalCoverageCopy: bodyText.includes("聚合五大电竞项目的主要职业及半职业比赛"),
     newPageMarkers: ["源快照时间", "提交遗漏比赛", "PandaScore 聚合数据"]
@@ -228,6 +231,7 @@ for (const result of results) {
   if (result.status !== 200) failures.push(`${prefix}: homepage HTTP ${result.status}`);
   if (result.horizontalOverflow) failures.push(`${prefix}: horizontal overflow`);
   if (!result.hasCoverageSummary) failures.push(`${prefix}: missing coverage summary`);
+  if (!result.hasExplicitUpcomingWindow) failures.push(`${prefix}: upcoming hero window is not explicit`);
   if (!result.hasSubmitLink) failures.push(`${prefix}: missing submission link`);
   if (!result.hasProfessionalCoverageCopy) failures.push(`${prefix}: missing coverage copy`);
   if (result.newPageMarkers.length !== 3) failures.push(`${prefix}: missing new page markers`);

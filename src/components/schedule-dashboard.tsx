@@ -2,8 +2,9 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
+import { getScheduleHeroStats } from "@/lib/schedule/hero-stats";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -151,6 +152,7 @@ function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string 
 
 export function ScheduleDashboard({ initialData }: { initialData: SchedulePayload }) {
   const [payload, setPayload] = useState(initialData);
+  const [clockNow, setClockNow] = useState<number | null>(null);
   const [range, setRange] = useState<RangeKey>("today");
   const [game, setGame] = useState<GameKey | "all">("all");
   const [league, setLeague] = useState("all");
@@ -164,6 +166,13 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     getServerTimeZone,
   );
   const theme = useSyncExternalStore(subscribeToTheme, getBrowserTheme, getServerTheme);
+
+  useEffect(() => {
+    const updateClock = () => setClockNow(Date.now());
+    updateClock();
+    const timer = window.setInterval(updateClock, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const today = addDaysKey(0, timeZone);
   const tomorrow = addDaysKey(1, timeZone);
@@ -225,8 +234,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     });
   }, [filtered, range, timeZone]);
 
-  const liveCount = payload.matches.filter((match) => match.status === "running").length;
-  const upcomingCount = payload.matches.filter((match) => match.status === "scheduled").length;
+  const { liveCount, upcomingCount } = getScheduleHeroStats(payload.matches, clockNow ?? 0);
 
   async function refreshSchedule() {
     setRefreshing(true);
@@ -280,7 +288,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           </div>
           <div className="hero-stats">
             <div className="stat-card stat-card-live"><span className="stat-label"><i /> LIVE NOW</span><strong>{String(liveCount).padStart(2, "0")}</strong><span>场比赛正在进行</span></div>
-            <div className="stat-card"><span className="stat-label">UP NEXT</span><strong>{String(upcomingCount).padStart(2, "0")}</strong><span>场比赛即将开赛</span></div>
+            <div className="stat-card"><span className="stat-label">UP NEXT · 24H</span><strong>{String(upcomingCount).padStart(2, "0")}</strong><span>场比赛将在 24 小时内开赛</span></div>
           </div>
         </section>
 
