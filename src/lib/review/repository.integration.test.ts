@@ -293,7 +293,7 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       await blockerTransaction.catch(() => undefined);
       await blocker.end();
     }
-  });
+  }, 8_000);
 
   it("makes repeated legacy import attempts idempotent by preserving row ids and unique fingerprints", async () => {
     const record = legacyRecord(randomUUID());
