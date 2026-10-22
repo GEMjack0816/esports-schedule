@@ -8,9 +8,12 @@ import * as schema from "./schema";
 // Bound SQL work well below the Vercel sync route's 5-minute execution limit.
 // Short lock waits let callers fail into the existing stale-snapshot fallback
 // instead of occupying a function while another transaction owns a row lock.
+// Do not set idle_in_transaction_session_timeout globally: manual schedule
+// mutations can await an external Runtime Cache fence while holding a DB
+// transaction. Killing that session first could release the serialization lock
+// while the uncancellable cache write is still able to complete out of order.
 const DATABASE_STATEMENT_TIMEOUT_MS = 30_000;
 const DATABASE_LOCK_TIMEOUT_MS = 5_000;
-const DATABASE_IDLE_TRANSACTION_TIMEOUT_MS = 30_000;
 
 let database: PostgresJsDatabase<typeof schema> | null = null;
 
@@ -30,7 +33,6 @@ export function getDatabase(): PostgresJsDatabase<typeof schema> {
     connection: {
       statement_timeout: DATABASE_STATEMENT_TIMEOUT_MS,
       lock_timeout: DATABASE_LOCK_TIMEOUT_MS,
-      idle_in_transaction_session_timeout: DATABASE_IDLE_TRANSACTION_TIMEOUT_MS,
     },
     prepare: false,
   });

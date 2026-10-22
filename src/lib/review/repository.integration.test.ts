@@ -44,7 +44,7 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     cleanup = postgres(testUrl!, { max: 1, prepare: false });
   });
 
-  it("applies bounded statement, row-lock, and idle-transaction timeouts", async () => {
+  it("bounds statement and row-lock waits without expiring external-effect transactions", async () => {
     const rows = await getDatabase().execute<{
       statement_timeout: string;
       lock_timeout: string;
@@ -59,8 +59,16 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect(rows[0]).toEqual({
       statement_timeout: "30s",
       lock_timeout: "5s",
-      idle_in_transaction_session_timeout: "30s",
+      idle_in_transaction_session_timeout: "0",
     });
+
+    const transactionRows = await getDatabase().transaction(async (tx) => {
+      // Model time spent awaiting a Runtime Cache fence or another external
+      // side effect between SQL statements while preserving transaction order.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return tx.execute<{ result: number }>(sql`select 1 as result`);
+    });
+    expect(transactionRows[0]?.result).toBe(1);
   });
 
   it("sanitizes the driver connection error after an idle transaction is terminated", async () => {
