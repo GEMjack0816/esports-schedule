@@ -196,6 +196,7 @@ for (const profile of [
   await failedNetworkRequestPromise;
   await page.getByText("暂时无法重新获取赛程，请检查网络后重试。").waitFor({ state: "visible" });
   const refreshNetworkFailureHandled = await page.getByText("暂时无法重新获取赛程，请检查网络后重试。").isVisible();
+  const recoveredSchedulePreservedAfterFailures = await page.getByText("Browser verification retry recovered").isVisible();
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -276,6 +277,7 @@ for (const profile of [
     refreshFailureHandled,
     failedRefreshStatus: failedRefreshResponse.status(),
     refreshNetworkFailureHandled,
+    recoveredSchedulePreservedAfterFailures,
     refreshedApiDeployment: apiBody.deployment,
     apiBodyReadFallback,
     healthStatus: healthResult.status,
@@ -335,6 +337,7 @@ for (const result of results) {
     failures.push(`${prefix}: refresh HTTP failure was not handled with user feedback`);
   }
   if (!result.refreshNetworkFailureHandled) failures.push(`${prefix}: network refresh failure was not handled with user feedback`);
+  if (!result.recoveredSchedulePreservedAfterFailures) failures.push(`${prefix}: refresh failure discarded the last displayed schedule`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
   if (result.versionStatus !== 200) failures.push(`${prefix}: version HTTP ${result.versionStatus}`);
