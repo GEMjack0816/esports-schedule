@@ -103,15 +103,24 @@ for (const profile of [
     { timeout: 120_000 },
   );
   // Client-only outage fixture: validate first-snapshot empty-state copy without mutating the backend.
+  let outageFixtureRequests = 0;
   await page.route("**/api/matches", async (route) => {
     if (route.request().method() !== "GET") return route.continue();
     const response = await route.fetch();
     const body = await response.json();
+    outageFixtureRequests += 1;
     body.matches = [];
-    body.mode = "unavailable";
     body.demoMode = false;
-    body.stale = true;
-    body.warning = "Browser verification outage fixture";
+    if (outageFixtureRequests === 1) {
+      body.mode = "unavailable";
+      body.stale = true;
+      body.warning = "Browser verification outage fixture";
+    } else {
+      // Deterministically model recovery after the retry without changing API or database state.
+      body.mode = "live";
+      body.stale = false;
+      body.warning = "Browser verification retry recovered";
+    }
     await route.fulfill({ response, body: JSON.stringify(body) });
   });
   await page.locator(".refresh-button").click();
@@ -132,6 +141,18 @@ for (const profile of [
   const unavailableEmptyStateVisible = await page.getByRole("heading", { name: "赛程数据暂不可用" }).count() === 1;
   const unavailableRetryVisible = await page.getByRole("button", { name: "重新检查赛程" }).isVisible();
   const unavailableOffersFilterReset = await page.getByRole("button", { name: "清除筛选" }).isVisible();
+  const screenshot = path.join(os.tmpdir(), `esports-schedule-${profile.name}.png`);
+  await page.screenshot({ path: screenshot, fullPage: true });
+  const retryResponsePromise = page.waitForResponse(
+    (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
+    { timeout: 120_000 },
+  );
+  await page.getByRole("button", { name: "重新检查赛程" }).click();
+  const retryResponse = await retryResponsePromise;
+  const retryBody = await retryResponse.json();
+  await page.getByRole("heading", { name: "没有找到符合条件的比赛" }).waitFor({ state: "visible" });
+  const retryRecoveredStateVisible = await page.getByText("Browser verification retry recovered").isVisible();
+  const retryRequestCount = outageFixtureRequests;
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -149,9 +170,6 @@ for (const profile of [
       .filter((element) => element.left < -1 || element.right > document.documentElement.clientWidth + 1)
       .slice(0, 12),
   }));
-  const screenshot = path.join(os.tmpdir(), `esports-schedule-${profile.name}.png`);
-  await page.screenshot({ path: screenshot, fullPage: true });
-
   let versionResult = { status: 0, body: {} };
   let healthResult = { status: 0, body: {} };
   try {
@@ -208,6 +226,10 @@ for (const profile of [
     unavailableEmptyStateVisible,
     unavailableRetryVisible,
     unavailableOffersFilterReset,
+    retryRecoveredStateVisible,
+    retryRequestCount,
+    retryResponseStatus: retryResponse.status(),
+    retryMode: retryBody.mode,
     refreshedApiDeployment: apiBody.deployment,
     apiBodyReadFallback,
     healthStatus: healthResult.status,
@@ -259,6 +281,10 @@ for (const result of results) {
   if (!result.unavailableEmptyStateVisible || !result.unavailableRetryVisible || result.unavailableOffersFilterReset) {
     failures.push(`${prefix}: unavailable empty state is misleading or lacks retry action`);
   }
+  if (!result.retryRecoveredStateVisible || result.retryRequestCount !== 2
+    || result.retryResponseStatus !== 200 || result.retryMode !== "live") {
+    failures.push(`${prefix}: unavailable retry did not consume a recovered schedule response`);
+  }
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
   if (result.versionStatus !== 200) failures.push(`${prefix}: version HTTP ${result.versionStatus}`);
@@ -278,3 +304,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log("Browser verification passed.");
+
