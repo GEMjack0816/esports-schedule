@@ -1,0 +1,360 @@
+import { appendFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+
+const HEALTH_URL =
+  "https://esports-schedule-two.vercel.app/api/health/data-coverage";
+const MAX_AGE_SECONDS = 15 * 60;
+const MAX_FUTURE_SKEW_SECONDS = 2 * 60;
+const MAX_RESPONSE_BYTES = 128 * 1024;
+const MAX_RESPONSE_CHUNKS = 1_024;
+const GAME_KEYS = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"];
+const MAX_REQUEST_ATTEMPTS = 3;
+const RETRY_DELAYS_MS = [500, 1_000];
+
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasStrictNoStorePolicy(cacheControl) {
+  if (typeof cacheControl !== "string") return false;
+  const directives = cacheControl
+    .split(",")
+    .map((directive) => directive.trim().toLowerCase());
+  if (!directives.includes("no-store")) return false;
+
+  // A contradictory freshness directive can still permit an intermediary to
+  // serve an old health result. Fail closed instead of treating no-store as
+  // sufficient when the same response advertises cacheability.
+  return !directives.some((directive) =>
+    /^(?:public|max-age|s-maxage|stale-while-revalidate|stale-if-error)(?:\s*=|\s*$)/.test(directive));
+}
+
+const EXPLICIT_TIMEZONE_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function getTimestampAgeSeconds(value, now) {
+  if (typeof value !== "string" || !EXPLICIT_TIMEZONE_TIMESTAMP.test(value)) {
+    return null;
+  }
+
+  const calendarDate = new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
+  if (
+    !Number.isFinite(calendarDate.getTime()) ||
+    calendarDate.toISOString().slice(0, 10) !== value.slice(0, 10)
+  ) {
+    return null;
+  }
+
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return null;
+  const skewSeconds = (timestamp - now.getTime()) / 1000;
+  if (skewSeconds > MAX_FUTURE_SKEW_SECONDS) return null;
+  return Math.max(0, (now.getTime() - timestamp) / 1000);
+}
+
+function addAgeProblem(problems, label, seconds) {
+  if (seconds === null) {
+    problems.push(
+      `${label} timestamp is missing, invalid, or too far in the future`,
+    );
+  } else if (seconds > MAX_AGE_SECONDS) {
+    problems.push(`${label} is older than ${MAX_AGE_SECONDS} seconds`);
+  }
+}
+
+function validAgeSeconds(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function safeTimestamp(value, now) {
+  const ageSeconds = getTimestampAgeSeconds(value, now);
+  return ageSeconds === null ? null : new Date(Date.parse(value)).toISOString();
+}
+
+/** Build a deliberately allowlisted, non-sensitive view for the Actions summary. */
+export function summarizeScheduleHealth(payload, now = new Date()) {
+  if (!isRecord(payload)) return null;
+  const games = isRecord(payload.games) ? payload.games : {};
+  return {
+    mode: payload.mode === "live" ? "live" : "not-live",
+    demoMode: payload.demoMode === false ? "false" : payload.demoMode === true ? "true" : "unknown",
+    stale: payload.stale === false ? "false" : payload.stale === true ? "true" : "unknown",
+    snapshotAgeSeconds: validAgeSeconds(payload.snapshotAgeSeconds),
+    sourceFetchedAt: safeTimestamp(payload.sourceFetchedAt, now),
+    lastSuccessfulSyncAt: safeTimestamp(payload.lastSuccessfulSyncAt, now),
+    games: GAME_KEYS.map((game) => {
+      const coverage = games[game];
+      if (!isRecord(coverage)) {
+        return {
+          game,
+          syncStatus: "missing",
+          snapshotAgeSeconds: null,
+          sourceFetchedAt: null,
+          lastSuccessfulSyncAt: null,
+        };
+      }
+      return {
+        game,
+        syncStatus: coverage.syncStatus === "normal"
+          ? "normal"
+          : coverage.syncStatus === "failed" ? "failed" : "unknown",
+        snapshotAgeSeconds: validAgeSeconds(coverage.snapshotAgeSeconds),
+        sourceFetchedAt: safeTimestamp(coverage.sourceFetchedAt, now),
+        lastSuccessfulSyncAt: safeTimestamp(coverage.lastSuccessfulSyncAt, now),
+      };
+    }),
+  };
+}
+
+function display(value) {
+  return value === null || value === undefined ? "n/a" : String(value);
+}
+
+export function formatFreshnessSummary(result, healthSummary = null) {
+  const lines = [
+    "## Schedule freshness",
+    `**Result:** ${result.ok ? "PASS" : "FAIL"}`,
+  ];
+
+  if (healthSummary) {
+    lines.push(
+      `**Aggregate:** mode=${healthSummary.mode}; demoMode=${healthSummary.demoMode}; stale=${healthSummary.stale}; snapshotAgeSeconds=${display(healthSummary.snapshotAgeSeconds)}`,
+      `**Aggregate timestamps (UTC):** sourceFetchedAt=${display(healthSummary.sourceFetchedAt)}; lastSuccessfulSyncAt=${display(healthSummary.lastSuccessfulSyncAt)}`,
+      "",
+      "| Game | Sync | Snapshot age (s) | Source fetched at (UTC) | Last successful sync (UTC) |",
+      "| --- | --- | ---: | --- | --- |",
+    );
+    for (const game of healthSummary.games) {
+      lines.push(
+        `| ${game.game} | ${game.syncStatus} | ${display(game.snapshotAgeSeconds)} | ${display(game.sourceFetchedAt)} | ${display(game.lastSuccessfulSyncAt)} |`,
+      );
+    }
+  } else {
+    lines.push("Health details are unavailable because the endpoint did not return a valid JSON payload.");
+  }
+
+  if (result.problems.length > 0) {
+    lines.push("", "### Findings", ...result.problems.map((problem) => `- ${problem}`));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export async function writeFreshnessSummary(markdown, summaryPath = process.env.GITHUB_STEP_SUMMARY) {
+  if (!summaryPath) return false;
+  await appendFile(summaryPath, markdown, { encoding: "utf8" });
+  return true;
+}
+
+export function inspectScheduleFreshness(payload, now = new Date()) {
+  const problems = [];
+  if (!isRecord(payload)) {
+    return { ok: false, problems: ["health response must be a JSON object"] };
+  }
+
+  if (payload.mode !== "live") problems.push("schedule mode is not live");
+  if (payload.demoMode !== false) problems.push("demo mode must be false");
+  if (payload.stale !== false) problems.push("schedule is marked stale");
+
+  if (
+    !Number.isSafeInteger(payload.snapshotAgeSeconds) ||
+    payload.snapshotAgeSeconds < 0
+  ) {
+    problems.push("snapshotAgeSeconds is missing or invalid");
+  } else if (payload.snapshotAgeSeconds > MAX_AGE_SECONDS) {
+    problems.push(`snapshotAgeSeconds exceeds ${MAX_AGE_SECONDS}`);
+  }
+  addAgeProblem(
+    problems,
+    "sourceFetchedAt",
+    getTimestampAgeSeconds(payload.sourceFetchedAt, now),
+  );
+  addAgeProblem(
+    problems,
+    "lastSuccessfulSyncAt",
+    getTimestampAgeSeconds(payload.lastSuccessfulSyncAt, now),
+  );
+
+  if (!isRecord(payload.games)) {
+    problems.push("per-game coverage is missing");
+  } else {
+    for (const game of GAME_KEYS) {
+      const coverage = payload.games[game];
+      if (!isRecord(coverage)) {
+        problems.push(`${game} coverage is missing`);
+        continue;
+      }
+      if (coverage.syncStatus !== "normal") {
+        problems.push(`${game} sync status is not normal`);
+      }
+      if (
+        !Number.isSafeInteger(coverage.snapshotAgeSeconds) ||
+        coverage.snapshotAgeSeconds < 0
+      ) {
+        problems.push(`${game} snapshotAgeSeconds is missing or invalid`);
+      } else if (coverage.snapshotAgeSeconds > MAX_AGE_SECONDS) {
+        problems.push(
+          `${game} snapshot is older than ${MAX_AGE_SECONDS} seconds`,
+        );
+      }
+      addAgeProblem(
+        problems,
+        `${game} sourceFetchedAt`,
+        getTimestampAgeSeconds(coverage.sourceFetchedAt, now),
+      );
+      addAgeProblem(
+        problems,
+        `${game} lastSuccessfulSyncAt`,
+        getTimestampAgeSeconds(coverage.lastSuccessfulSyncAt, now),
+      );
+    }
+  }
+
+  return { ok: problems.length === 0, problems };
+}
+
+async function readBodyWithLimit(response) {
+  if (!response.body) throw new Error("missing body");
+  const reader = response.body.getReader();
+  const chunks = [];
+  let bytes = 0;
+  let chunkCount = 0;
+
+  function cancelBestEffort() {
+    try {
+      // Do not await cancellation: a custom or broken stream source may never
+      // settle its cancel promise, which must not extend the monitor run.
+      void reader.cancel().catch(() => {});
+    } catch {
+      // Cancellation is only a resource-release hint; the bounded read fails
+      // closed even if the source rejects or throws while being cancelled.
+    }
+  }
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunkCount += 1;
+      if (chunkCount > MAX_RESPONSE_CHUNKS) {
+        cancelBestEffort();
+        throw new Error("too many body chunks");
+      }
+      bytes += value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES) {
+        cancelBestEffort();
+        throw new Error("body too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const all = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    all.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(all);
+}
+
+export async function checkScheduleHealth(
+  fetchImpl = fetch,
+  now = new Date(),
+  waitImpl = wait,
+  onHealthPayload = undefined,
+) {
+  let response;
+  for (let attempt = 0; attempt < MAX_REQUEST_ATTEMPTS; attempt += 1) {
+    try {
+      response = await fetchImpl(HEALTH_URL, {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+        redirect: "error",
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch {
+      if (attempt < RETRY_DELAYS_MS.length) {
+        await waitImpl(RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      return {
+        ok: false,
+        problems: ["health endpoint request failed or timed out"],
+      };
+    }
+
+    if (response.status < 500 || attempt === MAX_REQUEST_ATTEMPTS - 1) break;
+
+    // Release the failed response best-effort. Do not await cancellation:
+    // some response streams can leave that promise pending indefinitely.
+    try {
+      const cancellation = response.body?.cancel();
+      void cancellation?.catch(() => {});
+    } catch {
+      // Preserve bounded retry if the body source throws during cancellation.
+    }
+    await waitImpl(RETRY_DELAYS_MS[attempt]);
+  }
+
+  if (response.status !== 200) {
+    return {
+      ok: false,
+      problems: [`health endpoint returned HTTP ${response.status}`],
+    };
+  }
+  if (
+    !/^application\/json(?:\s*;|$)/i.test(
+      response.headers.get("content-type") ?? "",
+    )
+  ) {
+    return {
+      ok: false,
+      problems: ["health endpoint did not return application/json"],
+    };
+  }
+
+  if (!hasStrictNoStorePolicy(response.headers.get("cache-control"))) {
+    return {
+      ok: false,
+      problems: ["health endpoint response does not have a strict no-store cache policy"],
+    };
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(await readBodyWithLimit(response));
+  } catch {
+    return {
+      ok: false,
+      problems: ["health response was unreadable or exceeded the size limit"],
+    };
+  }
+  onHealthPayload?.(payload);
+  return inspectScheduleFreshness(payload, now);
+}
+
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  let healthSummary = null;
+  const result = await checkScheduleHealth(fetch, new Date(), wait, (payload) => {
+    healthSummary = summarizeScheduleHealth(payload);
+  });
+  const markdown = formatFreshnessSummary(result, healthSummary);
+  await writeFreshnessSummary(markdown);
+  if (!result.ok) {
+    console.error("Schedule freshness check FAILED:");
+    for (const problem of result.problems) console.error(`- ${problem}`);
+    console.log(markdown);
+    process.exitCode = 1;
+  } else {
+    console.log(markdown);
+  }
+}
+
