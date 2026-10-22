@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const workflow = readFileSync(new URL("../.github/workflows/sync-schedule.yml", import.meta.url), "utf8");
+const CHECKOUT_V7_0_1_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1";
 
 describe("production sync workflow security contract", () => {
   it("only runs on its schedule or explicit manual dispatch", () => {
@@ -22,7 +23,13 @@ describe("production sync workflow security contract", () => {
   });
 
   it("pins checkout to a full commit SHA and does not persist its token", () => {
-    expect(workflow).toMatch(/uses:\s*actions\/checkout@[0-9a-f]{40}\s+# v7\.0\.1/);
+    expect(workflow).toContain(`uses: actions/checkout@${CHECKOUT_V7_0_1_SHA} # v7.0.1`);
+
+    const actionReferences = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)/gm)].map(
+      (match) => match[1],
+    );
+    expect(actionReferences.length).toBeGreaterThan(0);
+    expect(actionReferences.every((reference) => /@[0-9a-f]{40}$/.test(reference))).toBe(true);
 
     const checkoutStep = workflow.match(
       /- name: Check out response validator([\s\S]*?)(?=\n      - name:|$)/,
