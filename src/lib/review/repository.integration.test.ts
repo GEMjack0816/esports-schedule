@@ -811,31 +811,4 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       await cleanup`select pg_advisory_unlock(${MANUAL_MATCH_MUTATION_LOCK})`;
     }
   });
-
-  it("releases the mutation lock when an awaited cache fence leaves its transaction idle", async () => {
-    const input = submission(`idle-fence-${randomUUID()}`);
-    let fenceStarted!: () => void;
-    const started = new Promise<void>((resolve) => { fenceStarted = resolve; });
-    // Keep this callback unresolved after PostgreSQL terminates its idle
-    // transaction. Resuming it would make postgres.js attempt a query on the
-    // already-closed connection, which is outside the behavior under test.
-    void repository.createManualMatch(published(input), "admin-a", async () => {
-      fenceStarted();
-      await new Promise<void>(() => {});
-    }).catch(() => undefined);
-
-    await started;
-    // The repository applies a 30-second transaction-local idle timeout. The
-    // PostgreSQL server must release the advisory lock even though the cache
-    // promise itself is not cancellable and has not resolved yet.
-    await new Promise((resolve) => setTimeout(resolve, 31_000));
-
-    const [lock] = await cleanup`select pg_try_advisory_lock(${MANUAL_MATCH_MUTATION_LOCK}) as acquired`;
-    expect(lock.acquired).toBe(true);
-    await cleanup`select pg_advisory_unlock(${MANUAL_MATCH_MUTATION_LOCK})`;
-    const [matches] = await cleanup`
-      select count(*)::int as count from published_manual_matches where league = ${input.league}
-    `;
-    expect(matches.count).toBe(0);
-  }, 40_000);
 });

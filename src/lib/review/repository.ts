@@ -62,20 +62,12 @@ export type ManualMatchCacheFence = (revision: number) => Promise<void>;
 const noCacheFence: ManualMatchCacheFence = async () => {};
 export const MANUAL_MATCH_MUTATION_LOCK = 7_214_603_119;
 const MANUAL_MATCH_LOCK_TIMEOUT_MS = 2_500;
-// A mutation holds an open transaction while awaiting the Runtime Cache fence.
-// Bound that idle interval so a stalled cache call cannot pin the advisory lock.
-const MANUAL_MATCH_IDLE_TRANSACTION_TIMEOUT_MS = 30_000;
 const DELIVERED_OUTBOX_CLEANUP_BATCH = 100;
 
 type ReviewTransaction = Parameters<Parameters<ReturnType<typeof getDatabase>["transaction"]>[0]>[0];
 type ReviewExecutor = Pick<ReviewTransaction, "execute">;
 
 async function lockManualMatchMutations(tx: ReviewTransaction): Promise<void> {
-  await tx.execute(sql`select set_config(
-    'idle_in_transaction_session_timeout',
-    ${`${MANUAL_MATCH_IDLE_TRANSACTION_TIMEOUT_MS}ms`},
-    true
-  )`);
   await tx.execute(sql`select set_config('lock_timeout', ${`${MANUAL_MATCH_LOCK_TIMEOUT_MS}ms`}, true)`);
   await tx.execute(sql`select pg_advisory_xact_lock(${MANUAL_MATCH_MUTATION_LOCK})`);
 }
