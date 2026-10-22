@@ -811,4 +811,40 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       await cleanup`select pg_advisory_unlock(${MANUAL_MATCH_MUTATION_LOCK})`;
     }
   });
+
+  it("releases the mutation lock when an awaited cache fence leaves its transaction idle", async () => {
+    const input = submission(`idle-fence-${randomUUID()}`);
+    let fenceStarted!: () => void;
+    let finishFence!: () => void;
+    const started = new Promise<void>((resolve) => { fenceStarted = resolve; });
+    const pendingFence = new Promise<void>((resolve) => { finishFence = resolve; });
+    const mutation = repository.createManualMatch(published(input), "admin-a", async () => {
+      fenceStarted();
+      await pendingFence;
+    }).then(
+      () => ({ error: null }),
+      (error: unknown) => ({ error }),
+    );
+
+    await started;
+    // The repository applies a 30-second transaction-local idle timeout. The
+    // PostgreSQL server must release the advisory lock even though the cache
+    // promise itself is not cancellable and has not resolved yet.
+    await new Promise((resolve) => setTimeout(resolve, 31_000));
+
+    try {
+      const [lock] = await cleanup`select pg_try_advisory_lock(${MANUAL_MATCH_MUTATION_LOCK}) as acquired`;
+      expect(lock.acquired).toBe(true);
+      await cleanup`select pg_advisory_unlock(${MANUAL_MATCH_MUTATION_LOCK})`;
+    } finally {
+      finishFence();
+    }
+
+    const result = await mutation;
+    expect(result.error).toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+    const [matches] = await cleanup`
+      select count(*)::int as count from published_manual_matches where league = ${input.league}
+    `;
+    expect(matches.count).toBe(0);
+  }, 40_000);
 });
