@@ -68,5 +68,11 @@ jobs:
       - name: Build the production bundle
         run: npm run build
 
+      - name: Install Chromium for the list-window browser check
+        run: npx playwright-core install --with-deps chromium
+
+      - name: Verify progressive list rendering in desktop and mobile viewports
+        run: npm run verify:list-window
+
       - name: Scan client assets for server credentials
         run: npm run test:client-bundle
