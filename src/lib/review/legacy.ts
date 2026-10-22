@@ -26,10 +26,27 @@ export async function importLegacyRuntimeSubmissions(
   let invalid = 0;
 
   for (const id of ids) {
+    if (!UUID_PATTERN.test(id)) {
+      invalid += 1;
+      continue;
+    }
+
+    let raw: unknown;
     try {
-      if (!UUID_PATTERN.test(id)) throw new Error("invalid id");
-      const raw = await cache.get(`pending:${id}`);
-      if (!raw || typeof raw !== "object") throw new Error("missing");
+      raw = await cache.get(`pending:${id}`);
+    } catch {
+      // A cache read failure is not evidence that the record is malformed.
+      // Abort before database writes so an outage cannot produce a misleading
+      // partial import and aggregate audit event.
+      throw new Error("LEGACY_RUNTIME_CACHE_READ_FAILED");
+    }
+
+    if (!raw || typeof raw !== "object") {
+      invalid += 1;
+      continue;
+    }
+
+    try {
       const record = raw as Record<string, unknown>;
       const submittedAt = typeof record.submittedAt === "string"
         ? new Date(record.submittedAt)

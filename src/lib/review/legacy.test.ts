@@ -4,12 +4,16 @@ import type { MatchSubmissionInput } from "@/lib/submissions";
 
 const cacheState = vi.hoisted(() => ({
   values: new Map<string, unknown>(),
+  getErrorFor: null as string | null,
   delete: vi.fn(),
 }));
 
 vi.mock("@vercel/functions", () => ({
   getCache: () => ({
-    get: async (key: string) => cacheState.values.get(key),
+    get: async (key: string) => {
+      if (key === cacheState.getErrorFor) throw new Error("private cache transport detail");
+      return cacheState.values.get(key);
+    },
     delete: cacheState.delete,
   }),
 }));
@@ -21,6 +25,7 @@ describe("legacy Runtime Cache submission migration", () => {
     const importedId = "11111111-1111-4111-8111-111111111111";
     const duplicateId = "22222222-2222-4222-8222-222222222222";
     cacheState.values.clear();
+    cacheState.getErrorFor = null;
     cacheState.delete.mockReset();
     cacheState.values.set("pending-index-v1", [importedId, duplicateId, "bad-id", importedId]);
     for (const id of [importedId, duplicateId]) {
@@ -65,5 +70,18 @@ describe("legacy Runtime Cache submission migration", () => {
       1,
     );
     expect(cacheState.delete).not.toHaveBeenCalled();
+  });
+
+  it("aborts before database import when a legacy record cache read fails", async () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    cacheState.values.clear();
+    cacheState.values.set("pending-index-v1", [id]);
+    cacheState.getErrorFor = `pending:${id}`;
+    const importLegacySubmissions = vi.fn();
+    const repository = { importLegacySubmissions } as unknown as DrizzleReviewRepository;
+
+    await expect(importLegacyRuntimeSubmissions("admin-user", repository))
+      .rejects.toThrow("LEGACY_RUNTIME_CACHE_READ_FAILED");
+    expect(importLegacySubmissions).not.toHaveBeenCalled();
   });
 });
