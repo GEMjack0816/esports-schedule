@@ -36,7 +36,9 @@ function response(overrides = {}, status = 200, extraHeaders = {}) {
     gamesSucceeded: 5,
     gamesFailed: 0,
     snapshotsPersisted: 5,
+    sourceFetchedAt: "2026-10-18T09:59:59.000Z",
     lastSuccessfulSyncAt: "2026-10-18T10:00:00.000Z",
+    refreshedAt: "2026-10-18T10:00:01.000Z",
     ...overrides,
   }), {
     status,
@@ -66,6 +68,9 @@ describe("schedule sync Worker client", () => {
       gamesSucceeded: 5,
       gamesFailed: 0,
       snapshotsPersisted: 5,
+      sourceFetchedAt: "2026-10-18T09:59:59.000Z",
+      lastSuccessfulSyncAt: "2026-10-18T10:00:00.000Z",
+      refreshedAt: "2026-10-18T10:00:01.000Z",
     });
     expect(requestedUrl).toBe("https://esports-schedule-two.vercel.app/api/cron/sync");
     expect(requestedUrl).not.toContain(syncSecret);
@@ -115,6 +120,25 @@ describe("schedule sync Worker client", () => {
         secret: syncSecret,
         fetchImpl: async () => response(payload),
       })).rejects.toMatchObject({ code: "invalid_game_counts" });
+    }
+  });
+
+  it("requires ordered source, successful-sync, and response timestamps", async () => {
+    const invalidTimestampResponses = [
+      { sourceFetchedAt: null },
+      { sourceFetchedAt: "2026-02-30T10:00:00.000Z" },
+      { lastSuccessfulSyncAt: "2026-10-18T10:00:00" },
+      { refreshedAt: null },
+      { refreshedAt: "2026-02-30T10:00:00.000Z" },
+      { sourceFetchedAt: "2026-10-18T10:00:01.000Z" },
+      { lastSuccessfulSyncAt: "2026-10-18T10:00:02.000Z" },
+    ];
+
+    for (const payload of invalidTimestampResponses) {
+      await expect(invokeScheduleSync({
+        secret: syncSecret,
+        fetchImpl: async () => response(payload),
+      })).rejects.toMatchObject({ code: "invalid_success_timestamp" });
     }
   });
 

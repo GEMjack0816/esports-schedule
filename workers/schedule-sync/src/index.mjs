@@ -142,8 +142,12 @@ function validateSyncPayload(payload, httpStatus) {
     || payload.snapshotsPersisted !== payload.gamesSucceeded) {
     throw new SyncInvocationError("snapshot_persistence_mismatch", httpStatus);
   }
-  if (typeof payload.lastSuccessfulSyncAt !== "string"
-    || !Number.isFinite(Date.parse(payload.lastSuccessfulSyncAt))) {
+  const sourceFetchedAt = parseTimestampWithTimezone(payload.sourceFetchedAt);
+  const lastSuccessfulSyncAt = parseTimestampWithTimezone(payload.lastSuccessfulSyncAt);
+  const refreshedAt = parseTimestampWithTimezone(payload.refreshedAt);
+  if (sourceFetchedAt === null || lastSuccessfulSyncAt === null || refreshedAt === null
+    || sourceFetchedAt > lastSuccessfulSyncAt
+    || lastSuccessfulSyncAt > refreshedAt) {
     throw new SyncInvocationError("invalid_success_timestamp", httpStatus);
   }
   if ((payload.status === "success" && payload.gamesFailed !== 0)
@@ -159,7 +163,9 @@ function validateSyncPayload(payload, httpStatus) {
     gamesSucceeded: payload.gamesSucceeded,
     gamesFailed: payload.gamesFailed,
     snapshotsPersisted: payload.snapshotsPersisted,
+    sourceFetchedAt: payload.sourceFetchedAt,
     lastSuccessfulSyncAt: payload.lastSuccessfulSyncAt,
+    refreshedAt: payload.refreshedAt,
   };
 }
 
