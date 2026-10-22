@@ -17,7 +17,7 @@ vi.mock("@vercel/functions", () => ({
 import { importLegacyRuntimeSubmissions } from "./legacy";
 
 describe("legacy Runtime Cache submission migration", () => {
-  it("preserves ids and timestamps, skips duplicates, audits counts and never deletes cache", async () => {
+  it("preserves valid ids and timestamps and delegates one atomic import without deleting cache", async () => {
     const importedId = "11111111-1111-4111-8111-111111111111";
     const duplicateId = "22222222-2222-4222-8222-222222222222";
     cacheState.values.clear();
@@ -36,29 +36,34 @@ describe("legacy Runtime Cache submission migration", () => {
         submittedAt: "2026-07-01T00:00:00.000Z",
       });
     }
-    const insertLegacySubmission = vi.fn(async (
-      _input: MatchSubmissionInput,
-      id: string,
-      submittedAt: Date,
+    const importLegacySubmissions = vi.fn(async (
+      _actorId: string,
+      records: Array<{ id: string; input: MatchSubmissionInput; submittedAt: Date }>,
+      scanned: number,
+      invalid: number,
     ) => {
-      expect(submittedAt.toISOString()).toBe("2026-07-01T00:00:00.000Z");
-      return id === importedId ? "imported" as const : "duplicate" as const;
+      expect(records.map(({ id }) => id)).toEqual([importedId, duplicateId]);
+      expect(records.every(({ submittedAt }) =>
+        submittedAt.toISOString() === "2026-07-01T00:00:00.000Z")).toBe(true);
+      return { scanned, imported: 1, duplicate: 1, invalid };
     });
-    const auditLegacyImport = vi.fn();
     const repository = {
-      insertLegacySubmission,
-      auditLegacyImport,
+      importLegacySubmissions,
     } as unknown as DrizzleReviewRepository;
 
     const counts = await importLegacyRuntimeSubmissions("admin-user", repository);
 
     expect(counts).toEqual({ scanned: 3, imported: 1, duplicate: 1, invalid: 1 });
-    expect(insertLegacySubmission).toHaveBeenCalledTimes(2);
-    expect(insertLegacySubmission.mock.calls.map((call) => call[1])).toEqual([
-      importedId,
-      duplicateId,
-    ]);
-    expect(auditLegacyImport).toHaveBeenCalledWith("admin-user", counts);
+    expect(importLegacySubmissions).toHaveBeenCalledTimes(1);
+    expect(importLegacySubmissions).toHaveBeenCalledWith(
+      "admin-user",
+      expect.arrayContaining([
+        expect.objectContaining({ id: importedId }),
+        expect.objectContaining({ id: duplicateId }),
+      ]),
+      3,
+      1,
+    );
     expect(cacheState.delete).not.toHaveBeenCalled();
   });
 });

@@ -39,7 +39,7 @@
 
 ## 旧提交迁移
 
-旧 Runtime Cache 提交可由已登录管理员一次性调用 `POST /api/admin/legacy-import` 导入。导入保留 UUID 和提交时间，按主键/指纹幂等跳过重复项并写审计记录；它不会删除旧缓存。
+旧 Runtime Cache 提交可由已登录管理员一次性调用 `POST /api/admin/legacy-import` 导入。导入保留 UUID 和提交时间，按主键/指纹幂等跳过重复项；所有有效记录与准确的汇总审计事件在同一个 PostgreSQL 事务内提交，任一数据库写入失败时整批回滚。它不会删除旧缓存。
 
 ## 隔离环境验证
 

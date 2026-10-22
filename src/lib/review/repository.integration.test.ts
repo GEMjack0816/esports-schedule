@@ -9,6 +9,7 @@ import {
 } from "./submission-protection";
 import type { PublicSubmissionPolicy, SubmissionControlWindowKind } from "./submission-protection";
 import type { PublishedMatchWrite } from "./types";
+import type { LegacySubmissionImportRecord } from "./types";
 import {
   preserveLastSuccessfulPublicMatches,
   synchronizePublishedManualMatchesSnapshot,
@@ -33,6 +34,7 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
   const manualMatchIds: string[] = [];
   const rateLimitSources: string[] = [];
   const rateLimitWindowKeys: string[] = [];
+  const legacyAuditActors: string[] = [];
 
   beforeAll(async () => {
     process.env.DATABASE_URL = testUrl;
@@ -53,6 +55,9 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     }
     if (auditEntityIds.length > 0) {
       await cleanup`delete from admin_audit_events where entity_id = any(${auditEntityIds}::uuid[])`;
+    }
+    if (legacyAuditActors.length > 0) {
+      await cleanup`delete from admin_audit_events where actor_id = any(${legacyAuditActors}::text[])`;
     }
     if (submissionIds.length > 0) {
       await cleanup`delete from match_submissions where id = any(${submissionIds}::uuid[])`;
@@ -99,6 +104,12 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       streamUrl: null,
       sourceUrl: input.sourceUrl,
     };
+  }
+
+  function legacyRecord(suffix: string, id = randomUUID()): LegacySubmissionImportRecord {
+    submissionIds.push(id);
+    const input = submission(`legacy-${suffix}`);
+    return { id, input, submittedAt: new Date("2026-07-01T00:00:00.000Z") };
   }
 
   async function create(suffix: string) {
@@ -185,6 +196,63 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect((await repository.listManualMatches()).rows.some(
       (match) => match.sourceSubmissionId === id,
     )).toBe(false);
+  });
+
+  it("rolls back every legacy row when the summary audit insert fails", async () => {
+    const records = [legacyRecord(randomUUID()), legacyRecord(randomUUID())];
+
+    await expect(repository.importLegacySubmissions(
+      null as unknown as string,
+      records,
+      records.length,
+      0,
+    )).rejects.toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+
+    for (const record of records) {
+      expect(await repository.getSubmission(record.id)).toBeNull();
+    }
+  });
+
+  it("imports legacy records and writes their exact summary audit atomically", async () => {
+    const first = legacyRecord(randomUUID());
+    const duplicate = { ...first, id: randomUUID() };
+    submissionIds.push(duplicate.id);
+    const actorId = `legacy-success-${randomUUID()}`;
+    legacyAuditActors.push(actorId);
+
+    const counts = await repository.importLegacySubmissions(
+      actorId,
+      [first, duplicate],
+      2,
+      0,
+    );
+
+    expect(counts).toEqual({ scanned: 2, imported: 1, duplicate: 1, invalid: 0 });
+    expect(await repository.getSubmission(first.id)).not.toBeNull();
+    expect(await repository.getSubmission(duplicate.id)).toBeNull();
+    const [audit] = await cleanup`
+      select after_json from admin_audit_events
+      where actor_id = ${actorId} and action = 'legacy_submissions.imported'
+    `;
+    expect(audit?.after_json).toEqual(counts);
+  });
+
+  it("makes repeated legacy import attempts idempotent by preserving row ids and unique fingerprints", async () => {
+    const record = legacyRecord(randomUUID());
+    const actorId = `legacy-retry-${randomUUID()}`;
+    legacyAuditActors.push(actorId);
+
+    const first = await repository.importLegacySubmissions(actorId, [record], 1, 0);
+    const retry = await repository.importLegacySubmissions(actorId, [record], 1, 0);
+
+    expect(first).toEqual({ scanned: 1, imported: 1, duplicate: 0, invalid: 0 });
+    expect(retry).toEqual({ scanned: 1, imported: 0, duplicate: 1, invalid: 0 });
+    expect(await repository.getSubmission(record.id)).not.toBeNull();
+    const [audits] = await cleanup`
+      select count(*)::int as count from admin_audit_events
+      where actor_id = ${actorId} and action = 'legacy_submissions.imported'
+    `;
+    expect(audits.count).toBe(2);
   });
 
   it("rejects without publishing and can hide then restore a published match", async () => {

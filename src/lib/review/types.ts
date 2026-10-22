@@ -72,7 +72,18 @@ export type SubmissionCounts = {
   publishedManualMatches: number;
 };
 
-export type LegacyInsertResult = "imported" | "duplicate";
+export type LegacySubmissionImportRecord = {
+  id: string;
+  input: MatchSubmissionInput;
+  submittedAt: Date;
+};
+
+export type LegacyImportCounts = {
+  scanned: number;
+  imported: number;
+  duplicate: number;
+  invalid: number;
+};
 
 export type PublicSubmissionResult =
   | { kind: "created"; submission: MatchSubmissionRow }
