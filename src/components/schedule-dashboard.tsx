@@ -288,7 +288,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           </div>
           <div className="hero-stats">
             <div className="stat-card stat-card-live"><span className="stat-label"><i /> LIVE NOW</span><strong>{String(liveCount).padStart(2, "0")}</strong><span>场比赛正在进行</span></div>
-            <div className="stat-card"><span className="stat-label">UP NEXT · 24H</span><strong>{String(upcomingCount).padStart(2, "0")}</strong><span>场比赛将在 24 小时内开赛</span></div>
+            <div className="stat-card"><span className="stat-label">UP NEXT · 24H</span><strong>{clockNow === null ? "—" : String(upcomingCount).padStart(2, "0")}</strong><span>场比赛将在 24 小时内开赛</span></div>
           </div>
         </section>
 

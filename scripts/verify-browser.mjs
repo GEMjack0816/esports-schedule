@@ -72,6 +72,10 @@ for (const profile of [
   });
 
   const response = await page.goto(auditUrl.toString(), { waitUntil: "networkidle", timeout: 120_000 });
+  await page.waitForFunction(() => {
+    const count = document.querySelector(".hero-stats .stat-card:nth-child(2) strong")?.textContent?.trim();
+    return Boolean(count && count !== "—");
+  });
   const bodyText = await page.locator("body").innerText();
   const html = await page.content();
   const homepageCommit = await page.locator("#esports-schedule-version").getAttribute("data-git-commit");
