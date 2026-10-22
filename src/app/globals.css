@@ -163,6 +163,9 @@ a { color: inherit; text-decoration: none; }
 .data-summary strong { color: var(--muted-bright); font-weight: 550; }
 .data-summary a { margin-left: auto; color: var(--cyan); border-bottom: 1px solid rgba(69,214,255,.35); padding-bottom: 2px; }
 .data-summary a:hover { border-bottom-color: var(--cyan); }
+.export-schedule-button { border: 1px solid var(--line); background: var(--control-bg); color: var(--muted-bright); padding: 7px 10px; font-size: 11px; cursor: pointer; }
+.export-schedule-button:hover:not(:disabled) { border-color: var(--cyan); color: var(--cyan); }
+.export-schedule-button:disabled { opacity: .5; cursor: not-allowed; }
 
 .sync-status-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 0 0 24px; }
 .sync-status-card { display: grid; gap: 5px; min-width: 0; padding: 12px; border: 1px solid var(--line-soft); background: var(--card-bg); }
