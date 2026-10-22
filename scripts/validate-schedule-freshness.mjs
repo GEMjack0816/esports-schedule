@@ -9,7 +9,15 @@ function validTimestamp(value) {
 }
 
 function getAgeSeconds(value, now) {
-  return Math.max(0, Math.floor((now - Date.parse(value)) / 1_000));
+  return Math.floor((now - Date.parse(value)) / 1_000);
+}
+
+function timestampAgeError(name, value, now, maxAgeSeconds) {
+  if (!validTimestamp(value)) return `${name} is missing or invalid`;
+  const ageSeconds = getAgeSeconds(value, now);
+  if (ageSeconds < -60) return `${name} is more than 60s in the future`;
+  if (ageSeconds > maxAgeSeconds) return `${name} is ${ageSeconds}s old (maximum ${maxAgeSeconds}s)`;
+  return null;
 }
 
 export function validateScheduleFreshness(
@@ -36,11 +44,8 @@ export function validateScheduleFreshness(
     ["lastSuccessfulSyncAt", payload.lastSuccessfulSyncAt],
   ];
   for (const [name, value] of timestamps) {
-    if (!validTimestamp(value)) return { ok: false, message: `health response has no valid ${name}` };
-    const ageSeconds = getAgeSeconds(value, now);
-    if (ageSeconds > maxAgeSeconds) {
-      return { ok: false, message: `${name} is ${ageSeconds}s old (maximum ${maxAgeSeconds}s)` };
-    }
+    const error = timestampAgeError(name, value, now, maxAgeSeconds);
+    if (error) return { ok: false, message: error };
   }
 
   if (payload.stale !== false) {
@@ -60,13 +65,8 @@ export function validateScheduleFreshness(
     }
     for (const field of ["sourceFetchedAt", "lastSuccessfulSyncAt"]) {
       const value = coverage[field];
-      if (!validTimestamp(value)) {
-        return { ok: false, message: `${game} has no valid ${field}` };
-      }
-      const ageSeconds = getAgeSeconds(value, now);
-      if (ageSeconds > maxAgeSeconds) {
-        return { ok: false, message: `${game} ${field} is ${ageSeconds}s old (maximum ${maxAgeSeconds}s)` };
-      }
+      const error = timestampAgeError(`${game} ${field}`, value, now, maxAgeSeconds);
+      if (error) return { ok: false, message: error };
     }
   }
 

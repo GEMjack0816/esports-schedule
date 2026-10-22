@@ -48,6 +48,12 @@ describe("schedule freshness monitor validation", () => {
       .toContain("sourceFetchedAt is 960s old");
   });
 
+  it("rejects source timestamps implausibly far in the future", () => {
+    const futureTime = new Date(now + 61_000).toISOString();
+    expect(validateScheduleFreshness(health({ sourceFetchedAt: futureTime }), 200, now).message)
+      .toBe("sourceFetchedAt is more than 60s in the future");
+  });
+
   it("checks each game's source and success timestamps rather than the aggregate maximum", () => {
     const games = health().games;
     const oldTime = new Date(now - 16 * 60_000).toISOString();
@@ -72,6 +78,6 @@ describe("schedule freshness monitor validation", () => {
     expect(validateScheduleFreshness(health({ games }), 200, now).message)
       .toBe("health response is missing dota2 coverage");
     expect(validateScheduleFreshness(health({ lastSuccessfulSyncAt: null }), 200, now).message)
-      .toBe("health response has no valid lastSuccessfulSyncAt");
+      .toBe("lastSuccessfulSyncAt is missing or invalid");
   });
 });
