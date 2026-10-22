@@ -74,6 +74,12 @@ for (const profile of [
   const response = await page.goto(auditUrl.toString(), { waitUntil: "networkidle", timeout: 120_000 });
   const bodyText = await page.locator("body").innerText();
   const html = await page.content();
+  await page.keyboard.press("Tab");
+  const skipLink = page.getByRole("link", { name: "跳转到主要内容" });
+  const skipLinkFocusedFirst = await skipLink.evaluate((element) => element === document.activeElement);
+  const skipLinkVisibleOnFocus = await skipLink.isVisible();
+  await page.keyboard.press("Enter");
+  const skipLinkMovesFocusToMain = await page.locator("#top").evaluate((element) => element === document.activeElement);
   const homepageCommit = await page.locator("#esports-schedule-version").getAttribute("data-git-commit");
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
@@ -167,6 +173,9 @@ for (const profile of [
   results.push({
     profile: profile.name,
     status: response?.status() ?? null,
+    skipLinkFocusedFirst,
+    skipLinkVisibleOnFocus,
+    skipLinkMovesFocusToMain,
     horizontalOverflow: layout.scrollWidth > layout.clientWidth,
     scrollWidth: layout.scrollWidth,
     clientWidth: layout.clientWidth,
@@ -226,6 +235,9 @@ const failures = [];
 for (const result of results) {
   const prefix = result.profile;
   if (result.status !== 200) failures.push(`${prefix}: homepage HTTP ${result.status}`);
+  if (!result.skipLinkFocusedFirst || !result.skipLinkVisibleOnFocus || !result.skipLinkMovesFocusToMain) {
+    failures.push(`${prefix}: skip link must be the first visible keyboard control and move focus to main content`);
+  }
   if (result.horizontalOverflow) failures.push(`${prefix}: horizontal overflow`);
   if (!result.hasCoverageSummary) failures.push(`${prefix}: missing coverage summary`);
   if (!result.hasSubmitLink) failures.push(`${prefix}: missing submission link`);
@@ -256,3 +268,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log("Browser verification passed.");
+
