@@ -132,7 +132,7 @@ function validateSyncPayload(payload, httpStatus) {
   if (!Number.isSafeInteger(payload.generation) || payload.generation < 1) {
     throw new SyncInvocationError("invalid_generation", httpStatus);
   }
-  if (!Number.isInteger(payload.gamesAttempted) || payload.gamesAttempted < 1
+  if (!Number.isInteger(payload.gamesAttempted) || payload.gamesAttempted !== PANDA_GAMES.length
     || !Number.isInteger(payload.gamesSucceeded) || payload.gamesSucceeded < 1
     || !Number.isInteger(payload.gamesFailed) || payload.gamesFailed < 0
     || payload.gamesSucceeded + payload.gamesFailed !== payload.gamesAttempted) {

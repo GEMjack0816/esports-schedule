@@ -102,6 +102,22 @@ describe("schedule sync Worker client", () => {
     });
   });
 
+  it("rejects sync responses that did not attempt exactly all five games", async () => {
+    const incompleteResponses = [
+      { status: "success", gamesAttempted: 1, gamesSucceeded: 1, gamesFailed: 0, snapshotsPersisted: 1 },
+      { status: "success", gamesAttempted: 4, gamesSucceeded: 4, gamesFailed: 0, snapshotsPersisted: 4 },
+      { status: "partial", gamesAttempted: 4, gamesSucceeded: 3, gamesFailed: 1, snapshotsPersisted: 3 },
+      { status: "success", gamesAttempted: 6, gamesSucceeded: 6, gamesFailed: 0, snapshotsPersisted: 6 },
+    ];
+
+    for (const payload of incompleteResponses) {
+      await expect(invokeScheduleSync({
+        secret: syncSecret,
+        fetchImpl: async () => response(payload),
+      })).rejects.toMatchObject({ code: "invalid_game_counts" });
+    }
+  });
+
   it("treats a valid lock conflict as a distinct skipped outcome", async () => {
     await expect(invokeScheduleSync({
       secret: syncSecret,
