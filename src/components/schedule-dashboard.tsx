@@ -318,9 +318,9 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             })}
           </div>
 
-          <div className="range-tabs" role="tablist" aria-label="选择时间范围">
+          <div className="range-tabs" role="group" aria-label="选择时间范围">
             {([ ["today", "今日"], ["tomorrow", "明日"], ["seven", "未来 7 天"], ["history", "历史比赛"], ["all", "全部收录"] ] as const).map(([key, label]) => (
-              <button key={key} role="tab" aria-selected={range === key} className={range === key ? "active" : ""} type="button" onClick={() => setRange(key)}>
+              <button key={key} aria-pressed={range === key} className={range === key ? "active" : ""} type="button" onClick={() => setRange(key)}>
                 <span>{label}</span><em>{rangeCounts[key]}</em>
               </button>
             ))}

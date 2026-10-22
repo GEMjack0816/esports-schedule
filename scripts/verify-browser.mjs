@@ -83,7 +83,11 @@ for (const profile of [
 
   const gameFilterCounts = {};
   const statusFilterCounts = {};
-  await page.getByRole("tab", { name: /全部收录/ }).click();
+  const rangeFilterGroup = page.getByRole("group", { name: "选择时间范围" });
+  const rangeFilterGroupExposed = await rangeFilterGroup.count() === 1;
+  const allRangeButton = rangeFilterGroup.getByRole("button", { name: /全部收录/ });
+  await allRangeButton.click();
+  const allRangePressed = await allRangeButton.getAttribute("aria-pressed");
   const gameSelect = page.locator(".filter-panel select").nth(0);
   for (const game of ["lol", "valorant", "honor-of-kings", "cs2", "dota2"]) {
     await gameSelect.selectOption(game);
@@ -96,7 +100,11 @@ for (const profile of [
     statusFilterCounts[status] = await page.locator(".match-card").count();
   }
   await statusSelect.selectOption("all");
-  await page.getByRole("tab", { name: /^今日/ }).click();
+  const todayRangeButton = rangeFilterGroup.getByRole("button", { name: /^今日/ });
+  await todayRangeButton.focus();
+  await page.keyboard.press("Space");
+  const todayRangePressed = await todayRangeButton.getAttribute("aria-pressed");
+  const allRangePressedAfterKeyboardToggle = await allRangeButton.getAttribute("aria-pressed");
 
   const apiResponsePromise = page.waitForResponse(
     (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
@@ -184,6 +192,11 @@ for (const profile of [
     gameOptions,
     gameFilterCounts,
     statusFilterCounts,
+    rangeFilterGroupExposed,
+    rangeButtonsExposePressedState:
+      allRangePressed === "true"
+      && todayRangePressed === "true"
+      && allRangePressedAfterKeyboardToggle === "false",
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -235,6 +248,8 @@ for (const result of results) {
   if (result.forbiddenHtmlPhrases.length > 0) failures.push(`${prefix}: demo text in HTML`);
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
+  if (!result.rangeFilterGroupExposed) failures.push(`${prefix}: range filters are not exposed as a named group`);
+  if (!result.rangeButtonsExposePressedState) failures.push(`${prefix}: range filters do not expose pressed state`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
