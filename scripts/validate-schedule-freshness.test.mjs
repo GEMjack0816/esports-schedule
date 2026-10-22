@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_MAX_AGE_SECONDS, PANDA_GAMES, validateScheduleFreshness } from "./validate-schedule-freshness.mjs";
 
@@ -80,4 +82,18 @@ describe("schedule freshness monitor validation", () => {
     expect(validateScheduleFreshness(health({ lastSuccessfulSyncAt: null }), 200, now).message)
       .toBe("lastSuccessfulSyncAt is missing or invalid");
   });
+  it("pins the monitor checkout action immutably and disables persisted credentials", () => {
+    const workflow = readFileSync(
+      resolve(process.cwd(), ".github/workflows/monitor-schedule-freshness.yml"),
+      "utf8",
+    );
+    const references = [...workflow.matchAll(/^\\s*uses:\\s*([^\\s#]+)/gm)]
+      .map(([, reference]) => reference);
+
+    expect(references).toEqual([
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    ]);
+    expect(workflow).toContain("persist-credentials: false");
+  });
+
 });
