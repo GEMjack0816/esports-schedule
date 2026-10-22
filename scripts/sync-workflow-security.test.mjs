@@ -14,6 +14,10 @@ describe("production sync workflow security contract", () => {
     );
 
     expect(triggers).toEqual(["schedule", "workflow_dispatch"]);
+    const refreshJob = workflow.match(
+      /^  refresh:\r?\n((?:    [^\r\n]*\r?\n|[ \t]*\r?\n)*)/m,
+    )?.[1];
+    expect(refreshJob).toMatch(/\bif:\s*github\.ref\s*==\s*['"]refs\/heads\/main['"]/);
     const permissionBlock = workflow.match(
       /^permissions:\r?\n((?:[ \t]+[^\r\n]*\r?\n|[ \t]*\r?\n)*)/m,
     )?.[1];

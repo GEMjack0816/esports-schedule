@@ -14,6 +14,8 @@ concurrency:
 
 jobs:
   refresh:
+    # workflow_dispatch can target a non-default ref; only main may use the production sync credential.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
