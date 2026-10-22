@@ -394,13 +394,18 @@ describe("schedule freshness monitor", () => {
     expect(Date.now() - startedAt).toBeLessThan(1_000);
   });
 
-  it("rejects cacheable health responses to avoid passing on stale CDN data", async () => {
+  it("rejects cacheable or contradictory health responses to avoid passing on stale CDN data", async () => {
     for (const cacheControl of [
       "",
       "public, max-age=60",
       "public, s-maxage=900",
       "no-store=false",
       "private, no-store=0",
+      "no-store, max-age=60",
+      "no-store, s-maxage=900",
+      "no-store, stale-while-revalidate=60",
+      "no-store, stale-if-error=60",
+      "public, no-store",
     ]) {
       const response = await checkScheduleHealth(async () => new Response(JSON.stringify(healthyPayload()), {
         status: 200,
@@ -411,17 +416,17 @@ describe("schedule freshness monitor", () => {
       }), now);
       expect(response).toEqual({
         ok: false,
-        problems: ["health endpoint response is missing the no-store cache directive"],
+        problems: ["health endpoint response does not have a strict no-store cache policy"],
       });
     }
   });
 
-  it("accepts the exact no-store directive with surrounding whitespace and case differences", async () => {
+  it("accepts no-store with safe non-cacheable directives and surrounding whitespace", async () => {
     const response = await checkScheduleHealth(async () => new Response(JSON.stringify(healthyPayload()), {
       status: 200,
       headers: {
         "content-type": "application/json",
-        "cache-control": "private,  No-Store , max-age=0",
+        "cache-control": "private,  No-Store , no-cache, must-revalidate",
       },
     }), now);
     expect(response).toEqual({ ok: true, problems: [] });

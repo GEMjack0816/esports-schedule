@@ -18,6 +18,21 @@ function wait(milliseconds) {
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
+
+function hasStrictNoStorePolicy(cacheControl) {
+  if (typeof cacheControl !== "string") return false;
+  const directives = cacheControl
+    .split(",")
+    .map((directive) => directive.trim().toLowerCase());
+  if (!directives.includes("no-store")) return false;
+
+  // A contradictory freshness directive can still permit an intermediary to
+  // serve an old health result. Fail closed instead of treating no-store as
+  // sufficient when the same response advertises cacheability.
+  return !directives.some((directive) =>
+    /^(?:public|max-age|s-maxage|stale-while-revalidate|stale-if-error)(?:\s*=|\s*$)/.test(directive));
+}
+
 const EXPLICIT_TIMEZONE_TIMESTAMP =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -303,14 +318,10 @@ export async function checkScheduleHealth(
     };
   }
 
-  const cacheControl = response.headers.get("cache-control") ?? "";
-  const cacheDirectives = cacheControl
-    .split(",")
-    .map((directive) => directive.trim().toLowerCase());
-  if (!cacheDirectives.includes("no-store")) {
+  if (!hasStrictNoStorePolicy(response.headers.get("cache-control"))) {
     return {
       ok: false,
-      problems: ["health endpoint response is missing the no-store cache directive"],
+      problems: ["health endpoint response does not have a strict no-store cache policy"],
     };
   }
 
