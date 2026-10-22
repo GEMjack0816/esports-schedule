@@ -72,6 +72,8 @@ for (const profile of [
   });
 
   const response = await page.goto(auditUrl.toString(), { waitUntil: "networkidle", timeout: 120_000 });
+  const serverHtml = response ? await response.text() : "";
+  const hasUpcomingPlaceholderBeforeHydration = serverHtml.includes("UP NEXT · 24H</span><strong>—</strong>");
   await page.waitForFunction(() => {
     const count = document.querySelector(".hero-stats .stat-card:nth-child(2) strong")?.textContent?.trim();
     return Boolean(count && count !== "—");
@@ -177,6 +179,7 @@ for (const profile of [
     clientWidth: layout.clientWidth,
     overflowElements: layout.offenders,
     hasCoverageSummary: bodyText.includes("当前收录范围"),
+    hasUpcomingPlaceholderBeforeHydration,
     hasExplicitUpcomingWindow: upcomingHeroText.includes("UP NEXT · 24H")
       && upcomingHeroText.includes("24 小时内开赛"),
     hasSubmitLink: bodyText.includes("提交遗漏比赛"),
@@ -235,6 +238,7 @@ for (const result of results) {
   if (result.status !== 200) failures.push(`${prefix}: homepage HTTP ${result.status}`);
   if (result.horizontalOverflow) failures.push(`${prefix}: horizontal overflow`);
   if (!result.hasCoverageSummary) failures.push(`${prefix}: missing coverage summary`);
+  if (!result.hasUpcomingPlaceholderBeforeHydration) failures.push(`${prefix}: upcoming hero briefly renders an uninitialized count`);
   if (!result.hasExplicitUpcomingWindow) failures.push(`${prefix}: upcoming hero window is not explicit`);
   if (!result.hasSubmitLink) failures.push(`${prefix}: missing submission link`);
   if (!result.hasProfessionalCoverageCopy) failures.push(`${prefix}: missing coverage copy`);
@@ -264,3 +268,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log("Browser verification passed.");
+
