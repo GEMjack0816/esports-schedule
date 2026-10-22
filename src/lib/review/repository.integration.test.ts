@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { sql } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { getDatabase, safeDatabaseErrorCode, withDatabaseTimeouts } from "@/db";
 import type { DrizzleReviewRepository } from "./repository";
 import type { MatchSubmissionInput } from "@/lib/submissions";
 import {
@@ -40,6 +42,110 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       DrizzleReviewRepository: new (await import("./repository")).DrizzleReviewRepository(),
     });
     cleanup = postgres(testUrl!, { max: 1, prepare: false });
+  });
+
+  it("bounds statement and row-lock waits without expiring external-effect transactions", async () => {
+    const defaultsBefore = await getDatabase().execute<{
+      statement_timeout: string;
+      lock_timeout: string;
+    }>(sql`
+      select
+        current_setting('statement_timeout') as statement_timeout,
+        current_setting('lock_timeout') as lock_timeout
+    `);
+    const rows = await withDatabaseTimeouts((tx) => tx.execute<{
+      statement_timeout: string;
+      lock_timeout: string;
+      idle_in_transaction_session_timeout: string;
+    }>(sql`
+      select
+        current_setting('statement_timeout') as statement_timeout,
+        current_setting('lock_timeout') as lock_timeout,
+        current_setting('idle_in_transaction_session_timeout') as idle_in_transaction_session_timeout
+    `));
+
+    expect(rows[0]).toEqual({
+      statement_timeout: "30s",
+      lock_timeout: "5s",
+      idle_in_transaction_session_timeout: "0",
+    });
+
+    const defaultsAfter = await getDatabase().execute<{
+      statement_timeout: string;
+      lock_timeout: string;
+    }>(sql`
+      select
+        current_setting('statement_timeout') as statement_timeout,
+        current_setting('lock_timeout') as lock_timeout
+    `);
+    expect(defaultsAfter[0]).toEqual(defaultsBefore[0]);
+
+    const transactionRows = await withDatabaseTimeouts(async (tx) => {
+      // Model time spent awaiting a Runtime Cache fence or another external
+      // side effect between SQL statements while preserving transaction order.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return tx.execute<{ result: number }>(sql`select 1 as result`);
+    });
+    expect(transactionRows[0]?.result).toBe(1);
+  });
+
+  it("cancels a slow statement using a transaction-local timeout", async () => {
+    const capturedError = await withDatabaseTimeouts(
+      (tx) => tx.execute(sql`select pg_sleep(0.2)`),
+      { statementTimeoutMs: 50, lockTimeoutMs: 100 },
+    ).then(() => null, (error: unknown) => error);
+    expect(capturedError).toBeDefined();
+    expect(safeDatabaseErrorCode(capturedError)).toBe("TIMEOUT");
+  }, 10_000);
+
+  it("bounds advisory lock waits with a transaction-local lock timeout", async () => {
+    let releaseLockOwner!: () => void;
+    let reportLockAcquired!: () => void;
+    const lockOwnerWait = new Promise<void>((resolve) => { releaseLockOwner = resolve; });
+    const lockAcquired = new Promise<void>((resolve) => { reportLockAcquired = resolve; });
+    const lockKey = BigInt("72840192611");
+    const lockOwner = withDatabaseTimeouts(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(${lockKey})`);
+      reportLockAcquired();
+      await lockOwnerWait;
+    });
+
+    await lockAcquired;
+    const capturedError = await withDatabaseTimeouts(
+      (tx) => tx.execute(sql`select pg_advisory_xact_lock(${lockKey})`),
+      { statementTimeoutMs: 1_000, lockTimeoutMs: 50 },
+    ).then(() => null, (error: unknown) => error);
+    releaseLockOwner();
+    await lockOwner;
+
+    expect(capturedError).toBeDefined();
+    expect(safeDatabaseErrorCode(capturedError)).toBe("LOCK_TIMEOUT");
+  }, 10_000);
+
+  it("sanitizes the driver connection error after an idle transaction is terminated", async () => {
+    const idleTimeoutClient = postgres(testUrl!, {
+      max: 1,
+      prepare: false,
+      connection: { idle_in_transaction_session_timeout: 100 },
+    });
+    let capturedError: unknown;
+
+    try {
+      await idleTimeoutClient.begin(async (transaction) => {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        await transaction`select 1`;
+      });
+    } catch (error) {
+      capturedError = error;
+    } finally {
+      await idleTimeoutClient.end();
+    }
+
+    expect(capturedError).toBeDefined();
+    // postgres-js reports CONNECTION_CLOSED after the idle server session is
+    // terminated, not SQLSTATE 25P03. Keep this indistinguishable from other
+    // connection failures rather than misclassifying network drops as timeout.
+    expect(safeDatabaseErrorCode(capturedError)).toBe("UNAVAILABLE");
   });
 
   afterAll(async () => {

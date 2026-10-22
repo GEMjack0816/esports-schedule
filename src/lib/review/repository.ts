@@ -12,7 +12,7 @@ import {
   sql,
 } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
-import { getDatabase, safeDatabaseErrorCode } from "@/db";
+import { safeDatabaseErrorCode, withDatabaseTimeouts } from "@/db";
 import {
   adminAuditEvents,
   matchSubmissions,
@@ -134,16 +134,17 @@ function translateDatabaseError(error: unknown): never {
 }
 
 async function scalarCount(where?: SQL): Promise<number> {
-  const db = getDatabase();
-  const query = db.select({ value: count() }).from(matchSubmissions);
-  const [row] = where ? await query.where(where) : await query;
-  return Number(row?.value ?? 0);
+  return withDatabaseTimeouts(async (tx) => {
+    const query = tx.select({ value: count() }).from(matchSubmissions);
+    const [row] = where ? await query.where(where) : await query;
+    return Number(row?.value ?? 0);
+  });
 }
 
 export class DrizzleReviewRepository {
   async createSubmission(input: MatchSubmissionInput, options: CreateOptions = {}): Promise<MatchSubmissionRow> {
     try {
-      const [row] = await getDatabase()
+      const [row] = await withDatabaseTimeouts((tx) => tx
         .insert(matchSubmissions)
         .values({
           ...submissionValues(input),
@@ -151,7 +152,7 @@ export class DrizzleReviewRepository {
           submittedAt: options.submittedAt,
           status: "pending",
         })
-        .returning();
+        .returning());
       return row;
     } catch (error) {
       translateDatabaseError(error);
@@ -165,18 +166,7 @@ export class DrizzleReviewRepository {
     policy: PublicSubmissionPolicy = PUBLIC_SUBMISSION_POLICY,
   ): Promise<PublicSubmissionResult> {
     try {
-      return await getDatabase().transaction(async (tx) => {
-        await tx.execute(sql`select set_config(
-          'statement_timeout',
-          ${`${policy.statementTimeoutMs}ms`},
-          true
-        )`);
-        await tx.execute(sql`select set_config(
-          'lock_timeout',
-          ${`${policy.rowLockTimeoutMs}ms`},
-          true
-        )`);
-
+      return await withDatabaseTimeouts(async (tx) => {
         const lockDeadline = Date.now() + policy.gateLockMaxWaitMs;
         let gateAcquired = false;
         do {
@@ -338,6 +328,9 @@ export class DrizzleReviewRepository {
           }).where(eq(submissionRateLimitWindows.windowKey, newSourceWindowKey));
         }
         return { kind: "duplicate" as const };
+      }, {
+        statementTimeoutMs: policy.statementTimeoutMs,
+        lockTimeoutMs: policy.rowLockTimeoutMs,
       });
     } catch (error) {
       const code = safeDatabaseErrorCode(error);
@@ -357,7 +350,7 @@ export class DrizzleReviewRepository {
     submittedAt: Date,
   ): Promise<LegacyInsertResult> {
     try {
-      const rows = await getDatabase()
+      const rows = await withDatabaseTimeouts((tx) => tx
         .insert(matchSubmissions)
         .values({
           ...submissionValues(input),
@@ -366,7 +359,7 @@ export class DrizzleReviewRepository {
           status: "pending",
         })
         .onConflictDoNothing()
-        .returning({ id: matchSubmissions.id });
+        .returning({ id: matchSubmissions.id }));
       return rows.length === 1 ? "imported" : "duplicate";
     } catch (error) {
       translateDatabaseError(error);
@@ -375,11 +368,11 @@ export class DrizzleReviewRepository {
 
   async getSubmission(id: string): Promise<MatchSubmissionRow | null> {
     try {
-      const [row] = await getDatabase()
+      const [row] = await withDatabaseTimeouts((tx) => tx
         .select()
         .from(matchSubmissions)
         .where(eq(matchSubmissions.id, id))
-        .limit(1);
+        .limit(1));
       return row ?? null;
     } catch (error) {
       translateDatabaseError(error);
@@ -400,19 +393,19 @@ export class DrizzleReviewRepository {
         )!);
       }
       const where = conditions.length > 0 ? and(...conditions) : undefined;
-      const db = getDatabase();
-      const base = db.select().from(matchSubmissions);
-      const countBase = db.select({ value: count() }).from(matchSubmissions);
-      const ordered = (where ? base.where(where) : base).orderBy(
-        filters.sort === "oldest" ? asc(matchSubmissions.submittedAt) : desc(matchSubmissions.submittedAt),
-      );
-      const [rows, totals] = await Promise.all([
-        ordered.limit(filters.pageSize).offset((filters.page - 1) * filters.pageSize),
-        where ? countBase.where(where) : countBase,
-      ]);
+      const { rows, total } = await withDatabaseTimeouts(async (tx) => {
+        const base = tx.select().from(matchSubmissions);
+        const countBase = tx.select({ value: count() }).from(matchSubmissions);
+        const ordered = (where ? base.where(where) : base).orderBy(
+          filters.sort === "oldest" ? asc(matchSubmissions.submittedAt) : desc(matchSubmissions.submittedAt),
+        );
+        const rows = await ordered.limit(filters.pageSize).offset((filters.page - 1) * filters.pageSize);
+        const [totalRow] = await (where ? countBase.where(where) : countBase);
+        return { rows, total: Number(totalRow?.value ?? 0) };
+      });
       return {
         rows,
-        total: Number(totals[0]?.value ?? 0),
+        total,
         page: filters.page,
         pageSize: filters.pageSize,
       };
@@ -428,7 +421,7 @@ export class DrizzleReviewRepository {
     expectedUpdatedAt: Date,
   ): Promise<MatchSubmissionRow> {
     try {
-      return await getDatabase().transaction(async (tx) => {
+      return await withDatabaseTimeouts(async (tx) => {
         const [before] = await tx.select().from(matchSubmissions)
           .where(eq(matchSubmissions.id, id)).for("update");
         if (!before) throw new ReviewNotFoundError("提交不存在。");
@@ -467,7 +460,7 @@ export class DrizzleReviewRepository {
     expectedUpdatedAt: Date,
   ): Promise<PublishedManualMatchRow> {
     try {
-      return await getDatabase().transaction(async (tx) => {
+      return await withDatabaseTimeouts(async (tx) => {
         const [before] = await tx.select().from(matchSubmissions)
           .where(eq(matchSubmissions.id, id)).for("update");
         if (!before) throw new ReviewNotFoundError("提交不存在。");
@@ -524,7 +517,7 @@ export class DrizzleReviewRepository {
     expectedUpdatedAt: Date,
   ): Promise<MatchSubmissionRow> {
     try {
-      return await getDatabase().transaction(async (tx) => {
+      return await withDatabaseTimeouts(async (tx) => {
         const [before] = await tx.select().from(matchSubmissions)
           .where(eq(matchSubmissions.id, id)).for("update");
         if (!before) throw new ReviewNotFoundError("提交不存在。");
@@ -561,7 +554,6 @@ export class DrizzleReviewRepository {
 
   async getSummary(): Promise<AdminSummary> {
     try {
-      const db = getDatabase();
       const today = new Date();
       today.setUTCHours(0, 0, 0, 0);
       const [pending, approved, rejected, todayCount, publishedRows, recentEvents] = await Promise.all([
@@ -569,8 +561,8 @@ export class DrizzleReviewRepository {
         scalarCount(eq(matchSubmissions.status, "approved")),
         scalarCount(eq(matchSubmissions.status, "rejected")),
         scalarCount(gte(matchSubmissions.submittedAt, today)),
-        db.select({ value: count() }).from(publishedManualMatches),
-        db.select().from(adminAuditEvents).orderBy(desc(adminAuditEvents.createdAt)).limit(10),
+        withDatabaseTimeouts((tx) => tx.select({ value: count() }).from(publishedManualMatches)),
+        withDatabaseTimeouts((tx) => tx.select().from(adminAuditEvents).orderBy(desc(adminAuditEvents.createdAt)).limit(10)),
       ]);
       return {
         pending,
@@ -597,12 +589,11 @@ export class DrizzleReviewRepository {
 
   async listManualMatches(page = 1, pageSize = 50): Promise<ManualMatchPage> {
     try {
-      const db = getDatabase();
       const [rows, totals] = await Promise.all([
-        db.select().from(publishedManualMatches)
+        withDatabaseTimeouts((tx) => tx.select().from(publishedManualMatches)
           .orderBy(desc(publishedManualMatches.updatedAt))
-          .limit(pageSize).offset((page - 1) * pageSize),
-        db.select({ value: count() }).from(publishedManualMatches),
+          .limit(pageSize).offset((page - 1) * pageSize)),
+        withDatabaseTimeouts((tx) => tx.select({ value: count() }).from(publishedManualMatches)),
       ]);
       return { rows, total: Number(totals[0]?.value ?? 0), page, pageSize };
     } catch (error) {
@@ -612,9 +603,9 @@ export class DrizzleReviewRepository {
 
   async listVisibleManualMatches(): Promise<PublishedManualMatchRow[]> {
     try {
-      return await getDatabase().select().from(publishedManualMatches)
+      return await withDatabaseTimeouts((tx) => tx.select().from(publishedManualMatches)
         .where(eq(publishedManualMatches.hidden, false))
-        .orderBy(asc(publishedManualMatches.startTimeUtc));
+        .orderBy(asc(publishedManualMatches.startTimeUtc)));
     } catch (error) {
       translateDatabaseError(error);
     }
@@ -622,8 +613,8 @@ export class DrizzleReviewRepository {
 
   async getManualMatch(id: string): Promise<PublishedManualMatchRow | null> {
     try {
-      const [row] = await getDatabase().select().from(publishedManualMatches)
-        .where(eq(publishedManualMatches.id, id)).limit(1);
+      const [row] = await withDatabaseTimeouts((tx) => tx.select().from(publishedManualMatches)
+        .where(eq(publishedManualMatches.id, id)).limit(1));
       return row ?? null;
     } catch (error) {
       translateDatabaseError(error);
@@ -632,7 +623,7 @@ export class DrizzleReviewRepository {
 
   async createManualMatch(input: PublishedMatchWrite, actorId: string): Promise<PublishedManualMatchRow> {
     try {
-      return await getDatabase().transaction(async (tx) => {
+      return await withDatabaseTimeouts(async (tx) => {
         const [row] = await tx.insert(publishedManualMatches).values({
           ...publishedValues(input),
           publishedBy: actorId,
@@ -658,7 +649,7 @@ export class DrizzleReviewRepository {
     expectedUpdatedAt: Date,
   ): Promise<PublishedManualMatchRow> {
     try {
-      return await getDatabase().transaction(async (tx) => {
+      return await withDatabaseTimeouts(async (tx) => {
         const [before] = await tx.select().from(publishedManualMatches)
           .where(eq(publishedManualMatches.id, id)).for("update");
         if (!before) throw new ReviewNotFoundError("人工比赛不存在。");
@@ -694,7 +685,7 @@ export class DrizzleReviewRepository {
     expectedUpdatedAt: Date,
   ): Promise<PublishedManualMatchRow> {
     try {
-      return await getDatabase().transaction(async (tx) => {
+      return await withDatabaseTimeouts(async (tx) => {
         const [before] = await tx.select().from(publishedManualMatches)
           .where(eq(publishedManualMatches.id, id)).for("update");
         if (!before) throw new ReviewNotFoundError("人工比赛不存在。");
@@ -729,7 +720,7 @@ export class DrizzleReviewRepository {
     expectedUpdatedAt: Date,
   ): Promise<PublishedManualMatchRow> {
     try {
-      return await getDatabase().transaction(async (tx) => {
+      return await withDatabaseTimeouts(async (tx) => {
         const [before] = await tx.select().from(publishedManualMatches)
           .where(eq(publishedManualMatches.id, id)).for("update");
         if (!before) throw new ReviewNotFoundError("人工比赛不存在。");
@@ -761,13 +752,13 @@ export class DrizzleReviewRepository {
 
   async auditLegacyImport(actorId: string, counts: Record<string, number>): Promise<void> {
     try {
-      await getDatabase().insert(adminAuditEvents).values({
+      await withDatabaseTimeouts((tx) => tx.insert(adminAuditEvents).values({
         actorId,
         action: "legacy_submissions.imported",
         entityType: "legacy_import",
         entityId: crypto.randomUUID(),
         afterJson: counts,
-      });
+      }));
     } catch (error) {
       translateDatabaseError(error);
     }
@@ -775,7 +766,7 @@ export class DrizzleReviewRepository {
 
   async ping(): Promise<void> {
     try {
-      await getDatabase().execute(sql`select 1`);
+      await withDatabaseTimeouts((tx) => tx.execute(sql`select 1`));
     } catch (error) {
       translateDatabaseError(error);
     }

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { and, eq, inArray, lt, lte, sql } from "drizzle-orm";
-import { getDatabase, isDatabaseConfigured, safeDatabaseErrorCode } from "@/db";
+import { isDatabaseConfigured, safeDatabaseErrorCode, withDatabaseTimeouts } from "@/db";
 import { pandaScoreGameSnapshots } from "@/db/schema";
 import type { PandaScoreGameSyncState } from "./cache";
 import type { PandaGameSnapshot } from "./pandascore";
@@ -42,9 +42,9 @@ function isValidGeneration(value: unknown): value is number {
 export async function allocatePandaScoreSyncGeneration(): Promise<number | null> {
   if (!isDatabaseConfigured()) return null;
   try {
-    const rows = await getDatabase().execute<{ generation: string | number }>(
+    const rows = await withDatabaseTimeouts((tx) => tx.execute<{ generation: string | number }>(
       sql`select nextval('pandascore_sync_generation_seq') as generation`,
-    );
+    ));
     const generation = Number(rows[0]?.generation);
     return isValidGeneration(generation) ? generation : null;
   } catch (error) {
@@ -60,13 +60,13 @@ export async function readPersistentPandaScoreSnapshotGenerations(
     return { generations: {}, databaseAvailable: false, errorCode: "NOT_CONFIGURED" };
   }
   try {
-    const rows = await getDatabase()
+    const rows = await withDatabaseTimeouts((tx) => tx
       .select({
         game: pandaScoreGameSnapshots.game,
         fencingGeneration: pandaScoreGameSnapshots.fencingGeneration,
       })
       .from(pandaScoreGameSnapshots)
-      .where(inArray(pandaScoreGameSnapshots.game, [...games]));
+      .where(inArray(pandaScoreGameSnapshots.game, [...games])));
     const generations: Partial<Record<PandaGameKey, number>> = {};
     for (const row of rows) {
       if (!pandaGameKeys.includes(row.game as PandaGameKey)) continue;
@@ -89,10 +89,10 @@ export async function readPersistentPandaScoreSnapshots(
   }
 
   try {
-    const rows = await getDatabase()
+    const rows = await withDatabaseTimeouts((tx) => tx
       .select()
       .from(pandaScoreGameSnapshots)
-      .where(inArray(pandaScoreGameSnapshots.game, [...games]));
+      .where(inArray(pandaScoreGameSnapshots.game, [...games])));
     const snapshots: Partial<Record<PandaGameKey, PandaGameSnapshot>> = {};
     const states: Partial<Record<PandaGameKey, PandaScoreGameSyncState>> = {};
     for (const row of rows) {
@@ -134,7 +134,7 @@ export async function writePersistentPandaScoreSnapshot(
   const lastSuccessfulSyncAt = new Date(state.lastSuccessfulSyncAt ?? versionedSnapshot.fetchedAt);
   const lastAttemptAt = new Date(state.lastAttemptAt);
   try {
-    const written = await getDatabase()
+    const written = await withDatabaseTimeouts((tx) => tx
       .insert(pandaScoreGameSnapshots)
       .values({
         game: versionedSnapshot.game,
@@ -165,7 +165,7 @@ export async function writePersistentPandaScoreSnapshot(
         },
         setWhere: lt(pandaScoreGameSnapshots.fencingGeneration, fencingGeneration),
       })
-      .returning({ game: pandaScoreGameSnapshots.game });
+      .returning({ game: pandaScoreGameSnapshots.game }));
     return written.length === 1 ? "written" : "superseded";
   } catch (error) {
     console.warn(`[schedule-db] ${snapshot.game} persistent snapshot write failed (${safeDatabaseErrorCode(error)})`);
@@ -181,7 +181,7 @@ export async function recordPersistentPandaScoreFailure(
   if (!isValidGeneration(fencingGeneration)) return false;
   const attemptAt = new Date(state.lastAttemptAt);
   try {
-    const updated = await getDatabase()
+    const updated = await withDatabaseTimeouts((tx) => tx
       .update(pandaScoreGameSnapshots)
       .set({
         lastAttemptAt: attemptAt,
@@ -197,7 +197,7 @@ export async function recordPersistentPandaScoreFailure(
         lte(pandaScoreGameSnapshots.lastSuccessfulSyncAt, attemptAt),
         lte(pandaScoreGameSnapshots.lastAttemptAt, attemptAt),
       ))
-      .returning({ game: pandaScoreGameSnapshots.game });
+      .returning({ game: pandaScoreGameSnapshots.game }));
     return updated.length === 1;
   } catch (error) {
     console.warn(`[schedule-db] ${state.game} sync failure metadata write failed (${safeDatabaseErrorCode(error)})`);
