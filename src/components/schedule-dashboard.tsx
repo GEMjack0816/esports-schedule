@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
+import { getStreamLinkAccessibleName } from "@/lib/schedule/accessible-labels";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -120,6 +121,7 @@ function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string 
   const firstWins = scoreA !== null && scoreB !== null && scoreA > scoreB;
   const secondWins = scoreA !== null && scoreB !== null && scoreB > scoreA;
   const stream = match.streams[0];
+  const streamActionLabel = match.status === "running" ? "立即观看" : "直播入口";
 
   return (
     <article className={`match-card ${match.status === "running" ? "match-live" : ""}`}>
@@ -139,8 +141,14 @@ function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string 
         <span className="bo-label">{match.bestOf ? `BO${match.bestOf}` : "BO待定"}</span>
         <MatchStatusBadge status={match.status} />
         {stream ? (
-          <a className="watch-link" href={stream.url} target="_blank" rel="noreferrer">
-            <span>{match.status === "running" ? "立即观看" : "直播入口"}</span>
+          <a
+            className="watch-link"
+            href={stream.url}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={getStreamLinkAccessibleName(streamActionLabel, match)}
+          >
+            <span>{streamActionLabel}</span>
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.25 3.5h7.25v7.25M12.3 3.7l-8.8 8.8" /></svg>
           </a>
         ) : <span className="no-stream">暂无直播</span>}
