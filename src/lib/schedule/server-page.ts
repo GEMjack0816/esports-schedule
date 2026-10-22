@@ -155,10 +155,17 @@ function matchDateKey(match: EsportsMatch, timeZone: string): string {
   return Number.isNaN(time) ? "unscheduled" : dateKeyInTimeZone(new Date(time), timeZone);
 }
 
-function isInRange(key: string, filters: SchedulePageQueryFilters, dates: ReturnType<typeof dateKeys>): boolean {
+function isInRange(
+  match: EsportsMatch,
+  key: string,
+  filters: SchedulePageQueryFilters,
+  dates: ReturnType<typeof dateKeys>,
+): boolean {
   if (filters.selectedDate) return key === filters.selectedDate;
   switch (filters.range) {
-    case "today": return key === dates.today;
+    // Running fixtures remain visible today even when the provider omits a
+    // start time or their scheduled local date has already rolled over.
+    case "today": return key === dates.today || match.status === "running";
     case "tomorrow": return key === dates.tomorrow;
     case "seven": return key >= dates.today && key <= dates.sevenDaysOut;
     case "history": return key !== "unscheduled" && key < dates.today;
@@ -281,14 +288,14 @@ export function createSchedulePage(
   const signature = querySignature(filters);
   for (const match of payload.matches) {
     const key = matchDateKey(match, query.timeZone);
-    if (key === dates.today) rangeCounts.today += 1;
+    if (key === dates.today || match.status === "running") rangeCounts.today += 1;
     if (key === dates.tomorrow) rangeCounts.tomorrow += 1;
     if (key >= dates.today && key <= dates.sevenDaysOut) rangeCounts.seven += 1;
     if (key !== "unscheduled" && key < dates.today) rangeCounts.history += 1;
     if (match.status === "running") liveCount += 1;
     if (match.status === "scheduled") upcomingCount += 1;
 
-    const matchesFilters = isInRange(key, filters, dates)
+    const matchesFilters = isInRange(match, key, filters, dates)
       && (filters.game === "all" || match.game === filters.game)
       && (filters.league === "all" || match.league === filters.league)
       && (filters.status === "all" || match.status === filters.status)

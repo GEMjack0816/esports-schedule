@@ -50,6 +50,32 @@ describe("server-paginated schedule pages", () => {
     expect(page.rangeCounts).toEqual({ today: 1, tomorrow: 1, seven: 3, history: 1, all: 5 });
   });
 
+  it("keeps running fixtures visible in Today without leaking them into date-specific ranges", () => {
+    const schedule = payload([
+      match("live-undated", null, { status: "running" }),
+      match("live-yesterday", "2026-03-07T15:30:00.000Z", { status: "running" }),
+      match("today-scheduled", "2026-03-07T16:30:00.000Z"),
+      match("yesterday-scheduled", "2026-03-07T14:00:00.000Z"),
+      match("tomorrow-scheduled", "2026-03-08T16:30:00.000Z"),
+    ]);
+    const now = new Date("2026-03-08T12:00:00.000Z");
+    const today = createSchedulePage(schedule, query({ range: "today", timeZone: "Asia/Shanghai" }), now);
+    const tomorrow = createSchedulePage(schedule, query({ range: "tomorrow", timeZone: "Asia/Shanghai" }), now);
+    const selectedDate = createSchedulePage(
+      schedule,
+      query({ range: "today", date: "2026-03-08", timeZone: "Asia/Shanghai" }),
+      now,
+    );
+
+    expect(today.matches.map((item) => item.id).sort()).toEqual([
+      "live-undated", "live-yesterday", "today-scheduled",
+    ]);
+    expect(today.page.total).toBe(3);
+    expect(today.rangeCounts.today).toBe(3);
+    expect(tomorrow.matches.map((item) => item.id)).toEqual(["tomorrow-scheduled"]);
+    expect(selectedDate.matches.map((item) => item.id)).toEqual(["today-scheduled"]);
+  });
+
   it("applies game, status, league, and case-insensitive team/event search on the server", () => {
     const schedule = payload([
       match("kept", "2026-03-08T12:00:00.000Z", { game: "cs2", status: "running", league: "ESL", homeTeam: { name: "Aurora", logo: "" } }),
