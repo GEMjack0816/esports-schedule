@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { safeDatabaseErrorCode } from "./index";
+import { createPostgresClientOptions, safeDatabaseErrorCode } from "./index";
+
+describe("PostgreSQL client options", () => {
+  it("does not send unsupported timeout startup parameters to Neon poolers", () => {
+    const options = createPostgresClientOptions();
+    expect(options).not.toHaveProperty("connection");
+  });
+});
 
 describe("safeDatabaseErrorCode", () => {
   it.each([

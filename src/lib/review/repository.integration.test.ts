@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { getDatabase, safeDatabaseErrorCode } from "@/db";
+import { getDatabase, safeDatabaseErrorCode, withDatabaseTimeouts } from "@/db";
 import type { DrizzleReviewRepository } from "./repository";
 import type { MatchSubmissionInput } from "@/lib/submissions";
 import {
@@ -45,7 +45,15 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
   });
 
   it("bounds statement and row-lock waits without expiring external-effect transactions", async () => {
-    const rows = await getDatabase().execute<{
+    const defaultsBefore = await getDatabase().execute<{
+      statement_timeout: string;
+      lock_timeout: string;
+    }>(sql`
+      select
+        current_setting('statement_timeout') as statement_timeout,
+        current_setting('lock_timeout') as lock_timeout
+    `);
+    const rows = await withDatabaseTimeouts((tx) => tx.execute<{
       statement_timeout: string;
       lock_timeout: string;
       idle_in_transaction_session_timeout: string;
@@ -54,7 +62,7 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
         current_setting('statement_timeout') as statement_timeout,
         current_setting('lock_timeout') as lock_timeout,
         current_setting('idle_in_transaction_session_timeout') as idle_in_transaction_session_timeout
-    `);
+    `));
 
     expect(rows[0]).toEqual({
       statement_timeout: "30s",
@@ -62,7 +70,17 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       idle_in_transaction_session_timeout: "0",
     });
 
-    const transactionRows = await getDatabase().transaction(async (tx) => {
+    const defaultsAfter = await getDatabase().execute<{
+      statement_timeout: string;
+      lock_timeout: string;
+    }>(sql`
+      select
+        current_setting('statement_timeout') as statement_timeout,
+        current_setting('lock_timeout') as lock_timeout
+    `);
+    expect(defaultsAfter[0]).toEqual(defaultsBefore[0]);
+
+    const transactionRows = await withDatabaseTimeouts(async (tx) => {
       // Model time spent awaiting a Runtime Cache fence or another external
       // side effect between SQL statements while preserving transaction order.
       await new Promise((resolve) => setTimeout(resolve, 150));
@@ -70,6 +88,13 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     });
     expect(transactionRows[0]?.result).toBe(1);
   });
+
+  it("cancels a slow statement using a transaction-local timeout", async () => {
+    await expect(withDatabaseTimeouts(
+      (tx) => tx.execute(sql`select pg_sleep(0.2)`),
+      { statementTimeoutMs: 50, lockTimeoutMs: 100 },
+    )).rejects.toMatchObject({ code: "57014" });
+  }, 10_000);
 
   it("sanitizes the driver connection error after an idle transaction is terminated", async () => {
     const idleTimeoutClient = postgres(testUrl!, {

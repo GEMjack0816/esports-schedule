@@ -1,5 +1,6 @@
 import "server-only";
 
+import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -21,23 +22,45 @@ export function isDatabaseConfigured(): boolean {
   return Boolean(process.env.DATABASE_URL?.trim());
 }
 
+export function createPostgresClientOptions() {
+  return {
+    max: 3,
+    idle_timeout: 20,
+    connect_timeout: 5,
+    prepare: false,
+  } as const;
+}
+
 export function getDatabase(): PostgresJsDatabase<typeof schema> {
   if (database) return database;
   const url = process.env.DATABASE_URL?.trim();
   if (!url) throw new Error("DATABASE_NOT_CONFIGURED");
 
-  const client = postgres(url, {
-    max: 3,
-    idle_timeout: 20,
-    connect_timeout: 5,
-    connection: {
-      statement_timeout: DATABASE_STATEMENT_TIMEOUT_MS,
-      lock_timeout: DATABASE_LOCK_TIMEOUT_MS,
-    },
-    prepare: false,
-  });
+  const client = postgres(url, createPostgresClientOptions());
   database = drizzle({ client, schema });
   return database;
+}
+
+type DatabaseTransaction = Parameters<Parameters<PostgresJsDatabase<typeof schema>["transaction"]>[0]>[0];
+
+/**
+ * Apply per-transaction limits instead of PostgreSQL startup parameters.
+ * Neon transaction-pooler endpoints reject arbitrary startup parameters and
+ * only guarantee supported PostgreSQL session variables inside a transaction.
+ */
+export async function withDatabaseTimeouts<T>(
+  operation: (tx: DatabaseTransaction) => Promise<T>,
+  timeouts: { statementTimeoutMs?: number; lockTimeoutMs?: number } = {},
+): Promise<T> {
+  const statementTimeoutMs = timeouts.statementTimeoutMs ?? DATABASE_STATEMENT_TIMEOUT_MS;
+  const lockTimeoutMs = timeouts.lockTimeoutMs ?? DATABASE_LOCK_TIMEOUT_MS;
+  return getDatabase().transaction(async (tx) => {
+    await tx.execute(sql`select
+      set_config('statement_timeout', ${`${statementTimeoutMs}ms`}, true),
+      set_config('lock_timeout', ${`${lockTimeoutMs}ms`}, true)
+    `);
+    return operation(tx);
+  });
 }
 
 export function safeDatabaseErrorCode(error: unknown): string {
