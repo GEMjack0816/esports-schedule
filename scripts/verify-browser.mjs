@@ -105,6 +105,36 @@ for (const profile of [
   await statusSelect.selectOption("all");
   await page.getByRole("tab", { name: /^今日/ }).click();
 
+  // Client-only fixtures cover running matches that are undated or cross local midnight.
+  await page.route("**/api/matches", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    const syntheticRunning = [
+      { id: "browser-verify-running-undated", date: null, name: "Codex undated live fixture" },
+      { id: "browser-verify-running-yesterday", date: "2026-10-21T12:30:00.000Z", name: "Codex midnight live fixture" },
+    ].map((fixture) => ({
+      id: fixture.id,
+      provider: "manual",
+      providerMatchId: fixture.id,
+      game: "lol",
+      tournament: null,
+      league: fixture.name,
+      stage: null,
+      homeTeam: { name: fixture.name, acronym: "CLF", logo: "/team-placeholder.svg" },
+      awayTeam: { name: "Verification opponent", acronym: "VO", logo: "/team-placeholder.svg" },
+      homeScore: null,
+      awayScore: null,
+      bestOf: null,
+      status: "running",
+      startTimeUtc: fixture.date,
+      streams: [],
+      lastUpdatedAt: new Date().toISOString(),
+    }));
+    body.matches = [...body.matches, ...syntheticRunning];
+    await route.fulfill({ response, body: JSON.stringify(body) });
+  });
+
   const apiResponsePromise = page.waitForResponse(
     (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
     { timeout: 120_000 },
@@ -123,6 +153,13 @@ for (const profile of [
       return response.json();
     });
   }
+  await page.locator(".match-card").filter({ hasText: "Codex undated live fixture" }).waitFor();
+  const expectedTodayRunningCount = apiBody.matches.filter((match) => match.status === "running").length;
+  const todayTabCount = Number(await page.getByRole("tab", { name: /^今日/ }).locator("em").innerText());
+  await statusSelect.selectOption("running");
+  const todayRunningCount = await page.locator(".match-card").count();
+  const liveHeadingVisible = await page.getByText("正在进行", { exact: true }).count() > 0;
+  await statusSelect.selectOption("all");
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -196,6 +233,10 @@ for (const profile of [
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
+    expectedTodayRunningCount,
+    todayTabCount,
+    todayRunningCount,
+    liveHeadingVisible,
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
     refreshedApiStale: apiBody.stale,
@@ -248,6 +289,9 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (result.todayTabCount < result.expectedTodayRunningCount) failures.push(`${prefix}: Today tab count excludes one or more running fixtures`);
+  if (result.todayRunningCount < result.expectedTodayRunningCount) failures.push(`${prefix}: Today/Running filter hides an undated or prior-local-day live match`);
+  if (!result.liveHeadingVisible) failures.push(`${prefix}: running fixtures are not grouped under the live heading`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
@@ -268,4 +312,3 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log("Browser verification passed.");
-
