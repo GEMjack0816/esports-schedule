@@ -166,6 +166,12 @@ for (const profile of [
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
+  const submissionMetadata = await page.evaluate(() => ({
+    title: document.title,
+    canonical: document.querySelector('link[rel="canonical"]')?.getAttribute("href") ?? null,
+    openGraphTitle: document.querySelector('meta[property="og:title"]')?.getAttribute("content") ?? null,
+    openGraphUrl: document.querySelector('meta[property="og:url"]')?.getAttribute("content") ?? null,
+  }));
   const adminResponse = await page.goto(`${baseUrl}/admin`, {
     waitUntil: "networkidle",
     timeout: 120_000,
@@ -221,6 +227,7 @@ for (const profile of [
     optionalResourceFailureSamples: optionalResourceFailures.slice(0, 5),
     browserResourceWarningCount: browserResourceWarnings.length,
     submitFields,
+    submissionMetadata,
     anonymousAdminStatus: adminResponse?.status() ?? null,
     anonymousAdminAtLogin: new URL(page.url()).pathname === "/admin/login",
     anonymousAdminContainsPrivateData:
@@ -270,6 +277,12 @@ for (const result of results) {
   if (!result.versionMatchesHomepage) failures.push(`${prefix}: homepage/version commit mismatch`);
   if (!result.healthVersionMatches) failures.push(`${prefix}: health/version commit mismatch`);
   if (result.submitFields < 6) failures.push(`${prefix}: submission form incomplete`);
+  if (!result.submissionMetadata.title.includes("提交遗漏比赛")
+    || !result.submissionMetadata.canonical?.endsWith("/submit-match")
+    || !result.submissionMetadata.openGraphTitle?.includes("提交遗漏比赛")
+    || !result.submissionMetadata.openGraphUrl?.endsWith("/submit-match")) {
+    failures.push(`${prefix}: submission page canonical and Open Graph metadata should match the page`);
+  }
   if (result.anonymousAdminStatus !== 200) failures.push(`${prefix}: admin login HTTP ${result.anonymousAdminStatus}`);
   if (!result.anonymousAdminAtLogin) failures.push(`${prefix}: anonymous admin page was not redirected to login`);
   if (result.anonymousAdminContainsPrivateData) failures.push(`${prefix}: anonymous admin page exposed private data`);

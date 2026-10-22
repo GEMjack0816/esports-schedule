@@ -8,9 +8,13 @@ export const metadata: Metadata = {
   title: "赛界 PULSE｜五大电竞赛程聚合",
   description: "聚合英雄联盟、无畏契约、王者荣耀、CS2 与 Dota 2 的主要职业及半职业比赛。",
   metadataBase: new URL(PUBLIC_SITE_URL),
+  alternates: {
+    canonical: "/",
+  },
   openGraph: {
     title: "赛界 PULSE｜全球电竞赛程",
     description: "聚合五大电竞项目的主要职业及半职业比赛、比分与直播入口。",
+    url: PUBLIC_SITE_URL,
     type: "website",
     locale: "zh_CN",
   },
