@@ -161,15 +161,16 @@ function isInRange(
   filters: SchedulePageQueryFilters,
   dates: ReturnType<typeof dateKeys>,
 ): boolean {
+  if (match.status === "running") {
+    return !filters.selectedDate && (filters.range === "today" || filters.range === "all");
+  }
   if (filters.selectedDate) return key === filters.selectedDate;
+  if (filters.range === "all") return true;
   switch (filters.range) {
-    // Running fixtures remain visible today even when the provider omits a
-    // start time or their scheduled local date has already rolled over.
-    case "today": return key === dates.today || match.status === "running";
+    case "today": return key === dates.today;
     case "tomorrow": return key === dates.tomorrow;
     case "seven": return key >= dates.today && key <= dates.sevenDaysOut;
     case "history": return key !== "unscheduled" && key < dates.today;
-    case "all": return true;
   }
 }
 
@@ -288,10 +289,14 @@ export function createSchedulePage(
   const signature = querySignature(filters);
   for (const match of payload.matches) {
     const key = matchDateKey(match, query.timeZone);
-    if (key === dates.today || match.status === "running") rangeCounts.today += 1;
-    if (key === dates.tomorrow) rangeCounts.tomorrow += 1;
-    if (key >= dates.today && key <= dates.sevenDaysOut) rangeCounts.seven += 1;
-    if (key !== "unscheduled" && key < dates.today) rangeCounts.history += 1;
+    if (match.status === "running") {
+      rangeCounts.today += 1;
+    } else {
+      if (key === dates.today) rangeCounts.today += 1;
+      if (key === dates.tomorrow) rangeCounts.tomorrow += 1;
+      if (key >= dates.today && key <= dates.sevenDaysOut) rangeCounts.seven += 1;
+      if (key !== "unscheduled" && key < dates.today) rangeCounts.history += 1;
+    }
     if (match.status === "running") liveCount += 1;
     if (match.status === "scheduled") upcomingCount += 1;
 

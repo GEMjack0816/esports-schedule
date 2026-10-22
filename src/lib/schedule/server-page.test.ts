@@ -54,6 +54,7 @@ describe("server-paginated schedule pages", () => {
     const schedule = payload([
       match("live-undated", null, { status: "running" }),
       match("live-yesterday", "2026-03-07T15:30:00.000Z", { status: "running" }),
+      match("live-tomorrow", "2026-03-08T18:30:00.000Z", { status: "running" }),
       match("today-scheduled", "2026-03-07T16:30:00.000Z"),
       match("yesterday-scheduled", "2026-03-07T14:00:00.000Z"),
       match("tomorrow-scheduled", "2026-03-08T16:30:00.000Z"),
@@ -61,19 +62,34 @@ describe("server-paginated schedule pages", () => {
     const now = new Date("2026-03-08T12:00:00.000Z");
     const today = createSchedulePage(schedule, query({ range: "today", timeZone: "Asia/Shanghai" }), now);
     const tomorrow = createSchedulePage(schedule, query({ range: "tomorrow", timeZone: "Asia/Shanghai" }), now);
+    const seven = createSchedulePage(schedule, query({ range: "seven", timeZone: "Asia/Shanghai" }), now);
+    const history = createSchedulePage(schedule, query({ range: "history", timeZone: "Asia/Shanghai" }), now);
+    const all = createSchedulePage(schedule, query({ range: "all", timeZone: "Asia/Shanghai" }), now);
     const selectedDate = createSchedulePage(
       schedule,
       query({ range: "today", date: "2026-03-08", timeZone: "Asia/Shanghai" }),
       now,
     );
+    const selectedTomorrow = createSchedulePage(
+      schedule,
+      query({ range: "tomorrow", date: "2026-03-09", timeZone: "Asia/Shanghai" }),
+      now,
+    );
 
     expect(today.matches.map((item) => item.id).sort()).toEqual([
-      "live-undated", "live-yesterday", "today-scheduled",
+      "live-tomorrow", "live-undated", "live-yesterday", "today-scheduled",
     ]);
-    expect(today.page.total).toBe(3);
-    expect(today.rangeCounts.today).toBe(3);
+    expect(today.page.total).toBe(4);
+    expect(today.rangeCounts.today).toBe(4);
     expect(tomorrow.matches.map((item) => item.id)).toEqual(["tomorrow-scheduled"]);
+    expect(seven.matches.map((item) => item.id)).toEqual(["today-scheduled", "tomorrow-scheduled"]);
+    expect(history.matches.map((item) => item.id)).toEqual(["yesterday-scheduled"]);
+    expect(tomorrow.rangeCounts.tomorrow).toBe(1);
+    expect(seven.rangeCounts.seven).toBe(2);
+    expect(history.rangeCounts.history).toBe(1);
+    expect(all.page.total).toBe(schedule.matches.length);
     expect(selectedDate.matches.map((item) => item.id)).toEqual(["today-scheduled"]);
+    expect(selectedTomorrow.matches.map((item) => item.id)).toEqual(["tomorrow-scheduled"]);
   });
 
   it("applies game, status, league, and case-insensitive team/event search on the server", () => {
