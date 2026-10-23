@@ -7,6 +7,8 @@ const credentialParameterNames = new Set([
   "authorizationcode", "authenticode", "authtoken", "awsaccesskeyid", "bearer",
   "bearertoken", "code", "key", "keyid", "nonce", "sessionid", "state", "ticket",
   "assertion", "clientassertion", "codeverifier", "idtokenhint", "samlresponse",
+  // Vercel Deployment Protection also accepts its bypass secret in a query parameter.
+  "xvercelprotectionbypass",
 ]);
 const MAX_PUBLIC_URL_LENGTH = 2_048;
 const MAX_PARAMETER_ENCODING_DEPTH = 32;
