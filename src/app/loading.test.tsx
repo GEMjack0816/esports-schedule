@@ -9,6 +9,7 @@ describe("homepage loading state", () => {
     expect(html).toContain('aria-busy="true"');
     expect(html).toContain('role="status"');
     expect(html).toContain("正在加载赛程");
+    expect(html.indexOf('role="status"')).toBeLessThan(html.indexOf('aria-busy="true"'));
   });
 
   it("renders responsive placeholders without inventing match details", () => {
