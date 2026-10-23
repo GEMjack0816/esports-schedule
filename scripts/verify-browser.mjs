@@ -72,9 +72,16 @@ for (const profile of [
   });
 
   const response = await page.goto(auditUrl.toString(), { waitUntil: "networkidle", timeout: 120_000 });
+  const serverHtml = response ? await response.text() : "";
+  const hasUpcomingPlaceholderBeforeHydration = serverHtml.includes("UP NEXT · 24H</span><strong>—</strong>");
+  await page.waitForFunction(() => {
+    const count = document.querySelector(".hero-stats .stat-card:nth-child(2) strong")?.textContent?.trim();
+    return Boolean(count && count !== "—");
+  });
   const bodyText = await page.locator("body").innerText();
   const html = await page.content();
   const homepageCommit = await page.locator("#esports-schedule-version").getAttribute("data-git-commit");
+  const upcomingHeroText = await page.locator(".hero-stats .stat-card").nth(1).innerText();
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -98,6 +105,36 @@ for (const profile of [
   await statusSelect.selectOption("all");
   await page.getByRole("tab", { name: /^今日/ }).click();
 
+  // Client-only fixtures cover running matches that are undated or cross local midnight.
+  await page.route("**/api/matches", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    const syntheticRunning = [
+      { id: "browser-verify-running-undated", date: null, name: "Codex undated live fixture" },
+      { id: "browser-verify-running-yesterday", date: "2026-10-21T12:30:00.000Z", name: "Codex midnight live fixture" },
+    ].map((fixture) => ({
+      id: fixture.id,
+      provider: "manual",
+      providerMatchId: fixture.id,
+      game: "lol",
+      tournament: null,
+      league: fixture.name,
+      stage: null,
+      homeTeam: { name: fixture.name, acronym: "CLF", logo: "/team-placeholder.svg" },
+      awayTeam: { name: "Verification opponent", acronym: "VO", logo: "/team-placeholder.svg" },
+      homeScore: null,
+      awayScore: null,
+      bestOf: null,
+      status: "running",
+      startTimeUtc: fixture.date,
+      streams: [],
+      lastUpdatedAt: new Date().toISOString(),
+    }));
+    body.matches = [...body.matches, ...syntheticRunning];
+    await route.fulfill({ response, body: JSON.stringify(body) });
+  });
+
   const apiResponsePromise = page.waitForResponse(
     (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
     { timeout: 120_000 },
@@ -116,6 +153,13 @@ for (const profile of [
       return response.json();
     });
   }
+  await page.locator(".match-card").filter({ hasText: "Codex undated live fixture" }).waitFor();
+  const expectedTodayRunningCount = apiBody.matches.filter((match) => match.status === "running").length;
+  const todayTabCount = Number(await page.getByRole("tab", { name: /^今日/ }).locator("em").innerText());
+  await statusSelect.selectOption("running");
+  const todayRunningCount = await page.locator(".match-card").count();
+  const liveHeadingVisible = await page.getByText("正在进行", { exact: true }).count() > 0;
+  await statusSelect.selectOption("all");
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -172,6 +216,9 @@ for (const profile of [
     clientWidth: layout.clientWidth,
     overflowElements: layout.offenders,
     hasCoverageSummary: bodyText.includes("当前收录范围"),
+    hasUpcomingPlaceholderBeforeHydration,
+    hasExplicitUpcomingWindow: upcomingHeroText.includes("UP NEXT · 24H")
+      && upcomingHeroText.includes("24 小时内开赛"),
     hasSubmitLink: bodyText.includes("提交遗漏比赛"),
     hasProfessionalCoverageCopy: bodyText.includes("聚合五大电竞项目的主要职业及半职业比赛"),
     newPageMarkers: ["源快照时间", "提交遗漏比赛", "PandaScore 聚合数据"]
@@ -186,6 +233,10 @@ for (const profile of [
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
+    expectedTodayRunningCount,
+    todayTabCount,
+    todayRunningCount,
+    liveHeadingVisible,
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
     refreshedApiStale: apiBody.stale,
@@ -228,6 +279,8 @@ for (const result of results) {
   if (result.status !== 200) failures.push(`${prefix}: homepage HTTP ${result.status}`);
   if (result.horizontalOverflow) failures.push(`${prefix}: horizontal overflow`);
   if (!result.hasCoverageSummary) failures.push(`${prefix}: missing coverage summary`);
+  if (!result.hasUpcomingPlaceholderBeforeHydration) failures.push(`${prefix}: upcoming hero briefly renders an uninitialized count`);
+  if (!result.hasExplicitUpcomingWindow) failures.push(`${prefix}: upcoming hero window is not explicit`);
   if (!result.hasSubmitLink) failures.push(`${prefix}: missing submission link`);
   if (!result.hasProfessionalCoverageCopy) failures.push(`${prefix}: missing coverage copy`);
   if (result.newPageMarkers.length !== 3) failures.push(`${prefix}: missing new page markers`);
@@ -236,6 +289,9 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (result.todayTabCount < result.expectedTodayRunningCount) failures.push(`${prefix}: Today tab count excludes one or more running fixtures`);
+  if (result.todayRunningCount < result.expectedTodayRunningCount) failures.push(`${prefix}: Today/Running filter hides an undated or prior-local-day live match`);
+  if (!result.liveHeadingVisible) failures.push(`${prefix}: running fixtures are not grouped under the live heading`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
