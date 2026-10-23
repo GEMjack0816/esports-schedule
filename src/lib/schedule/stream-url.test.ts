@@ -50,6 +50,42 @@ describe("public external URL sanitization", () => {
       .toBe("https://stream.example/watch?redirect=https%3A%2F%2Fexample.com%2Fcallback%3Fmatch%3D42");
   });
 
+  it("rejects credential parameters across encoded and nested URL forms", () => {
+    const credentialNames = [
+      "token",
+      "access_token",
+      "api_key",
+      "x-access-key",
+      "client_secret",
+      "authorization",
+      "session_id",
+    ];
+    let checked = 0;
+
+    for (const name of credentialNames) {
+      for (let encodingDepth = 0; encodingDepth < 5; encodingDepth += 1) {
+        let encodedName = name.replace(/-/g, "%2D");
+        for (let layer = 0; layer < encodingDepth; layer += 1) {
+          encodedName = encodedName.replace(/%/g, "%25");
+        }
+
+        for (let nestedDepth = 0; nestedDepth < 4; nestedDepth += 1) {
+          let candidate = `https://inner.example/callback?${encodedName}=sentinel`;
+          for (let layer = 0; layer < nestedDepth; layer += 1) {
+            candidate = `https://wrapper.example/?redirect=${encodeURIComponent(candidate)}`;
+          }
+
+          if (candidate.length <= 2_048) {
+            expect(sanitizePublicExternalUrl(candidate)).toBeNull();
+            checked += 1;
+          }
+        }
+      }
+    }
+
+    expect(checked).toBeGreaterThan(100);
+  });
+
   it("keeps public HTTP source links but rejects credentials in either protocol", () => {
     expect(sanitizePublicHttpUrl("http://league.example/match?id=42"))
       .toBe("http://league.example/match?id=42");
