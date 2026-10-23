@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertAdminSessionLanding,
+  assertIsolatedDatabasePreflight,
   assertPreviewDeployment,
   parseVerificationTarget,
 } from "./verify-admin-safety.mjs";
@@ -89,5 +90,20 @@ describe("verify:admin session guard", () => {
       ...result,
       baseUrl: "https://preview.example.vercel.app",
     })).toThrow(/no test data was written/i);
+  });
+});
+
+describe("verify:admin isolated database preflight", () => {
+  it("allows writes only after the server confirms an isolated Preview database", () => {
+    expect(() => assertIsolatedDatabasePreflight({ status: 200, payload: { ok: true } })).not.toThrow();
+  });
+
+  it.each([
+    { status: 404, payload: { error: "Not found" } },
+    { status: 503, payload: { error: "Unavailable" } },
+    { status: 200, payload: { ok: false } },
+    { status: 200, payload: null },
+  ])("fails closed before writes for any unverified database target", (result) => {
+    expect(() => assertIsolatedDatabasePreflight(result)).toThrow(/no test data was written/i);
   });
 });

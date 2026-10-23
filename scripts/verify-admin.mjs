@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { chromium } from "playwright-core";
 import {
   assertAdminSessionLanding,
+  assertIsolatedDatabasePreflight,
   assertPreviewDeployment,
   parseVerificationTarget,
 } from "./verify-admin-safety.mjs";
@@ -70,6 +71,14 @@ try {
     baseUrl: target.baseUrl,
     bodyText: await page.locator("body").innerText(),
   });
+
+  const preflightResponse = await context.request.post(`${target.baseUrl}/api/admin/e2e-preflight`, {
+    headers: { Origin: new URL(target.baseUrl).origin },
+    timeout: 15_000,
+  });
+  const preflightPayload = await preflightResponse.json().catch(() => null);
+  assertIsolatedDatabasePreflight({ status: preflightResponse.status(), payload: preflightPayload });
+
   cleanupEnabled = true;
 
   const league = `Codex isolated review ${runId}`;

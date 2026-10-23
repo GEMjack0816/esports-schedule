@@ -39,6 +39,8 @@ describe("Preview-only admin E2E cleanup endpoint", () => {
     vi.stubEnv("VERCEL_GIT_COMMIT_SHA", "a".repeat(40));
     vi.stubEnv("VERCEL_DEPLOYMENT_ID", "dpl_preview");
     vi.stubEnv("VERCEL_URL", "preview.example.vercel.app");
+    vi.stubEnv("DATABASE_URL", "postgres://review:placeholder@preview-db.example.test/app_test");
+    vi.stubEnv("ADMIN_VERIFY_PREVIEW_DATABASE_HOSTS", "preview-db.example.test");
     mocks.requireAdminApi.mockReset().mockResolvedValue({ ok: true, sub: "admin-test" });
     mocks.trustedMutationOrigin.mockReset();
     mocks.getReviewRepository.mockReset().mockReturnValue({

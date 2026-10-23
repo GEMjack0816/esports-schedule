@@ -109,3 +109,9 @@ export function assertAdminSessionLanding({ status, url, baseUrl, bodyText }) {
     throw new Error("Authenticated Preview admin dashboard could not be verified; no test data was written.");
   }
 }
+
+export function assertIsolatedDatabasePreflight({ status, payload }) {
+  if (status !== 200 || !payload || payload.ok !== true) {
+    throw new Error("Preview database isolation could not be verified; no test data was written.");
+  }
+}
