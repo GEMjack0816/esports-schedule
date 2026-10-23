@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { isMatchInScheduleRange, scheduleDateGroupKey, type ScheduleDateRange } from "@/lib/schedule/date-range";
 import { getScheduleHeroStats } from "@/lib/schedule/hero-stats";
+import { subscribeToMinuteClock } from "@/lib/schedule/minute-clock";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = ScheduleDateRange;
@@ -171,8 +172,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   useEffect(() => {
     const updateClock = () => setClockNow(Date.now());
     updateClock();
-    const timer = window.setInterval(updateClock, 60_000);
-    return () => window.clearInterval(timer);
+    return subscribeToMinuteClock(updateClock);
   }, []);
 
   const today = addDaysKey(0, timeZone);
