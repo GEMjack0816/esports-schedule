@@ -7,6 +7,7 @@ const credentialParameterNames = new Set([
   "authorizationcode", "authenticode", "authtoken", "awsaccesskeyid", "bearer",
   "bearertoken", "code", "key", "keyid", "nonce", "sessionid", "state", "ticket",
 ]);
+const MAX_PUBLIC_URL_LENGTH = 2_048;
 const MAX_PARAMETER_ENCODING_DEPTH = 32;
 const MAX_NESTED_URL_DEPTH = 4;
 
@@ -77,7 +78,7 @@ function hasNestedCredentialParameters(value: string, nestedDepth: number): bool
 }
 
 function sanitizePublicUrl(value: unknown, httpsOnly: boolean): string | null {
-  if (typeof value !== "string" || value.length === 0 || value.length > 2_048) return null;
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_PUBLIC_URL_LENGTH) return null;
   let url: URL;
   try {
     url = new URL(value);
@@ -114,7 +115,8 @@ export function sanitizePublicStreams(streams: Stream[] | undefined): Stream[] {
 
 export function sanitizePublicTeam(team: Team): Team {
   let localLogo: string | null = null;
-  if (typeof team.logo === "string" && team.logo.startsWith("/")
+  if (typeof team.logo === "string" && team.logo.length <= MAX_PUBLIC_URL_LENGTH
+    && team.logo.startsWith("/")
     && !team.logo.startsWith("//") && !team.logo.includes("\\")) {
     try {
       const parsed = new URL(team.logo, "https://schedule.invalid");

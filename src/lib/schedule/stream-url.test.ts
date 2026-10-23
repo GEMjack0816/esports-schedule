@@ -110,4 +110,13 @@ describe("public external URL sanitization", () => {
     expect(sanitizePublicTeam({ name: "Team", logo: "/logo.svg?access_token=secret" }).logo)
       .toBe("/team-placeholder.svg");
   });
+
+  it("bounds local logo paths to the same public URL limit", () => {
+    const atLimit = `/${"a".repeat(2_047)}`;
+    const overLimit = `/${"a".repeat(2_048)}`;
+
+    expect(sanitizePublicTeam({ name: "Team", logo: atLimit }).logo).toBe(atLimit);
+    expect(sanitizePublicTeam({ name: "Team", logo: overLimit }).logo)
+      .toBe("/team-placeholder.svg");
+  });
 });
