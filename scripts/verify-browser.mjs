@@ -84,6 +84,7 @@ for (const profile of [
       ".theme-button",
       ".refresh-button",
       ".range-tabs button",
+      ".data-summary a",
       ".filter-panel input",
       ".filter-panel select",
       ".watch-link",
