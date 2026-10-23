@@ -12,6 +12,8 @@ describe("public external URL sanitization", () => {
     "https://stream.example/live?API-Key=private",
     "https://stream.example/live?X-API-Key=private",
     "https://stream.example/live?X-API-Key-Id=private",
+    "https://stream.example/live?X-Auth=private",
+    "https://stream.example/live?X-Session=private",
     "https://cdn.example/image?X-Amz-Credential=key%2Fscope&X-Amz-Signature=private",
     "https://cdn.example/image?X-Goog-Signature=private",
     "https://stream.example/live?auth_token=private",
