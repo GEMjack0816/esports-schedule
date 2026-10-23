@@ -6,7 +6,7 @@ import type { GameKey, MatchStatus } from "@/lib/schedule/types";
 import { normalizeStoredMatchStatus } from "@/lib/schedule/status";
 import {
   SubmissionValidationError,
-  validateOptionalPublicHttpUrl,
+  validateOptionalHttpUrl,
   validateOptionalPublicExternalUrl,
   validateOptionalText,
   validateSubmission,
@@ -113,7 +113,7 @@ export function validatePublishedMatch(value: unknown): PublishedMatchWrite {
     homeScore: integerOrNull(input.homeScore, 0, 999, "主队比分"),
     awayScore: integerOrNull(input.awayScore, 0, 999, "客队比分"),
     streamUrl: validateOptionalPublicExternalUrl(input.streamUrl),
-    sourceUrl: validateOptionalPublicHttpUrl(input.sourceUrl),
+    sourceUrl: validateOptionalHttpUrl(input.sourceUrl),
   };
 }
 

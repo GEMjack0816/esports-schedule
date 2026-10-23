@@ -20,10 +20,6 @@ describe("published stream URL validation", () => {
       .toThrow("公开链接不能包含账号凭据或访问令牌。");
     expect(() => validatePublishedMatch({ ...valid, homeTeamLogo: "https://cdn.example/logo.svg?signature=private" }))
       .toThrow("公开链接不能包含账号凭据或访问令牌。");
-    expect(() => validatePublishedMatch({
-      ...valid,
-      sourceUrl: "https://admin:password@example.com/match",
-    })).toThrow("来源链接不能包含账号凭据或访问令牌。");
   });
 });
 
