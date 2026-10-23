@@ -9,6 +9,8 @@ const credentialParameterNames = new Set([
   "assertion", "clientassertion", "codeverifier", "idtokenhint", "samlresponse",
   // Vercel Deployment Protection also accepts its bypass secret in a query parameter.
   "xvercelprotectionbypass",
+  // Cloudflare's clearance cookie proves a visitor passed a challenge.
+  "cfclearance",
 ]);
 const MAX_PUBLIC_URL_LENGTH = 2_048;
 const MAX_PARAMETER_ENCODING_DEPTH = 32;

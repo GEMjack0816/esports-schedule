@@ -42,6 +42,7 @@ describe("public external URL sanitization", () => {
     "https://stream.example/live?id_token_hint=eyJhbGciOiJSUzI1NiJ9",
     "https://stream.example/live?SAMLResponse=base64-assertion",
     "https://preview.example/?x-vercel-protection-bypass=opaque-value",
+    "https://stream.example/watch?cf_clearance=opaque-value",
     "https://stream.example/callback?oauth_code=one-time-credential",
     "https://stream.example/callback?auth_code=one-time-credential",
     "https://stream.example/callback?access_code=one-time-credential",
