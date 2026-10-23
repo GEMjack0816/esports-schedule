@@ -17,7 +17,7 @@ function isCredentialParameter(name: string): boolean {
     || /(?:token|secret|password|passwd|credential|authorization|auth|session|signature|jwt|sig)$/.test(normalized)
     // Providers commonly prefix API-Key with X- or another vendor name.
     // Keep this specific so harmless keys such as `monkey` remain allowed.
-    || /apikey(?:id)?$/.test(normalized);
+    || /(?:api|auth|access)key(?:id)?$/.test(normalized);
 }
 
 function hasCredentialParameters(search: string): boolean {
