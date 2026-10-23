@@ -19,6 +19,11 @@ function matchesCredentialParameter(name: string): boolean {
     // X-Amz-Credential / X-Amz-Signature and X-Goog-Signature. Match the
     // credential-bearing suffix independently of its vendor prefix.
     || /(?:token|secret|password|passwd|credential|authorization|auth|session|signature|jwt|sig|assertion|codeverifier|idtokenhint|samlresponse)$/.test(normalized)
+    // OAuth and login providers also use prefixed authorization-code names
+    // such as oauth_code / auth_code. A raw `code` is covered by the exact set;
+    // these suffixes close the common prefixed variants without rejecting
+    // unrelated public fields such as `match_code`.
+    || /(?:oauth|access|auth|authorization)code$/.test(normalized)
     // Providers commonly prefix API-Key with X- or another vendor name.
     // Keep this specific so harmless keys such as `monkey` remain allowed.
     || /(?:api|auth|access)key(?:id)?$/.test(normalized);

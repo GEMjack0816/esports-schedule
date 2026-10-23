@@ -38,6 +38,10 @@ describe("public external URL sanitization", () => {
     "https://stream.example/live?code_verifier=high-entropy-value",
     "https://stream.example/live?id_token_hint=eyJhbGciOiJSUzI1NiJ9",
     "https://stream.example/live?SAMLResponse=base64-assertion",
+    "https://stream.example/callback?oauth_code=one-time-credential",
+    "https://stream.example/callback?auth_code=one-time-credential",
+    "https://stream.example/callback?access_code=one-time-credential",
+    "https://stream.example/callback?X-OAuth-Code=one-time-credential",
     "https://stream.example/live?X-Client-Assertion=eyJhbGciOiJSUzI1NiJ9",
     "https://stream.example/live?X-Code-Verifier=high-entropy-value",
     "https://stream.example/live?X-ID-Token-Hint=eyJhbGciOiJSUzI1NiJ9",
@@ -57,6 +61,8 @@ describe("public external URL sanitization", () => {
       .toBe("https://stream.example/live?monkey=business");
     expect(sanitizePublicExternalUrl("https://stream.example/watch?redirect=https%3A%2F%2Fexample.com%2Fcallback%3Fmatch%3D42"))
       .toBe("https://stream.example/watch?redirect=https%3A%2F%2Fexample.com%2Fcallback%3Fmatch%3D42");
+    expect(sanitizePublicExternalUrl("https://stream.example/match?match_code=42"))
+      .toBe("https://stream.example/match?match_code=42");
   });
 
   it("keeps public OAuth metadata that does not contain authentication credentials", () => {
