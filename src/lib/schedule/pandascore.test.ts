@@ -361,4 +361,14 @@ describe("UTC ranges, time zones, and provider deduplication", () => {
     expect(result).toHaveLength(2);
     expect(result.find((match) => match.provider === "pandascore")?.id).toBe("new");
   });
+
+  it("removes credentialed stream URLs before matches enter public schedule results", () => {
+    const result = uniqueAndSort([baseMatch({
+      streams: [
+        { label: "private", url: "https://stream.example/live?access_token=secret" },
+        { label: "public", url: "https://stream.example/live" },
+      ],
+    })]);
+    expect(result[0]?.streams).toEqual([{ label: "public", url: "https://stream.example/live" }]);
+  });
 });

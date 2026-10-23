@@ -10,6 +10,7 @@ import type {
   Team,
 } from "./types";
 import { uniqueAndSort } from "./utils";
+import { sanitizePublicStreams } from "./stream-url";
 
 type LegacyTeam = Omit<Partial<Team>, "name"> & { name: string };
 
@@ -111,7 +112,7 @@ function normalizeTeam(team: LegacyTeam | undefined): Team {
 }
 
 function safeStreams(streams: Stream[] | undefined): Stream[] {
-  return (streams ?? []).filter((stream) => stream.url.startsWith("https://"));
+  return sanitizePublicStreams(streams);
 }
 
 function normalizeManualMatch(match: ManualRecord, now: string): EsportsMatch {

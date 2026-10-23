@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { gameKeys } from "./schedule/types";
 import type { GameKey } from "./schedule/types";
+import { sanitizePublicStreamUrl } from "./schedule/stream-url";
 
 export const SUBMISSION_LIMITS = {
   league: 120,
@@ -111,6 +112,14 @@ export function isHoneypotHit(value: unknown): boolean {
 export function validateOptionalHttpsUrl(value: unknown, maxLength = 500): string | null {
   if (value === null || value === undefined || value === "") return null;
   return validatedUrl(value, maxLength, true);
+}
+
+export function validateOptionalPublicStreamUrl(value: unknown, maxLength = 500): string | null {
+  const url = validateOptionalHttpsUrl(value, maxLength);
+  if (url === null) return null;
+  const sanitized = sanitizePublicStreamUrl(url);
+  if (!sanitized) throw new SubmissionValidationError("直播链接不能包含账号凭据或访问令牌。");
+  return sanitized;
 }
 
 export function validateOptionalHttpUrl(value: unknown, maxLength = 500): string | null {

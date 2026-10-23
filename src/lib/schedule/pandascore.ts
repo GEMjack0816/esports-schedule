@@ -11,6 +11,7 @@ import type {
 } from "./types";
 import { pandaEndpointKeys, pandaGameKeys } from "./types";
 import { normalizeMatchStatus } from "./status";
+import { sanitizePublicStreamUrl } from "./stream-url";
 
 const PANDASCORE_API = "https://api.pandascore.co";
 const PER_PAGE = 100;
@@ -174,12 +175,14 @@ function mapTeam(opponent: PandaOpponent | undefined): Team {
 
 function mapStreams(streams: PandaStream[] | undefined): Stream[] {
   return (streams ?? [])
-    .map((stream) => ({
-      label: stream.language?.toUpperCase() || (stream.main ? "主直播" : "直播"),
-      url: stream.raw_url || stream.embed_url || "",
-      official: stream.official,
-    }))
-    .filter((stream) => stream.url.startsWith("https://"));
+    .flatMap((stream) => {
+      const url = sanitizePublicStreamUrl(stream.raw_url || stream.embed_url || "");
+      return url ? [{
+        label: stream.language?.toUpperCase() || (stream.main ? "主直播" : "直播"),
+        url,
+        official: stream.official,
+      }] : [];
+    });
 }
 
 function inferBestOf(match: PandaMatch): number | null {

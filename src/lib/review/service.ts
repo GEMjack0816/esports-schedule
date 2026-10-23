@@ -8,6 +8,7 @@ import {
   SubmissionValidationError,
   validateOptionalHttpUrl,
   validateOptionalHttpsUrl,
+  validateOptionalPublicStreamUrl,
   validateOptionalText,
   validateSubmission,
 } from "@/lib/submissions";
@@ -112,7 +113,7 @@ export function validatePublishedMatch(value: unknown): PublishedMatchWrite {
     status: status as MatchStatus,
     homeScore: integerOrNull(input.homeScore, 0, 999, "主队比分"),
     awayScore: integerOrNull(input.awayScore, 0, 999, "客队比分"),
-    streamUrl: validateOptionalHttpsUrl(input.streamUrl),
+    streamUrl: validateOptionalPublicStreamUrl(input.streamUrl),
     sourceUrl: validateOptionalHttpUrl(input.sourceUrl),
   };
 }
