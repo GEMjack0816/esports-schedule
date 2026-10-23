@@ -4,9 +4,9 @@ import { AppErrorFallback } from "@/components/app-error-fallback";
 import styles from "@/components/app-error-fallback.module.css";
 import { THEME_BOOTSTRAP_SCRIPT } from "@/lib/theme-bootstrap";
 
-export default function GlobalError({ retry }: {
+export default function GlobalError({ reset }: {
   error: Error & { digest?: string };
-  retry: () => void;
+  reset: () => void;
 }) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
@@ -16,7 +16,7 @@ export default function GlobalError({ retry }: {
             __html: THEME_BOOTSTRAP_SCRIPT,
           }}
         />
-        <AppErrorFallback retry={retry} />
+        <AppErrorFallback reset={reset} />
       </body>
     </html>
   );

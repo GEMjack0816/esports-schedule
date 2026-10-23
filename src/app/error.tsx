@@ -2,9 +2,9 @@
 
 import { AppErrorFallback } from "@/components/app-error-fallback";
 
-export default function ErrorPage({ retry }: {
+export default function ErrorPage({ reset }: {
   error: Error & { digest?: string };
-  retry: () => void;
+  reset: () => void;
 }) {
-  return <AppErrorFallback retry={retry} />;
+  return <AppErrorFallback reset={reset} />;
 }

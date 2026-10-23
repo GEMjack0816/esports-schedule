@@ -2,7 +2,7 @@ import type { ReactElement } from "react";
 import Link from "next/link";
 import styles from "./app-error-fallback.module.css";
 
-export function AppErrorFallback({ retry }: { retry: () => void }): ReactElement {
+export function AppErrorFallback({ reset }: { reset: () => void }): ReactElement {
   return (
     <main className={styles.shell} aria-labelledby="app-error-title" aria-describedby="app-error-description">
       <section className={styles.card} role="alert">
@@ -12,7 +12,7 @@ export function AppErrorFallback({ retry }: { retry: () => void }): ReactElement
           刚才的页面遇到了一点问题。可以安全重试，或返回首页继续查看赛程。
         </p>
         <div className={styles.actions}>
-          <button className={styles.primary} type="button" onClick={retry}>
+          <button className={styles.primary} type="button" onClick={reset}>
             重试
           </button>
           <Link className={styles.secondary} href="/">

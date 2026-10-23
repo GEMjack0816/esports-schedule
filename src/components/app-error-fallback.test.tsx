@@ -8,7 +8,7 @@ type TestElementProps = { className?: string; children?: ReactNode; onClick?: un
 
 describe("AppErrorFallback", () => {
   it("renders generic recovery guidance without revealing exception details", () => {
-    const html = renderToStaticMarkup(<AppErrorFallback retry={() => undefined} />);
+    const html = renderToStaticMarkup(<AppErrorFallback reset={() => undefined} />);
 
     expect(html).toContain("页面暂时无法显示");
     expect(html).toContain("可以安全重试");
@@ -18,9 +18,9 @@ describe("AppErrorFallback", () => {
     expect(html).not.toContain("Error:");
   });
 
-  it("connects the retry button to the framework retry callback", () => {
-    const retry = vi.fn();
-    const tree = AppErrorFallback({ retry });
+  it("connects the retry button to the framework reset callback", () => {
+    const reset = vi.fn();
+    const tree = AppErrorFallback({ reset });
     const children = Children.toArray((tree as ReactElement<TestElementProps>).props.children);
     const card = children.find((child): child is ReactElement =>
       isValidElement(child) && (child as ReactElement<TestElementProps>).props.className === styles.card,
@@ -37,6 +37,6 @@ describe("AppErrorFallback", () => {
     const retryButton = actionChildren.find((child): child is ReactElement =>
       isValidElement(child) && child.type === "button",
     );
-    expect((retryButton as ReactElement<TestElementProps> | undefined)?.props.onClick).toBe(retry);
+    expect((retryButton as ReactElement<TestElementProps> | undefined)?.props.onClick).toBe(reset);
   });
 });
