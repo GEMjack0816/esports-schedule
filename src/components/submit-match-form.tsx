@@ -1,9 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { requestMatchSubmission } from "@/lib/submission-client";
+import {
+  getSubmissionButtonState,
+  requestMatchSubmission,
+  retrySecondsRemaining,
+} from "@/lib/submission-client";
 
 type SubmitState = { kind: "idle" | "success" | "info" | "error"; message: string };
 
@@ -11,6 +15,28 @@ export function SubmitMatchForm() {
   const [submitting, setSubmitting] = useState(false);
   const [state, setState] = useState<SubmitState>({ kind: "idle", message: "" });
   const submissionInFlight = useRef(false);
+  const [retryWindow, setRetryWindow] = useState<{ deadline: number; now: number } | null>(null);
+  const retryDeadline = retryWindow?.deadline ?? null;
+  const retryCountdown = retryWindow
+    ? retrySecondsRemaining(retryWindow.deadline, retryWindow.now)
+    : 0;
+  const submitButton = getSubmissionButtonState(submitting, retryCountdown);
+
+  useEffect(() => {
+    if (retryDeadline === null) return;
+
+    const updateClock = () => {
+      const now = Date.now();
+      setRetryWindow((current) => {
+        if (!current || current.deadline !== retryDeadline) return current;
+        return retrySecondsRemaining(current.deadline, now) === 0
+          ? null
+          : { ...current, now };
+      });
+    };
+    const timer = window.setInterval(updateClock, 1_000);
+    return () => window.clearInterval(timer);
+  }, [retryDeadline]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -35,6 +61,10 @@ export function SubmitMatchForm() {
         website: values.get("website"),
       });
       if (!result.ok) {
+        if (result.retryAfterSeconds) {
+          const now = Date.now();
+          setRetryWindow({ deadline: now + result.retryAfterSeconds * 1_000, now });
+        }
         setState({ kind: "error", message: result.message });
         return;
       }
@@ -114,7 +144,9 @@ export function SubmitMatchForm() {
           <input name="website" tabIndex={-1} autoComplete="off" />
         </label>
         <div className="submit-actions submit-wide">
-          <button type="submit" disabled={submitting}>{submitting ? "正在保存…" : "提交审核"}</button>
+          <button type="submit" disabled={submitButton.disabled}>
+            {submitButton.label}
+          </button>
           {state.kind !== "idle" && (
             <p className={`submit-message ${state.kind}`} role="status">{state.message}</p>
           )}

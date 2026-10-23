@@ -5,6 +5,10 @@ import {
   SUBMISSION_REQUEST_ERROR,
   SUBMISSION_REQUEST_TIMEOUT_ERROR,
   SUBMISSION_REQUEST_TIMEOUT_MS,
+  parseRetryAfterSeconds,
+  SUBMISSION_RETRY_AFTER_MAX_SECONDS,
+  retrySecondsRemaining,
+  getSubmissionButtonState,
 } from "./submission-client";
 
 afterEach(() => vi.useRealTimers());
@@ -49,6 +53,60 @@ describe("public submission transport", () => {
       });
     },
   );
+
+  it("preserves a valid 429 Retry-After value for the form cooldown", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      ok: false,
+      error: "提交过于频繁，请稍后重试。",
+    }, { status: 429, headers: { "Retry-After": "17" } }));
+
+    await expect(requestMatchSubmission(payload, fetcher)).resolves.toEqual({
+      ok: false,
+      message: "提交过于频繁，请稍后重试。",
+      retryAfterSeconds: 17,
+    });
+  });
+
+  it("ignores malformed, expired, or excessively long Retry-After values", async () => {
+    for (const value of [null, "", "0", "-1", "1.5", "not a date", "999999999"]) {
+      expect(parseRetryAfterSeconds(value)).toBeNull();
+    }
+    expect(parseRetryAfterSeconds(String(SUBMISSION_RETRY_AFTER_MAX_SECONDS + 1))).toBeNull();
+  });
+
+  it("supports standard HTTP-date Retry-After values", () => {
+    const now = Date.parse("2026-10-23T00:00:00.000Z");
+    expect(parseRetryAfterSeconds("Fri, 23 Oct 2026 00:00:17 GMT", now)).toBe(17);
+    expect(parseRetryAfterSeconds("Thu, 22 Oct 2026 23:59:59 GMT", now)).toBeNull();
+  });
+
+  it("rounds the cooldown upward so it never enables a retry early", () => {
+    const now = 1_000_000;
+    expect(retrySecondsRemaining(now + 1, now)).toBe(1);
+    expect(retrySecondsRemaining(now + 1_001, now)).toBe(2);
+    expect(retrySecondsRemaining(now, now)).toBe(0);
+  });
+
+  it("keeps the submit button disabled and labeled during cooldown", () => {
+    expect(getSubmissionButtonState(false, 5)).toEqual({
+      disabled: true,
+      label: "请等待 5 秒后重试",
+    });
+    expect(getSubmissionButtonState(true, 5)).toEqual({ disabled: true, label: "正在保存…" });
+    expect(getSubmissionButtonState(false, 0)).toEqual({ disabled: false, label: "提交审核" });
+  });
+
+  it("does not apply Retry-After from non-429 client errors", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      ok: false,
+      error: "请修正提交内容。",
+    }, { status: 400, headers: { "Retry-After": "17" } }));
+
+    await expect(requestMatchSubmission(payload, fetcher)).resolves.toEqual({
+      ok: false,
+      message: "请修正提交内容。",
+    });
+  });
 
   it("treats a duplicate response as an already-listed confirmation after an uncertain retry", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({

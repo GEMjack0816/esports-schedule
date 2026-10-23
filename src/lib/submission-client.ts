@@ -1,11 +1,37 @@
 export const SUBMISSION_REQUEST_TIMEOUT_MS = 15_000;
+export const SUBMISSION_RETRY_AFTER_MAX_SECONDS = 24 * 60 * 60;
 export const SUBMISSION_REQUEST_ERROR = "提交失败，请稍后重试。";
 export const SUBMISSION_REQUEST_TIMEOUT_ERROR = "提交超时，请检查网络后重试。";
 export const SUBMISSION_ALREADY_LISTED_MESSAGE = "这场比赛已在待审核或公开赛程中，无需重复提交。";
 
 type SubmissionRequestResult =
   | { ok: true; message: string; alreadyListed?: true }
-  | { ok: false; message: string };
+  | { ok: false; message: string; retryAfterSeconds?: number };
+
+export function parseRetryAfterSeconds(value: string | null, now = Date.now()): number | null {
+  const header = value?.trim();
+  if (!header) return null;
+
+  const seconds = /^\d+$/.test(header)
+    ? Number(header)
+    : Math.ceil((Date.parse(header) - now) / 1_000);
+  if (!Number.isSafeInteger(seconds) || seconds <= 0 || seconds > SUBMISSION_RETRY_AFTER_MAX_SECONDS) {
+    return null;
+  }
+  return seconds;
+}
+
+export function retrySecondsRemaining(deadline: number, now = Date.now()): number {
+  return Number.isFinite(deadline) ? Math.max(0, Math.ceil((deadline - now) / 1_000)) : 0;
+}
+
+export function getSubmissionButtonState(submitting: boolean, retrySeconds: number) {
+  if (submitting) return { disabled: true, label: "正在保存…" };
+  if (Number.isSafeInteger(retrySeconds) && retrySeconds > 0) {
+    return { disabled: true, label: `请等待 ${retrySeconds} 秒后重试` };
+  }
+  return { disabled: false, label: "提交审核" };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -89,7 +115,14 @@ export async function requestMatchSubmission(
         && body.code === "DUPLICATE_SUBMISSION") {
         return { ok: true, alreadyListed: true, message: SUBMISSION_ALREADY_LISTED_MESSAGE };
       }
-      return { ok: false, message: publicClientError(response, body) };
+      const retryAfterSeconds = response.status === 429
+        ? parseRetryAfterSeconds(response.headers.get("retry-after"))
+        : null;
+      return {
+        ok: false,
+        message: publicClientError(response, body),
+        ...(retryAfterSeconds === null ? {} : { retryAfterSeconds }),
+      };
     }
     return isSubmissionReceipt(body)
       ? { ok: true, message: body.message }
