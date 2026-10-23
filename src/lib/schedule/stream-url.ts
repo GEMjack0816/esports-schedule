@@ -8,7 +8,7 @@ const credentialParameterNames = new Set([
   "bearertoken", "code", "key", "keyid", "nonce", "sessionid", "state", "ticket",
 ]);
 
-function isCredentialParameter(name: string): boolean {
+function matchesCredentialParameter(name: string): boolean {
   const normalized = name.toLowerCase().replace(/[^a-z0-9]/g, "");
   return credentialParameterNames.has(normalized)
     // Signed cloud-storage URLs use vendor-prefixed names such as
@@ -18,6 +18,21 @@ function isCredentialParameter(name: string): boolean {
     // Providers commonly prefix API-Key with X- or another vendor name.
     // Keep this specific so harmless keys such as `monkey` remain allowed.
     || /(?:api|auth|access)key(?:id)?$/.test(normalized);
+}
+
+function isCredentialParameter(name: string): boolean {
+  let candidate = name;
+  // URLSearchParams decodes one layer. Continue decoding ASCII percent escapes
+  // so nested encodings such as X%252DAPI%252DKey cannot hide a credential key.
+  // URLs are capped at 2 KB, and suspiciously deep encodings fail closed.
+  for (let depth = 0; depth < 32; depth += 1) {
+    if (matchesCredentialParameter(candidate)) return true;
+    const decoded = candidate.replace(/%([0-7][0-9a-f])/gi, (_escape, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)));
+    if (decoded === candidate) return false;
+    candidate = decoded;
+  }
+  return true;
 }
 
 function hasCredentialParameters(search: string): boolean {
