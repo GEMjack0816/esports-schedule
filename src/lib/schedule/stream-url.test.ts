@@ -33,6 +33,15 @@ describe("public external URL sanitization", () => {
     "https://stream.example/live?auth_token=private",
     "https://cdn.example/image?AWSAccessKeyId=private",
     "https://stream.example/live?session_id=private",
+    "https://stream.example/live?client_assertion=eyJhbGciOiJSUzI1NiJ9",
+    "https://stream.example/live?assertion=eyJhbGciOiJSUzI1NiJ9",
+    "https://stream.example/live?code_verifier=high-entropy-value",
+    "https://stream.example/live?id_token_hint=eyJhbGciOiJSUzI1NiJ9",
+    "https://stream.example/live?SAMLResponse=base64-assertion",
+    "https://stream.example/live?X-Client-Assertion=eyJhbGciOiJSUzI1NiJ9",
+    "https://stream.example/live?X-Code-Verifier=high-entropy-value",
+    "https://stream.example/live?X-ID-Token-Hint=eyJhbGciOiJSUzI1NiJ9",
+    "https://stream.example/live?X-SAML-Response=base64-assertion",
     "https://stream.example/live?foo=1#client_secret=private",
     "https://viewer:password@stream.example/live",
     "http://stream.example/live",
@@ -48,6 +57,12 @@ describe("public external URL sanitization", () => {
       .toBe("https://stream.example/live?monkey=business");
     expect(sanitizePublicExternalUrl("https://stream.example/watch?redirect=https%3A%2F%2Fexample.com%2Fcallback%3Fmatch%3D42"))
       .toBe("https://stream.example/watch?redirect=https%3A%2F%2Fexample.com%2Fcallback%3Fmatch%3D42");
+  });
+
+  it("keeps public OAuth metadata that does not contain authentication credentials", () => {
+    expect(sanitizePublicExternalUrl(
+      "https://login.example/authorize?client_id=public-client&code_challenge=abc&code_challenge_method=S256&client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer",
+    )).not.toBeNull();
   });
 
   it("rejects credential parameters across encoded and nested URL forms", () => {

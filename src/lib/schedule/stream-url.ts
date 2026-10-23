@@ -6,6 +6,7 @@ const credentialParameterNames = new Set([
   "privatekey", "refreshtoken", "secret", "session", "signature", "sig", "token",
   "authorizationcode", "authenticode", "authtoken", "awsaccesskeyid", "bearer",
   "bearertoken", "code", "key", "keyid", "nonce", "sessionid", "state", "ticket",
+  "assertion", "clientassertion", "codeverifier", "idtokenhint", "samlresponse",
 ]);
 const MAX_PUBLIC_URL_LENGTH = 2_048;
 const MAX_PARAMETER_ENCODING_DEPTH = 32;
@@ -17,7 +18,7 @@ function matchesCredentialParameter(name: string): boolean {
     // Signed cloud-storage URLs use vendor-prefixed names such as
     // X-Amz-Credential / X-Amz-Signature and X-Goog-Signature. Match the
     // credential-bearing suffix independently of its vendor prefix.
-    || /(?:token|secret|password|passwd|credential|authorization|auth|session|signature|jwt|sig)$/.test(normalized)
+    || /(?:token|secret|password|passwd|credential|authorization|auth|session|signature|jwt|sig|assertion|codeverifier|idtokenhint|samlresponse)$/.test(normalized)
     // Providers commonly prefix API-Key with X- or another vendor name.
     // Keep this specific so harmless keys such as `monkey` remain allowed.
     || /(?:api|auth|access)key(?:id)?$/.test(normalized);
