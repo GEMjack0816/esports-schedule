@@ -107,6 +107,14 @@ describe("public external URL sanitization", () => {
     expect(checked).toBeGreaterThan(100);
   });
 
+  it.each([
+    `https://stream.example/watch?redirect=${encodeURIComponent("https://viewer:password@inner.example/live")}`,
+    `https://stream.example/watch#return=${encodeURIComponent("https://viewer:password@inner.example/live")}`,
+    `https://stream.example/watch?next=${encodeURIComponent("//viewer:password@inner.example/live")}`,
+  ])("rejects userinfo hidden in a nested URL", (value) => {
+    expect(sanitizePublicExternalUrl(value)).toBeNull();
+  });
+
   it("keeps public HTTP source links but rejects credentials in either protocol", () => {
     expect(sanitizePublicHttpUrl("http://league.example/match?id=42"))
       .toBe("http://league.example/match?id=42");

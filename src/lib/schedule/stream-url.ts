@@ -60,6 +60,7 @@ function hasNestedCredentialParameters(value: string, nestedDepth: number): bool
   let candidate = value;
   for (let encodingDepth = 0; encodingDepth < MAX_PARAMETER_ENCODING_DEPTH; encodingDepth += 1) {
     const looksNested = candidate.includes("?") || candidate.includes("#")
+      || /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(candidate)
       || /^[^/?#=&]+(?:=[^&]*)?(?:&[^=&]+=[^&]*)*$/.test(candidate);
     if (looksNested) {
       // Do not recurse indefinitely through attacker-controlled URL parameters.
@@ -67,7 +68,8 @@ function hasNestedCredentialParameters(value: string, nestedDepth: number): bool
       if (nestedDepth >= MAX_NESTED_URL_DEPTH) return true;
       try {
         const nested = new URL(candidate, "https://nested-url.invalid");
-        if (hasCredentialParameters(nested.search, nestedDepth + 1)
+        if (nested.username || nested.password
+          || hasCredentialParameters(nested.search, nestedDepth + 1)
           || hasCredentialParameters(nested.hash.slice(1), nestedDepth + 1)) return true;
       } catch {
         // A query-string value need not itself be a valid absolute URL.
