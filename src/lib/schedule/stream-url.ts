@@ -14,7 +14,10 @@ function isCredentialParameter(name: string): boolean {
     // Signed cloud-storage URLs use vendor-prefixed names such as
     // X-Amz-Credential / X-Amz-Signature and X-Goog-Signature. Match the
     // credential-bearing suffix independently of its vendor prefix.
-    || /(?:token|secret|password|passwd|credential|authorization|signature|jwt|sig)$/.test(normalized);
+    || /(?:token|secret|password|passwd|credential|authorization|signature|jwt|sig)$/.test(normalized)
+    // Providers commonly prefix API-Key with X- or another vendor name.
+    // Keep this specific so harmless keys such as `monkey` remain allowed.
+    || /apikey(?:id)?$/.test(normalized);
 }
 
 function hasCredentialParameters(search: string): boolean {

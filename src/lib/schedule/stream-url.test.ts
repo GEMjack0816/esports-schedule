@@ -10,6 +10,8 @@ describe("public external URL sanitization", () => {
   it.each([
     "https://stream.example/live?access_token=private",
     "https://stream.example/live?API-Key=private",
+    "https://stream.example/live?X-API-Key=private",
+    "https://stream.example/live?X-API-Key-Id=private",
     "https://cdn.example/image?X-Amz-Credential=key%2Fscope&X-Amz-Signature=private",
     "https://cdn.example/image?X-Goog-Signature=private",
     "https://stream.example/live?auth_token=private",
