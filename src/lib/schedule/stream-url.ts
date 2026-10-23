@@ -26,7 +26,9 @@ function matchesCredentialParameter(name: string): boolean {
     || /(?:oauth|access|auth|authorization)code$/.test(normalized)
     // Providers commonly prefix API-Key with X- or another vendor name.
     // Keep this specific so harmless keys such as `monkey` remain allowed.
-    || /(?:api|auth|access)key(?:id)?$/.test(normalized);
+    || /(?:api|auth|access)key(?:id)?$/.test(normalized)
+    // Azure API Management and other gateways use prefixed subscription keys.
+    || /subscriptionkey$/.test(normalized);
 }
 
 function decodeAsciiPercentEscapes(value: string): string {
