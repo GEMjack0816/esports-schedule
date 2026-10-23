@@ -1,17 +1,47 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import {
+  getSubmissionButtonState,
+  requestMatchSubmission,
+  retrySecondsRemaining,
+} from "@/lib/submission-client";
 
-type SubmitState = { kind: "idle" | "success" | "error"; message: string };
+type SubmitState = { kind: "idle" | "success" | "info" | "error"; message: string };
 
 export function SubmitMatchForm() {
   const [submitting, setSubmitting] = useState(false);
   const [state, setState] = useState<SubmitState>({ kind: "idle", message: "" });
+  const submissionInFlight = useRef(false);
+  const [retryWindow, setRetryWindow] = useState<{ deadline: number; now: number } | null>(null);
+  const retryDeadline = retryWindow?.deadline ?? null;
+  const retryCountdown = retryWindow
+    ? retrySecondsRemaining(retryWindow.deadline, retryWindow.now)
+    : 0;
+  const submitButton = getSubmissionButtonState(submitting, retryCountdown);
+
+  useEffect(() => {
+    if (retryDeadline === null) return;
+
+    const updateClock = () => {
+      const now = Date.now();
+      setRetryWindow((current) => {
+        if (!current || current.deadline !== retryDeadline) return current;
+        return retrySecondsRemaining(current.deadline, now) === 0
+          ? null
+          : { ...current, now };
+      });
+    };
+    const timer = window.setInterval(updateClock, 1_000);
+    return () => window.clearInterval(timer);
+  }, [retryDeadline]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submissionInFlight.current) return;
+    submissionInFlight.current = true;
     setSubmitting(true);
     setState({ kind: "idle", message: "" });
     const form = event.currentTarget;
@@ -19,31 +49,38 @@ export function SubmitMatchForm() {
 
     try {
       const localTime = String(values.get("scheduledAt") || "");
-      const response = await fetch("/api/submissions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          game: values.get("game"),
-          league: values.get("league"),
-          teamA: values.get("teamA"),
-          teamB: values.get("teamB"),
-          scheduledAt: new Date(localTime).toISOString(),
-          bestOf: values.get("bestOf") ? Number(values.get("bestOf")) : null,
-          sourceUrl: values.get("sourceUrl"),
-          notes: values.get("notes"),
-          website: values.get("website"),
-        }),
+      const result = await requestMatchSubmission({
+        game: values.get("game"),
+        league: values.get("league"),
+        teamA: values.get("teamA"),
+        teamB: values.get("teamB"),
+        scheduledAt: new Date(localTime).toISOString(),
+        bestOf: values.get("bestOf") ? Number(values.get("bestOf")) : null,
+        sourceUrl: values.get("sourceUrl"),
+        notes: values.get("notes"),
+        website: values.get("website"),
       });
-      const result = (await response.json()) as { ok: boolean; message?: string; error?: string };
-      if (!response.ok || !result.ok) throw new Error(result.error || "提交失败");
-      setState({ kind: "success", message: result.message || "已保存为待审核。" });
+      if (!result.ok) {
+        if (result.retryAfterSeconds) {
+          const now = Date.now();
+          setRetryWindow({ deadline: now + result.retryAfterSeconds * 1_000, now });
+        }
+        setState({ kind: "error", message: result.message });
+        return;
+      }
+      if (result.alreadyListed) {
+        setState({ kind: "info", message: result.message });
+        return;
+      }
+      setState({ kind: "success", message: result.message });
       form.reset();
-    } catch (error) {
+    } catch {
       setState({
         kind: "error",
-        message: error instanceof Error ? error.message : "提交失败，请稍后重试。",
+        message: "请检查比赛时间后重试。",
       });
     } finally {
+      submissionInFlight.current = false;
       setSubmitting(false);
     }
   }
@@ -57,7 +94,7 @@ export function SubmitMatchForm() {
         <p>请提供可核验的来源链接。提交内容只会进入待审核队列，审核通过前不会显示在公开赛程中。</p>
       </div>
 
-      <form className="submit-form" onSubmit={submit}>
+      <form className="submit-form" onSubmit={submit} aria-busy={submitting}>
         <label>
           <span>游戏</span>
           <select name="game" required defaultValue="lol">
@@ -107,7 +144,9 @@ export function SubmitMatchForm() {
           <input name="website" tabIndex={-1} autoComplete="off" />
         </label>
         <div className="submit-actions submit-wide">
-          <button type="submit" disabled={submitting}>{submitting ? "正在保存…" : "提交审核"}</button>
+          <button type="submit" disabled={submitButton.disabled}>
+            {submitButton.label}
+          </button>
           {state.kind !== "idle" && (
             <p className={`submit-message ${state.kind}`} role="status">{state.message}</p>
           )}
