@@ -10,7 +10,7 @@ import type {
   Team,
 } from "./types";
 import { uniqueAndSort } from "./utils";
-import { sanitizePublicStreams } from "./stream-url";
+import { sanitizePublicStreams, sanitizePublicTeam } from "./stream-url";
 
 type LegacyTeam = Omit<Partial<Team>, "name"> & { name: string };
 
@@ -104,11 +104,11 @@ function isManualOverride(value: unknown): value is ManualOverride {
 }
 
 function normalizeTeam(team: LegacyTeam | undefined): Team {
-  return {
+  return sanitizePublicTeam({
     name: team?.name?.trim() || "待定",
     acronym: team?.acronym?.trim() || null,
     logo: team?.logo || "/team-placeholder.svg",
-  };
+  });
 }
 
 function safeStreams(streams: Stream[] | undefined): Stream[] {
@@ -148,13 +148,13 @@ function normalizeManualMatch(match: ManualRecord, now: string): EsportsMatch {
 
 function applyTeamChanges(current: Team, changes: Partial<Team> | undefined): Team {
   if (!changes) return current;
-  return {
+  return sanitizePublicTeam({
     ...current,
     ...changes,
     name: changes.name?.trim() || current.name || "待定",
     acronym: changes.acronym === undefined ? current.acronym : changes.acronym?.trim() || null,
     logo: changes.logo || current.logo || "/team-placeholder.svg",
-  };
+  });
 }
 
 function matchKey(provider: MatchProvider, providerMatchId: string): string {

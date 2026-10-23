@@ -11,7 +11,7 @@ import type {
 } from "./types";
 import { pandaEndpointKeys, pandaGameKeys } from "./types";
 import { normalizeMatchStatus } from "./status";
-import { sanitizePublicStreamUrl } from "./stream-url";
+import { sanitizePublicExternalUrl } from "./stream-url";
 
 const PANDASCORE_API = "https://api.pandascore.co";
 const PER_PAGE = 100;
@@ -169,14 +169,14 @@ function mapTeam(opponent: PandaOpponent | undefined): Team {
   return {
     name: opponent?.opponent?.name?.trim() || "待定",
     acronym: opponent?.opponent?.acronym?.trim() || null,
-    logo: opponent?.opponent?.image_url || "/team-placeholder.svg",
+    logo: sanitizePublicExternalUrl(opponent?.opponent?.image_url) || "/team-placeholder.svg",
   };
 }
 
 function mapStreams(streams: PandaStream[] | undefined): Stream[] {
   return (streams ?? [])
     .flatMap((stream) => {
-      const url = sanitizePublicStreamUrl(stream.raw_url || stream.embed_url || "");
+      const url = sanitizePublicExternalUrl(stream.raw_url || stream.embed_url || "");
       return url ? [{
         label: stream.language?.toUpperCase() || (stream.main ? "主直播" : "直播"),
         url,

@@ -7,8 +7,7 @@ import { normalizeStoredMatchStatus } from "@/lib/schedule/status";
 import {
   SubmissionValidationError,
   validateOptionalHttpUrl,
-  validateOptionalHttpsUrl,
-  validateOptionalPublicStreamUrl,
+  validateOptionalPublicExternalUrl,
   validateOptionalText,
   validateSubmission,
 } from "@/lib/submissions";
@@ -104,16 +103,16 @@ export function validatePublishedMatch(value: unknown): PublishedMatchWrite {
     stage: validateOptionalText(input.stage, 120),
     homeTeamName,
     homeTeamAcronym: validateOptionalText(input.homeTeamAcronym, 20),
-    homeTeamLogo: validateOptionalHttpsUrl(input.homeTeamLogo),
+    homeTeamLogo: validateOptionalPublicExternalUrl(input.homeTeamLogo),
     awayTeamName,
     awayTeamAcronym: validateOptionalText(input.awayTeamAcronym, 20),
-    awayTeamLogo: validateOptionalHttpsUrl(input.awayTeamLogo),
+    awayTeamLogo: validateOptionalPublicExternalUrl(input.awayTeamLogo),
     startTimeUtc: timeOrNull(input.startTimeUtc),
     bestOf: integerOrNull(input.bestOf, 1, 9, "BO 赛制"),
     status: status as MatchStatus,
     homeScore: integerOrNull(input.homeScore, 0, 999, "主队比分"),
     awayScore: integerOrNull(input.awayScore, 0, 999, "客队比分"),
-    streamUrl: validateOptionalPublicStreamUrl(input.streamUrl),
+    streamUrl: validateOptionalPublicExternalUrl(input.streamUrl),
     sourceUrl: validateOptionalHttpUrl(input.sourceUrl),
   };
 }

@@ -1,4 +1,4 @@
-import type { Stream } from "./types";
+import type { Stream, Team } from "./types";
 
 const credentialParameterNames = new Set([
   "accesskey", "accesstoken", "apikey", "auth", "authorization", "clientsecret",
@@ -20,8 +20,8 @@ function hasCredentialParameters(search: string): boolean {
   return false;
 }
 
-/** Returns a public-safe HTTPS stream URL, or null when it contains credentials. */
-export function sanitizePublicStreamUrl(value: unknown): string | null {
+/** Returns a public-safe HTTPS external URL, or null when it contains credentials. */
+export function sanitizePublicExternalUrl(value: unknown): string | null {
   if (typeof value !== "string" || value.length === 0 || value.length > 2_048) return null;
   let url: URL;
   try {
@@ -36,7 +36,28 @@ export function sanitizePublicStreamUrl(value: unknown): string | null {
 
 export function sanitizePublicStreams(streams: Stream[] | undefined): Stream[] {
   return (streams ?? []).flatMap((stream) => {
-    const url = sanitizePublicStreamUrl(stream?.url);
+    const url = sanitizePublicExternalUrl(stream?.url);
     return url ? [{ ...stream, url }] : [];
   });
+}
+
+export function sanitizePublicTeam(team: Team): Team {
+  let localLogo: string | null = null;
+  if (typeof team.logo === "string" && team.logo.startsWith("/")
+    && !team.logo.startsWith("//") && !team.logo.includes("\\")) {
+    try {
+      const parsed = new URL(team.logo, "https://schedule.invalid");
+      if (parsed.origin === "https://schedule.invalid"
+        && !hasCredentialParameters(parsed.search)
+        && !hasCredentialParameters(parsed.hash.slice(1))) {
+        localLogo = team.logo;
+      }
+    } catch {
+      localLogo = null;
+    }
+  }
+  return {
+    ...team,
+    logo: localLogo ?? sanitizePublicExternalUrl(team.logo) ?? "/team-placeholder.svg",
+  };
 }

@@ -364,11 +364,13 @@ describe("UTC ranges, time zones, and provider deduplication", () => {
 
   it("removes credentialed stream URLs before matches enter public schedule results", () => {
     const result = uniqueAndSort([baseMatch({
+      homeTeam: { name: "A", logo: "https://cdn.example/logo.svg?api_key=secret" },
       streams: [
         { label: "private", url: "https://stream.example/live?access_token=secret" },
         { label: "public", url: "https://stream.example/live" },
       ],
     })]);
     expect(result[0]?.streams).toEqual([{ label: "public", url: "https://stream.example/live" }]);
+    expect(result[0]?.homeTeam.logo).toBe("/team-placeholder.svg");
   });
 });

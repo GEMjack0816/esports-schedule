@@ -9,14 +9,17 @@ vi.mock("next/cache", () => ({
 import { toggleManualMatchHidden, validatePublishedMatch } from "./service";
 
 describe("published stream URL validation", () => {
-  it("rejects credentialed stream URLs on admin writes", () => {
-    expect(() => validatePublishedMatch({
+  it("rejects credentialed stream and logo URLs on admin writes", () => {
+    const valid = {
       game: "lol",
       league: "League",
       homeTeamName: "A",
       awayTeamName: "B",
-      streamUrl: "https://stream.example/live?token=private",
-    })).toThrow("直播链接不能包含账号凭据或访问令牌。");
+    };
+    expect(() => validatePublishedMatch({ ...valid, streamUrl: "https://stream.example/live?token=private" }))
+      .toThrow("公开链接不能包含账号凭据或访问令牌。");
+    expect(() => validatePublishedMatch({ ...valid, homeTeamLogo: "https://cdn.example/logo.svg?signature=private" }))
+      .toThrow("公开链接不能包含账号凭据或访问令牌。");
   });
 });
 

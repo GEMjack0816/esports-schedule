@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { sanitizePublicStreamUrl, sanitizePublicStreams } from "./stream-url";
+import { sanitizePublicExternalUrl, sanitizePublicStreams, sanitizePublicTeam } from "./stream-url";
 
-describe("public stream URL sanitization", () => {
+describe("public external URL sanitization", () => {
   it.each([
     "https://stream.example/live?access_token=private",
     "https://stream.example/live?API-Key=private",
@@ -10,11 +10,11 @@ describe("public stream URL sanitization", () => {
     "http://stream.example/live",
     "not a URL",
   ])("rejects credentialed or non-public URL %s", (value) => {
-    expect(sanitizePublicStreamUrl(value)).toBeNull();
+    expect(sanitizePublicExternalUrl(value)).toBeNull();
   });
 
   it("keeps ordinary public stream links and harmless query parameters", () => {
-    expect(sanitizePublicStreamUrl("https://www.youtube.com/watch?v=abc&t=30s"))
+    expect(sanitizePublicExternalUrl("https://www.youtube.com/watch?v=abc&t=30s"))
       .toBe("https://www.youtube.com/watch?v=abc&t=30s");
   });
 
@@ -23,5 +23,16 @@ describe("public stream URL sanitization", () => {
       { label: "unsafe", url: "https://stream.example/live?token=secret" },
       { label: "safe", url: "https://stream.example/live", official: true },
     ])).toEqual([{ label: "safe", url: "https://stream.example/live", official: true }]);
+  });
+
+  it("replaces credentialed public team logos with the local placeholder", () => {
+    expect(sanitizePublicTeam({ name: "Team", logo: "https://cdn.example/logo.svg?token=secret" }))
+      .toEqual({ name: "Team", logo: "/team-placeholder.svg" });
+    expect(sanitizePublicTeam({ name: "Team", logo: "/team-placeholder.svg" }).logo)
+      .toBe("/team-placeholder.svg");
+    expect(sanitizePublicTeam({ name: "Team", logo: "/\\attacker.example/logo.svg" }).logo)
+      .toBe("/team-placeholder.svg");
+    expect(sanitizePublicTeam({ name: "Team", logo: "/logo.svg?access_token=secret" }).logo)
+      .toBe("/team-placeholder.svg");
   });
 });
