@@ -1,0 +1,133 @@
+.shell {
+  display: grid;
+  min-height: 100vh;
+  min-height: 100svh;
+  place-items: center;
+  padding: clamp(1rem, 4vw, 3rem);
+  color: #f4f7f9;
+  background: #090b0f;
+  font-family: Arial, "Microsoft YaHei", sans-serif;
+}
+
+.card {
+  width: min(100%, 34rem);
+  padding: clamp(1.5rem, 5vw, 2.5rem);
+  border: 1px solid #343c48;
+  border-radius: 1.25rem;
+  background: #11141a;
+  box-shadow: 0 1.5rem 5rem rgb(0 0 0 / 25%);
+}
+
+.eyebrow {
+  margin: 0 0 .75rem;
+  color: #67dcff;
+  font-size: .75rem;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 0;
+  font-size: clamp(1.5rem, 5vw, 2.125rem);
+  line-height: 1.25;
+}
+
+.description {
+  margin: 1rem 0 0;
+  color: #c0c8d2;
+  line-height: 1.7;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem;
+  margin-top: 1.5rem;
+}
+
+.primary,
+.secondary {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  padding: .65rem 1rem;
+  border: 1px solid transparent;
+  border-radius: .65rem;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.primary {
+  color: #06141a;
+  background: #67dcff;
+}
+
+.secondary {
+  color: #f4f7f9;
+  border-color: #596371;
+}
+
+.primary:focus-visible,
+.secondary:focus-visible {
+  outline: 3px solid #ffd166;
+  outline-offset: 3px;
+}
+
+@media (prefers-color-scheme: light) {
+  .shell {
+    color: #111820;
+    background: #f4f7f9;
+  }
+
+  .card {
+    border-color: #cbd4dc;
+    background: #fff;
+    box-shadow: 0 1.5rem 5rem rgb(30 55 70 / 12%);
+  }
+
+  .eyebrow {
+    color: #087e9e;
+  }
+
+  .description {
+    color: #43505c;
+  }
+
+  .secondary {
+    color: #111820;
+    border-color: #8b98a4;
+  }
+}
+
+:global(html[data-theme="light"]) .shell {
+  color: #111820;
+  background: #f4f7f9;
+}
+
+:global(html[data-theme="light"]) .card {
+  border-color: #cbd4dc;
+  background: #fff;
+  box-shadow: 0 1.5rem 5rem rgb(30 55 70 / 12%);
+}
+
+:global(html[data-theme="light"]) .eyebrow {
+  color: #087e9e;
+}
+
+:global(html[data-theme="light"]) .description {
+  color: #43505c;
+}
+
+:global(html[data-theme="light"]) .secondary {
+  color: #111820;
+  border-color: #8b98a4;
+}
+
+.globalBody {
+  min-height: 100vh;
+  margin: 0;
+}
