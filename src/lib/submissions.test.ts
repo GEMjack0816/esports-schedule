@@ -41,6 +41,14 @@ describe("public match submission validation", () => {
     expect(() => validateSubmission(candidate)).toThrow(SubmissionValidationError);
   });
 
+  it.each([
+    "https://reviewer:password@example.com/match",
+    "http://example.com/match?access_token=private",
+  ])("rejects credential-bearing source URLs before persistence: %s", (sourceUrl) => {
+    expect(() => validateSubmission({ ...valid, sourceUrl }))
+      .toThrow("来源链接不能包含账号凭据或访问令牌。");
+  });
+
   it("deduplicates reversed teams through the same canonical fingerprint", () => {
     const first = validateSubmission(valid);
     const second = validateSubmission({ ...valid, teamA: "team b", teamB: "TEAM A" });
