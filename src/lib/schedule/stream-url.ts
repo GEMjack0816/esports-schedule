@@ -5,7 +5,7 @@ const credentialParameterNames = new Set([
   "credential", "idtoken", "jwt", "oauth", "oauthtoken", "password", "passwd",
   "privatekey", "refreshtoken", "secret", "session", "signature", "sig", "token",
   "authorizationcode", "authenticode", "authtoken", "awsaccesskeyid", "bearer",
-  "bearertoken", "code", "nonce", "sessionid", "state", "ticket",
+  "bearertoken", "code", "key", "keyid", "nonce", "sessionid", "state", "ticket",
 ]);
 
 function isCredentialParameter(name: string): boolean {
@@ -14,7 +14,7 @@ function isCredentialParameter(name: string): boolean {
     // Signed cloud-storage URLs use vendor-prefixed names such as
     // X-Amz-Credential / X-Amz-Signature and X-Goog-Signature. Match the
     // credential-bearing suffix independently of its vendor prefix.
-    || /(?:key|token|secret|password|passwd|credential|authorization|signature|jwt|sig)$/.test(normalized);
+    || /(?:token|secret|password|passwd|credential|authorization|signature|jwt|sig)$/.test(normalized);
 }
 
 function hasCredentialParameters(search: string): boolean {

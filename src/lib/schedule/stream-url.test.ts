@@ -26,6 +26,8 @@ describe("public external URL sanitization", () => {
   it("keeps ordinary public stream links and harmless query parameters", () => {
     expect(sanitizePublicExternalUrl("https://www.youtube.com/watch?v=abc&t=30s"))
       .toBe("https://www.youtube.com/watch?v=abc&t=30s");
+    expect(sanitizePublicExternalUrl("https://stream.example/live?monkey=business"))
+      .toBe("https://stream.example/live?monkey=business");
   });
 
   it("keeps public HTTP source links but rejects credentials in either protocol", () => {
