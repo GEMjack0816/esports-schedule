@@ -103,7 +103,12 @@ export function sanitizePublicHttpUrl(value: unknown): string | null {
 export function sanitizePublicStreams(streams: Stream[] | undefined): Stream[] {
   return (streams ?? []).flatMap((stream) => {
     const url = sanitizePublicExternalUrl(stream?.url);
-    return url ? [{ ...stream, url }] : [];
+    if (!url) return [];
+    return [{
+      label: typeof stream.label === "string" ? stream.label : "直播",
+      url,
+      ...(typeof stream.official === "boolean" ? { official: stream.official } : {}),
+    }];
   });
 }
 
@@ -123,7 +128,10 @@ export function sanitizePublicTeam(team: Team): Team {
     }
   }
   return {
-    ...team,
+    name: typeof team.name === "string" ? team.name : "待定",
+    ...(typeof team.acronym === "string" || team.acronym === null
+      ? { acronym: team.acronym }
+      : {}),
     logo: localLogo ?? sanitizePublicExternalUrl(team.logo) ?? "/team-placeholder.svg",
   };
 }
