@@ -1,7 +1,11 @@
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { chromium } from "playwright-core";
-import { assertPreviewDeployment, parseVerificationTarget } from "./verify-admin-safety.mjs";
+import {
+  assertAdminSessionLanding,
+  assertPreviewDeployment,
+  parseVerificationTarget,
+} from "./verify-admin-safety.mjs";
 
 const [inputUrl, expectedRef, expectedSha] = process.argv.slice(2);
 const storageState = process.env.ADMIN_STORAGE_STATE;
@@ -57,9 +61,17 @@ try {
     throw new Error("Preview deployment metadata is invalid; no test data was written.");
   }
   verifiedDeployment = assertPreviewDeployment(target, version);
-  cleanupEnabled = true;
 
   const page = await context.newPage();
+  const dashboardResponse = await page.goto(`${target.baseUrl}/admin`, { waitUntil: "networkidle" });
+  assertAdminSessionLanding({
+    status: dashboardResponse?.status(),
+    url: page.url(),
+    baseUrl: target.baseUrl,
+    bodyText: await page.locator("body").innerText(),
+  });
+  cleanupEnabled = true;
+
   const league = `Codex isolated review ${runId}`;
   const approvedTeams = [`Approval A ${runId}`, `Approval B ${runId}`];
   const rejectedTeams = [`Reject A ${runId}`, `Reject B ${runId}`];

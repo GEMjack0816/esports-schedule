@@ -89,3 +89,23 @@ export function assertPreviewDeployment(target, version) {
     gitCommitRef: target.expectedRef,
   };
 }
+
+export function assertAdminSessionLanding({ status, url, baseUrl, bodyText }) {
+  let pageUrl;
+  let expectedOrigin;
+  try {
+    pageUrl = new URL(url);
+    expectedOrigin = new URL(baseUrl).origin;
+  } catch {
+    throw new Error("Authenticated Preview admin dashboard could not be verified; no test data was written.");
+  }
+  if (
+    status !== 200
+    || pageUrl.origin !== expectedOrigin
+    || pageUrl.pathname !== "/admin"
+    || typeof bodyText !== "string"
+    || !bodyText.includes("审核概览")
+  ) {
+    throw new Error("Authenticated Preview admin dashboard could not be verified; no test data was written.");
+  }
+}

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { assertPreviewDeployment, parseVerificationTarget } from "./verify-admin-safety.mjs";
+import {
+  assertAdminSessionLanding,
+  assertPreviewDeployment,
+  parseVerificationTarget,
+} from "./verify-admin-safety.mjs";
 
 const sha = "a".repeat(40);
 const ref = "safety/verify-admin-preview-target";
@@ -62,5 +66,28 @@ describe("verify:admin fail-closed target guard", () => {
     { deploymentId: null },
   ])("rejects mismatched or incomplete deployment metadata", (override) => {
     expect(() => assertPreviewDeployment(target(), version(override))).toThrow();
+  });
+});
+
+describe("verify:admin session guard", () => {
+  it("accepts the authenticated admin dashboard before any test write", () => {
+    expect(() => assertAdminSessionLanding({
+      status: 200,
+      url: "https://preview.example.vercel.app/admin",
+      baseUrl: "https://preview.example.vercel.app",
+      bodyText: "审核概览 待审核 最近操作",
+    })).not.toThrow();
+  });
+
+  it.each([
+    { status: 200, url: "https://preview.example.vercel.app/admin/login", bodyText: "审核概览" },
+    { status: 302, url: "https://preview.example.vercel.app/admin", bodyText: "审核概览" },
+    { status: 200, url: "https://other.example.vercel.app/admin", bodyText: "审核概览" },
+    { status: 200, url: "https://preview.example.vercel.app/admin", bodyText: "管理员 OAuth 尚未配置" },
+  ])("rejects missing or mismatched admin sessions before test writes", (result) => {
+    expect(() => assertAdminSessionLanding({
+      ...result,
+      baseUrl: "https://preview.example.vercel.app",
+    })).toThrow(/no test data was written/i);
   });
 });
