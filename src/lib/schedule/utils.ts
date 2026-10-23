@@ -1,5 +1,9 @@
 import type { EsportsMatch } from "./types";
-import { sanitizePublicStreams, sanitizePublicTeam } from "./stream-url";
+import {
+  sanitizePublicHttpUrl,
+  sanitizePublicStreams,
+  sanitizePublicTeam,
+} from "./stream-url";
 
 export function matchProviderKey(match: EsportsMatch): string {
   return `${match.provider}:${match.providerMatchId}`;
@@ -16,6 +20,7 @@ export function uniqueAndSort(matches: EsportsMatch[]): EsportsMatch[] {
         homeTeam: sanitizePublicTeam(match.homeTeam),
         awayTeam: sanitizePublicTeam(match.awayTeam),
         streams: sanitizePublicStreams(match.streams),
+        sourceUrl: sanitizePublicHttpUrl(match.sourceUrl),
       });
     }
   }

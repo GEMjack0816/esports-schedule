@@ -20,8 +20,7 @@ function hasCredentialParameters(search: string): boolean {
   return false;
 }
 
-/** Returns a public-safe HTTPS external URL, or null when it contains credentials. */
-export function sanitizePublicExternalUrl(value: unknown): string | null {
+function sanitizePublicUrl(value: unknown, httpsOnly: boolean): string | null {
   if (typeof value !== "string" || value.length === 0 || value.length > 2_048) return null;
   let url: URL;
   try {
@@ -29,9 +28,20 @@ export function sanitizePublicExternalUrl(value: unknown): string | null {
   } catch {
     return null;
   }
-  if (url.protocol !== "https:" || url.username || url.password) return null;
+  if ((httpsOnly ? url.protocol !== "https:" : !["http:", "https:"].includes(url.protocol))
+    || url.username || url.password) return null;
   if (hasCredentialParameters(url.search) || hasCredentialParameters(url.hash.slice(1))) return null;
   return url.toString();
+}
+
+/** Returns a public-safe HTTPS external URL, or null when it contains credentials. */
+export function sanitizePublicExternalUrl(value: unknown): string | null {
+  return sanitizePublicUrl(value, true);
+}
+
+/** Preserves legacy HTTP source links while redacting credential-bearing URLs. */
+export function sanitizePublicHttpUrl(value: unknown): string | null {
+  return sanitizePublicUrl(value, false);
 }
 
 export function sanitizePublicStreams(streams: Stream[] | undefined): Stream[] {

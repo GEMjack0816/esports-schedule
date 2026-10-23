@@ -373,4 +373,18 @@ describe("UTC ranges, time zones, and provider deduplication", () => {
     expect(result[0]?.streams).toEqual([{ label: "public", url: "https://stream.example/live" }]);
     expect(result[0]?.homeTeam.logo).toBe("/team-placeholder.svg");
   });
+
+  it("removes credential-bearing source URLs from public schedule results", () => {
+    const unsafe = uniqueAndSort([baseMatch({
+      sourceUrl: "https://reviewer:password@example.com/match?access_token=private",
+    })]);
+    const safe = uniqueAndSort([baseMatch({
+      sourceUrl: "https://example.com/match?round=final",
+    })]);
+
+    expect(unsafe[0]?.sourceUrl).toBeNull();
+    expect(safe[0]?.sourceUrl).toBe("https://example.com/match?round=final");
+    const legacyHttp = uniqueAndSort([baseMatch({ sourceUrl: "http://example.com/match?id=17" })]);
+    expect(legacyHttp[0]?.sourceUrl).toBe("http://example.com/match?id=17");
+  });
 });
