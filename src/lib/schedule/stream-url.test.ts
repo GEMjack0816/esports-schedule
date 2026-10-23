@@ -25,6 +25,9 @@ describe("public external URL sanitization", () => {
     "https://stream.example/live?token=",
     "https://stream.example/live#X%2DAuth%2DKey=private",
     "https://stream.example/live#X%252DAuth%252DKey=private",
+    "https://stream.example/watch?redirect=https%3A%2F%2Faccounts.example%2Fcallback%3Faccess_token%3Dprivate",
+    "https://stream.example/watch?next=%252Fadmin%253Ftoken%253Dprivate",
+    "https://stream.example/watch#return=%252Fredirect%253Fclient_secret%253Dprivate",
     "https://cdn.example/image?X-Amz-Credential=key%2Fscope&X-Amz-Signature=private",
     "https://cdn.example/image?X-Goog-Signature=private",
     "https://stream.example/live?auth_token=private",
@@ -43,6 +46,8 @@ describe("public external URL sanitization", () => {
       .toBe("https://www.youtube.com/watch?v=abc&t=30s");
     expect(sanitizePublicExternalUrl("https://stream.example/live?monkey=business"))
       .toBe("https://stream.example/live?monkey=business");
+    expect(sanitizePublicExternalUrl("https://stream.example/watch?redirect=https%3A%2F%2Fexample.com%2Fcallback%3Fmatch%3D42"))
+      .toBe("https://stream.example/watch?redirect=https%3A%2F%2Fexample.com%2Fcallback%3Fmatch%3D42");
   });
 
   it("keeps public HTTP source links but rejects credentials in either protocol", () => {
