@@ -50,7 +50,10 @@ npm start
 npm run verify:browser -- http://localhost:3000
 $env:ALLOW_ISOLATED_ADMIN_VERIFY = "1"
 $env:ADMIN_STORAGE_STATE = "<authenticated-playwright-storage-state>"
-npm run verify:admin -- <isolated-preview-url>
+$env:ADMIN_VERIFY_PREVIEW_HOSTS = "<preview-alias-host>,<unique-deployment-host>"
+npm run verify:admin -- <isolated-preview-url> <expected-preview-branch> <expected-full-commit-sha>
 ```
 
-`verify:admin` 会拒绝生产 Alias，并且只有在显式标记隔离环境且提供已认证浏览器状态时才执行公开提交、批准、编辑、隐藏、恢复、驳回和审计验证。
+`verify:admin` 在任何写入前都会要求 HTTPS URL 精确命中 `ADMIN_VERIFY_PREVIEW_HOSTS`，并使用已认证的浏览器状态读取 `/api/version`。只有服务名、`environment=preview`、Git ref、完整 commit SHA、Deployment ID 和 deployment URL 全部符合预期才会继续。生产域名、未列入 allowlist 的 host、缺失元数据及 SHA/ref 不匹配均 fail closed。
+
+测试提交在备注和来源链接中写入随机 run marker。验证通过部署指纹后，即使尚未确认某次提交请求的响应，脚本也会在 `finally` 中按 run marker 调用管理员清理 API；清理可安全重试。该 API 仅在非 `main` 的 Vercel Preview deployment 中启用，且要求管理员 session、同源 Origin 和有效 run marker。它在一个数据库事务中删除本次测试提交、由其发布的比赛及关联审计行，并同步/失效公开比赛缓存。Production、`main` 和缺失部署元数据时始终返回 404。若清理失败，脚本会以非零状态失败并报告 run ID，不能将 E2E 误报为通过。

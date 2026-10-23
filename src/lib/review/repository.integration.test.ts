@@ -452,6 +452,42 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect(approveResults.filter((result) => result.status === "rejected")).toHaveLength(1);
   });
 
+  it("cleans only E2E submissions bearing the matching run marker and their published/audit rows", async () => {
+    const runId = randomUUID();
+    const markedInput = {
+      ...submission(`e2e-cleanup-${runId}`),
+      sourceUrl: `https://example.com/isolated-admin-verification/${runId}`,
+      notes: `E2E verification run: ${runId}`,
+    };
+    const markedId = randomUUID();
+    submissionIds.push(markedId);
+    const pending = await repository.createSubmission(markedInput, { id: markedId });
+    const publishedMatch = await repository.approveSubmission(
+      markedId,
+      { submission: markedInput, published: published(markedInput) },
+      "admin-e2e-test",
+      pending.updatedAt,
+    );
+    manualMatchIds.push(publishedMatch.id);
+
+    const unrelated = await create(`e2e-cleanup-unrelated-${runId}`);
+    const unrelatedOnly = await repository.cleanupE2eVerificationRun(randomUUID());
+    expect(unrelatedOnly).toEqual({ cleaned: true, submissionsDeleted: 0, matchesDeleted: 0 });
+    expect((await cleanup`select id from match_submissions where id = ${unrelated.id}::uuid`)).toHaveLength(1);
+
+    const result = await repository.cleanupE2eVerificationRun(runId);
+    expect(result).toEqual({ cleaned: true, submissionsDeleted: 1, matchesDeleted: 1 });
+    expect(await cleanup`select id from match_submissions where id = ${markedId}::uuid`).toHaveLength(0);
+    expect(await cleanup`select id from published_manual_matches where id = ${publishedMatch.id}::uuid`).toHaveLength(0);
+    expect(await cleanup`select id from admin_audit_events where entity_id = ${markedId}::uuid`).toHaveLength(0);
+    expect(await cleanup`select id from admin_audit_events where entity_id = ${publishedMatch.id}::uuid`).toHaveLength(0);
+    expect(await repository.cleanupE2eVerificationRun(runId)).toEqual({
+      cleaned: true,
+      submissionsDeleted: 0,
+      matchesDeleted: 0,
+    });
+  });
+
   it("prevents stale edit/hide overwrites", async () => {
     const input = submission(`edit-hide-${randomUUID()}`);
     const match = await repository.createManualMatch(published(input), "admin-a");
