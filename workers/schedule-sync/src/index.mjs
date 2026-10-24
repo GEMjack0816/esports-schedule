@@ -352,7 +352,24 @@ export async function invokeScheduleSync({
       continue;
     }
 
-    const payload = await readJsonBody(response);
+    let payload;
+    try {
+      payload = await readJsonBody(response);
+    } catch (error) {
+      // Fetch can resolve after headers arrive and still fail while the body
+      // is streaming (for example, a timeout or connection reset). Treat only
+      // transport/read failures as retryable; malformed or oversized payloads
+      // remain deterministic protocol failures.
+      if (error instanceof SyncInvocationError) throw error;
+      cancelResponseBodyWithoutBlocking(response);
+      if (attempt === MAX_ATTEMPTS - 1) {
+        throw new SyncInvocationError("response_read_failure", response.status);
+      }
+      const delay = retryDelayFor(response, attempt, nowImpl());
+      if (deadline - nowImpl() <= delay) throw new SyncInvocationError("retry_budget_exhausted");
+      await waitImpl(delay);
+      continue;
+    }
     return validateSyncPayload(payload, response.status);
   }
 

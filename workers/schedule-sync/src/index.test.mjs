@@ -220,6 +220,56 @@ describe("schedule sync Worker client", () => {
     expect(waits).toEqual([500, 1_000]);
   });
 
+  it("retries a response-body transport failure after the response headers arrive", async () => {
+    const waits = [];
+    let attempts = 0;
+    const result = await invokeScheduleSync({
+      secret: syncSecret,
+      waitImpl: async (milliseconds) => waits.push(milliseconds),
+      fetchImpl: async () => {
+        attempts += 1;
+        if (attempts > 1) return response();
+        const body = new ReadableStream({
+          start(controller) {
+            controller.error(new Error(`private stream detail ${syncSecret}`));
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+
+    expect(result).toMatchObject({ outcome: "success", generation: 12 });
+    expect(attempts).toBe(2);
+    expect(waits).toEqual([500]);
+  });
+
+  it("bounds repeated response-body transport failures and sanitizes the final error", async () => {
+    const waits = [];
+    let attempts = 0;
+    await expect(invokeScheduleSync({
+      secret: syncSecret,
+      waitImpl: async (milliseconds) => waits.push(milliseconds),
+      fetchImpl: async () => {
+        attempts += 1;
+        const body = new ReadableStream({
+          start(controller) {
+            controller.error(new Error(`private stream detail ${syncSecret}`));
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    })).rejects.toMatchObject({ code: "response_read_failure", httpStatus: 200 });
+
+    expect(attempts).toBe(3);
+    expect(waits).toEqual([500, 1_000]);
+  });
+
   it("retries a transient non-JSON response when body cancellation never settles", async () => {
     const cancel = vi.fn(() => new Promise(() => {}));
     let attempts = 0;
