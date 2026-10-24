@@ -83,7 +83,29 @@ for (const profile of [
 
   const gameFilterCounts = {};
   const statusFilterCounts = {};
+  const initialScheduleCounts = await page.locator(".schedule-section").evaluate((section) => ({
+    loaded: Number(section.getAttribute("data-schedule-loaded-count")),
+    total: Number(section.getAttribute("data-schedule-total-count")),
+  }));
+  const fullScheduleResponsePromise = initialScheduleCounts.loaded < initialScheduleCounts.total
+    ? page.waitForResponse(
+      (candidate) => new URL(candidate.url()).pathname === "/api/matches" && candidate.request().method() === "GET",
+      { timeout: 120_000 },
+    )
+    : null;
   await page.getByRole("tab", { name: /全部收录/ }).click();
+  let fullScheduleResponseStatus = null;
+  if (fullScheduleResponsePromise) {
+    const fullScheduleResponse = await fullScheduleResponsePromise;
+    fullScheduleResponseStatus = fullScheduleResponse.status();
+    if (!fullScheduleResponse.ok()) throw new Error(`Full schedule request returned HTTP ${fullScheduleResponse.status()}`);
+    await page.waitForFunction(() => {
+      const section = document.querySelector(".schedule-section");
+      return !!section
+        && Number(section.getAttribute("data-schedule-loaded-count"))
+          >= Number(section.getAttribute("data-schedule-total-count"));
+    }, { timeout: 120_000 });
+  }
   const gameSelect = page.locator(".filter-panel select").nth(0);
   for (const game of ["lol", "valorant", "honor-of-kings", "cs2", "dota2"]) {
     await gameSelect.selectOption(game);
@@ -182,6 +204,9 @@ for (const profile of [
       .filter((phrase) => html.includes(phrase)),
     syncStatusCards,
     gameOptions,
+    initialScheduleLoadedCount: initialScheduleCounts.loaded,
+    totalScheduleMatchCount: initialScheduleCounts.total,
+    fullScheduleResponseStatus,
     gameFilterCounts,
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
