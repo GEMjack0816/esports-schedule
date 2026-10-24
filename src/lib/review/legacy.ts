@@ -19,8 +19,17 @@ export async function importLegacyRuntimeSubmissions(
 ): Promise<LegacyImportCounts> {
   const cache = legacyCache();
   const index = await cache.get(INDEX_KEY);
+  if (
+    index !== undefined
+    && index !== null
+    && (!Array.isArray(index) || index.some((value) => typeof value !== "string"))
+  ) {
+    // A malformed index cannot safely be treated as empty or partially read.
+    // Abort before repository writes so the audit cannot claim a partial import.
+    throw new Error("Legacy submission index is invalid.");
+  }
   const ids = Array.isArray(index)
-    ? [...new Set(index.filter((value): value is string => typeof value === "string"))]
+    ? [...new Set(index)]
     : [];
   const records: LegacySubmissionImportRecord[] = [];
   let invalid = 0;
@@ -65,3 +74,4 @@ export async function importLegacyRuntimeSubmissions(
 
   return repository.importLegacySubmissions(actorId, records, ids.length, invalid);
 }
+

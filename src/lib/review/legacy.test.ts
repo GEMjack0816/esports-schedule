@@ -84,4 +84,20 @@ describe("legacy Runtime Cache submission migration", () => {
       .rejects.toThrow("LEGACY_RUNTIME_CACHE_READ_FAILED");
     expect(importLegacySubmissions).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["object", { unexpected: "value" }],
+    ["non-string entry", ["33333333-3333-4333-8333-333333333333", 7]],
+  ])("aborts before database import when the legacy index contains an invalid %s", async (_label, index) => {
+    cacheState.values.clear();
+    cacheState.getErrorFor = null;
+    cacheState.values.set("pending-index-v1", index);
+    const importLegacySubmissions = vi.fn();
+    const repository = { importLegacySubmissions } as unknown as DrizzleReviewRepository;
+
+    await expect(importLegacyRuntimeSubmissions("admin-user", repository))
+      .rejects.toThrow("Legacy submission index is invalid.");
+    expect(importLegacySubmissions).not.toHaveBeenCalled();
+  });
 });
+
