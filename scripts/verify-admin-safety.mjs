@@ -110,6 +110,45 @@ export function assertAdminSessionLanding({ status, url, baseUrl, bodyText }) {
   }
 }
 
+const RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function createPreviewCleanupRequest(verifiedDeployment, runId) {
+  if (
+    !verifiedDeployment
+    || typeof verifiedDeployment.deploymentUrl !== "string"
+    || !RUN_ID_PATTERN.test(runId)
+  ) {
+    throw new Error("Preview cleanup target is invalid.");
+  }
+
+  let deploymentUrl;
+  try {
+    deploymentUrl = new URL(verifiedDeployment.deploymentUrl);
+  } catch {
+    throw new Error("Preview cleanup target is invalid.");
+  }
+  if (
+    deploymentUrl.protocol !== "https:"
+    || deploymentUrl.username
+    || deploymentUrl.password
+    || deploymentUrl.port
+    || deploymentUrl.pathname !== "/"
+    || deploymentUrl.search
+    || deploymentUrl.hash
+  ) {
+    throw new Error("Preview cleanup target is invalid.");
+  }
+
+  return {
+    url: new URL("/api/admin/e2e-cleanup", deploymentUrl).toString(),
+    options: {
+      headers: { Origin: deploymentUrl.origin },
+      data: { runId },
+      timeout: 15_000,
+    },
+  };
+}
+
 export function assertIsolatedDatabasePreflight({ status, payload }) {
   if (status !== 200 || !payload || payload.ok !== true) {
     throw new Error("Preview database isolation could not be verified; no test data was written.");
