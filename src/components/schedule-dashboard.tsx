@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
-import { isMatchInScheduleRange, scheduleDateGroupKey, type ScheduleDateRange } from "@/lib/schedule/date-range";
+import { isMatchInScheduleRange, isMatchOnSelectedDate, scheduleDateGroupKey, type ScheduleDateRange } from "@/lib/schedule/date-range";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = ScheduleDateRange;
@@ -193,7 +193,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     return payload.matches.filter((match) => {
       const key = matchDateKey(match, timeZone);
       const inRange = selectedDate
-        ? key === selectedDate
+        ? isMatchOnSelectedDate(match.status, key, selectedDate, today)
         : isMatchInScheduleRange(match.status, key, range, today, tomorrow, sevenDaysOut);
       const haystack = [match.homeTeam.name, match.awayTeam.name, match.league, match.tournament || "", match.stage || ""]
         .join(" ").toLocaleLowerCase();

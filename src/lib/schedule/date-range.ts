@@ -19,6 +19,16 @@ export function isMatchInScheduleRange(
   return dateKey < today;
 }
 
+/** A manually selected Today date still includes active matches with missing or earlier local dates. */
+export function isMatchOnSelectedDate(
+  status: MatchStatus,
+  dateKey: string,
+  selectedDate: string,
+  today: string,
+): boolean {
+  return dateKey === selectedDate || (selectedDate === today && status === "running");
+}
+
 export function scheduleDateGroupKey(match: Pick<EsportsMatch, "status">, dateKey: string): string {
   return match.status === "running" ? "live" : dateKey;
 }

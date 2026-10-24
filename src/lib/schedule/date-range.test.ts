@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isMatchInScheduleRange, scheduleDateGroupKey } from "./date-range";
+import { isMatchInScheduleRange, isMatchOnSelectedDate, scheduleDateGroupKey } from "./date-range";
 
 const today = "2026-10-22";
 const tomorrow = "2026-10-23";
@@ -43,5 +43,18 @@ describe("scheduleDateGroupKey", () => {
   it("keeps non-running matches grouped by local date", () => {
     expect(scheduleDateGroupKey({ status: "scheduled" }, today)).toBe(today);
     expect(scheduleDateGroupKey({ status: "scheduled" }, "unscheduled")).toBe("unscheduled");
+  });
+});
+
+describe("isMatchOnSelectedDate", () => {
+  it("keeps undated and previous-day running matches when Today is manually selected", () => {
+    expect(isMatchOnSelectedDate("running", "unscheduled", today, today)).toBe(true);
+    expect(isMatchOnSelectedDate("running", "2026-10-21", today, today)).toBe(true);
+  });
+
+  it("preserves exact-date behavior for other matches and non-Today selections", () => {
+    expect(isMatchOnSelectedDate("scheduled", "unscheduled", today, today)).toBe(false);
+    expect(isMatchOnSelectedDate("running", "unscheduled", tomorrow, today)).toBe(false);
+    expect(isMatchOnSelectedDate("scheduled", tomorrow, tomorrow, today)).toBe(true);
   });
 });
