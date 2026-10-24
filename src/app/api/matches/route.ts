@@ -4,9 +4,10 @@ import { getSchedule, refreshSchedule, shouldRefreshSchedule } from "@/lib/sched
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-export async function GET() {
+export async function GET(request: Request) {
   const payload = await getSchedule({ cachedOnly: true });
-  const refreshScheduled = shouldRefreshSchedule(payload);
+  const snapshotOnly = new URL(request.url).searchParams.get("snapshotOnly") === "1";
+  const refreshScheduled = !snapshotOnly && shouldRefreshSchedule(payload);
   if (refreshScheduled) {
     after(async () => {
       await refreshSchedule();

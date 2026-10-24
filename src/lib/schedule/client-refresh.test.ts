@@ -1,10 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { canReplaceSchedulePayload, requestScheduleRefresh, SCHEDULE_REFRESH_TIMEOUT_MS } from "./client-refresh";
+import type { SchedulePayload } from "./types";
+import {
+  canReplaceSchedulePayload,
+  requestScheduleRefresh,
+  SCHEDULE_REFRESH_TIMEOUT_MS,
+} from "./client-refresh";
 
 afterEach(() => vi.useRealTimers());
 
 describe("schedule refresh transport", () => {
   const gameCoverage = {
+    syncGeneration: 10,
     syncStatus: "normal",
     refreshInProgress: false,
     sourceFetchedAt: "2026-08-30T00:00:00.000Z",
@@ -47,7 +53,7 @@ describe("schedule refresh transport", () => {
       ].map((game) => [game, gameCoverage])),
     },
     deployment: { id: null, commitSha: null, productionUrl: null, environment: "preview" },
-  };
+  } as SchedulePayload;
 
   it("reads the same-origin endpoint without cache and returns its JSON", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(payload));
@@ -56,6 +62,105 @@ describe("schedule refresh transport", () => {
       cache: "no-store", signal: expect.any(AbortSignal),
     });
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("waits for a newer per-game generation using cache-only reads", async () => {
+    const baseline = payload;
+    const updated = {
+      ...payload,
+      coverage: {
+        ...payload.coverage,
+        games: {
+          ...payload.coverage.games,
+          lol: { ...payload.coverage.games.lol, syncGeneration: 11 },
+        },
+      },
+    };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(baseline, {
+        headers: { "x-schedule-refresh-scheduled": "true" },
+      }))
+      .mockResolvedValueOnce(Response.json({
+        ...baseline,
+        coverage: {
+          ...baseline.coverage,
+          refreshInProgress: true,
+          lastAttemptAt: "2026-08-30T00:00:02.000Z",
+        },
+      }))
+      .mockResolvedValueOnce(Response.json(updated));
+
+    expect(await requestScheduleRefresh(fetcher, { pollIntervalMs: 0 }, baseline))
+      .toEqual({ ok: true, payload: updated });
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      "/api/matches",
+      "/api/matches?snapshotOnly=1",
+      "/api/matches?snapshotOnly=1",
+    ]);
+  });
+  it("fails closed when the completed refresh leaves cache-only reads on the old generation", async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(payload, {
+        headers: { "x-schedule-refresh-scheduled": "true" },
+      }))
+      .mockResolvedValueOnce(Response.json({
+        ...payload,
+        coverage: {
+          ...payload.coverage,
+          refreshInProgress: false,
+          lastAttemptAt: "2026-08-30T00:00:02.000Z",
+        },
+      }));
+
+    expect(await requestScheduleRefresh(fetcher, {}, payload)).toEqual({ ok: false });
+    expect(fetcher.mock.calls.at(-1)?.[0]).toBe("/api/matches?snapshotOnly=1");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it("retries a transient cache-only request failure within the bounded refresh window", async () => {
+    const advancedProbe = {
+      ...payload.coverage,
+      lastAttemptAt: "2026-08-30T00:00:02.000Z",
+      games: {
+        ...payload.coverage.games,
+        lol: { ...payload.coverage.games.lol, syncGeneration: 11 },
+      },
+    };
+    const updated = {
+      ...payload,
+      coverage: { ...payload.coverage, games: advancedProbe.games },
+    };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(payload, {
+        headers: { "x-schedule-refresh-scheduled": "true" },
+      }))
+      .mockResolvedValueOnce(new Response("temporary", { status: 503 }))
+      .mockResolvedValueOnce(Response.json(updated));
+
+    expect(await requestScheduleRefresh(fetcher, { pollIntervalMs: 0 }, payload))
+      .toEqual({ ok: true, payload: updated });
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      "/api/matches",
+      "/api/matches?snapshotOnly=1",
+      "/api/matches?snapshotOnly=1",
+    ]);
+  });
+  it("bounds refresh completion polling and clears abort timers", async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(payload, {
+        headers: { "x-schedule-refresh-scheduled": "true" },
+      }))
+      .mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      }));
+
+    const result = requestScheduleRefresh(fetcher, {
+      pollIntervalMs: 0,
+      completionTimeoutMs: 100,
+    }, payload);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(await result).toEqual({ ok: false });
+    expect(vi.getTimerCount()).toBe(0);
   });
   it.each([401, 429, 500, 503])("does not expose or accept HTTP %i response bodies", async status => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("private upstream details", { status }));

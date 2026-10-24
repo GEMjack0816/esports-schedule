@@ -3,6 +3,8 @@ import type { EsportsMatch, SchedulePayload } from "./types";
 
 // This fetch reads the existing schedule endpoint; it never calls PandaScore.
 export const SCHEDULE_REFRESH_TIMEOUT_MS = 15_000;
+export const SCHEDULE_REFRESH_POLL_INTERVAL_MS = 3_000;
+export const SCHEDULE_REFRESH_COMPLETION_TIMEOUT_MS = 30_000;
 export const SCHEDULE_REFRESH_ERROR = "刷新失败，已保留当前赛程。请稍后重试。";
 
 const matchStatuses = new Set([
@@ -146,22 +148,116 @@ export function canReplaceSchedulePayload(
   });
 }
 
-export async function requestScheduleRefresh(fetcher: typeof fetch = fetch): Promise<
-  { ok: true; payload: SchedulePayload } | { ok: false }
-> {
+type ScheduleRefreshTiming = {
+  pollIntervalMs?: number;
+  completionTimeoutMs?: number;
+};
+
+function hasNewerSnapshot(before: SchedulePayload, after: SchedulePayload): boolean {
+  return gameKeys.some((game) => {
+    const previous = before.coverage.games[game];
+    const current = after.coverage.games[game];
+    if (!current) return false;
+
+    if (typeof previous?.syncGeneration === "number") {
+      return typeof current.syncGeneration === "number"
+        && current.syncGeneration > previous.syncGeneration;
+    }
+    if (previous?.sourceFetchedAt == null) return current.sourceFetchedAt !== null;
+    return typeof previous?.sourceFetchedAt === "string"
+      && typeof current.sourceFetchedAt === "string"
+      && Date.parse(current.sourceFetchedAt) > Date.parse(previous.sourceFetchedAt);
+  });
+}
+
+async function requestSchedulePayload(
+  path: string,
+  fetcher: typeof fetch,
+  timeoutMs = SCHEDULE_REFRESH_TIMEOUT_MS,
+): Promise<{ payload: SchedulePayload; refreshScheduled: boolean } | null> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), SCHEDULE_REFRESH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetcher("/api/matches", { cache: "no-store", signal: controller.signal });
-    if (!response.ok || !hasJsonContentType(response)) return { ok: false };
-    const payload = await response.json() as unknown;
-    if (!isClientSchedulePayload(payload)) return { ok: false };
-    return { ok: true, payload };
+    const response = await fetcher(path, { cache: "no-store", signal: controller.signal });
+    if (!response.ok || !hasJsonContentType(response)) return null;
+    const value = await response.json() as unknown;
+    if (!isClientSchedulePayload(value)) return null;
+    return {
+      payload: value,
+      refreshScheduled: response.headers.get("x-schedule-refresh-scheduled") === "true",
+    };
   } catch {
-    // Never display transport errors or response bodies, which can contain
-    // infrastructure details. The caller retains its last rendered payload.
-    return { ok: false };
+    return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function waitForRefreshCompletion(
+  baseline: SchedulePayload,
+  fetcher: typeof fetch,
+  timing: Required<ScheduleRefreshTiming>,
+): Promise<SchedulePayload | null> {
+  const deadline = Date.now() + timing.completionTimeoutMs;
+  const baselineAttempt = baseline.coverage.lastAttemptAt;
+
+  while (Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    const snapshot = await requestSchedulePayload(
+      "/api/matches?snapshotOnly=1",
+      fetcher,
+      Math.min(SCHEDULE_REFRESH_TIMEOUT_MS, remaining),
+    );
+    if (snapshot) {
+      const payload = snapshot.payload;
+      if (hasNewerSnapshot(baseline, payload)
+        && canReplaceSchedulePayload(
+          baseline.mode,
+          payload.mode,
+          baseline.coverage.games,
+          payload.coverage.games,
+        )) return payload;
+
+      const attemptChanged = payload.coverage.lastAttemptAt !== null
+        && payload.coverage.lastAttemptAt !== baselineAttempt;
+      if (attemptChanged && !payload.coverage.refreshInProgress) return null;
+    }
+
+    const afterProbeRemaining = deadline - Date.now();
+    if (afterProbeRemaining <= 0) break;
+    await new Promise<void>((resolve) => setTimeout(
+      resolve,
+      Math.min(timing.pollIntervalMs, afterProbeRemaining),
+    ));
+  }
+  return null;
+}
+
+export async function requestScheduleRefresh(
+  fetcher: typeof fetch = fetch,
+  timing: ScheduleRefreshTiming = {},
+  baseline?: SchedulePayload,
+): Promise<
+  { ok: true; payload: SchedulePayload } | { ok: false }
+> {
+  const response = await requestSchedulePayload("/api/matches", fetcher);
+  if (!response) return { ok: false };
+  if (!response.refreshScheduled && !response.payload.coverage.refreshInProgress) {
+    return { ok: true, payload: response.payload };
+  }
+
+  const renderedBaseline = baseline ?? response.payload;
+  if (hasNewerSnapshot(renderedBaseline, response.payload)
+    && canReplaceSchedulePayload(
+      renderedBaseline.mode,
+      response.payload.mode,
+      renderedBaseline.coverage.games,
+      response.payload.coverage.games,
+    )) return { ok: true, payload: response.payload };
+
+  const refreshed = await waitForRefreshCompletion(renderedBaseline, fetcher, {
+    pollIntervalMs: timing.pollIntervalMs ?? SCHEDULE_REFRESH_POLL_INTERVAL_MS,
+    completionTimeoutMs: timing.completionTimeoutMs ?? SCHEDULE_REFRESH_COMPLETION_TIMEOUT_MS,
+  });
+  return refreshed ? { ok: true, payload: refreshed } : { ok: false };
 }

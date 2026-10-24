@@ -237,7 +237,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     setRefreshing(true);
     setRefreshError(false);
     try {
-      const result = await requestScheduleRefresh();
+      const result = await requestScheduleRefresh(fetch, {}, payload);
       if (result.ok && canReplaceSchedulePayload(
         payload.mode,
         result.payload.mode,
