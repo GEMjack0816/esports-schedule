@@ -25,6 +25,13 @@ describe("sync workflow response validation", () => {
     expect(validateSyncResponse(success, 200).ok).toBe(true);
   });
 
+  it.each([Number.NaN, 0, 600])("rejects an invalid HTTP status (%s)", (httpStatus) => {
+    expect(validateSyncResponse(success, httpStatus)).toEqual({
+      ok: false,
+      message: "sync response has an invalid HTTP status",
+    });
+  });
+
   it.each([false, undefined])("rejects a success-shaped response without explicit ok=true (%s)", (ok) => {
     const payload = { ...success };
     if (ok === undefined) delete payload.ok;
@@ -68,6 +75,20 @@ describe("sync workflow response validation", () => {
       gamesFailed: 1,
       snapshotsPersisted: 4,
     }, 200).ok).toBe(true);
+  });
+
+  it.each([4, 6])("rejects a sync that attempts %i games instead of all five", (gamesAttempted) => {
+    expect(validateSyncResponse({ ...success, gamesAttempted }, 200)).toEqual({
+      ok: false,
+      message: "sync did not attempt all five configured games",
+    });
+  });
+
+  it.each([
+    { gamesSucceeded: 6, gamesFailed: -1, snapshotsPersisted: 6 },
+    { gamesSucceeded: 4, gamesFailed: -1, snapshotsPersisted: 4 },
+  ])("rejects impossible success/failure counts: %o", (counts) => {
+    expect(validateSyncResponse({ ...success, ...counts }, 200).ok).toBe(false);
   });
 
   it("rejects success or partial responses without a valid fencing generation", () => {

@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
+// The schedule sync contract covers these five configured games; partial
+// success may fail some of them but must not silently skip an attempted game.
+const EXPECTED_GAME_COUNT = 5;
+
 export function validateSyncResponse(payload, httpStatus) {
+  if (!Number.isInteger(httpStatus) || httpStatus < 100 || httpStatus > 599) {
+    return { ok: false, message: "sync response has an invalid HTTP status" };
+  }
   if (!payload || typeof payload !== "object") {
     return { ok: false, message: "sync endpoint returned invalid JSON" };
   }
@@ -25,10 +32,11 @@ export function validateSyncResponse(payload, httpStatus) {
   if (!Number.isSafeInteger(payload.generation) || payload.generation < 1) {
     return { ok: false, message: "sync did not report a valid fencing generation" };
   }
-  if (!Number.isInteger(payload.gamesAttempted) || payload.gamesAttempted < 1) {
-    return { ok: false, message: "sync did not report attempted games" };
+  if (!Number.isInteger(payload.gamesAttempted) || payload.gamesAttempted !== EXPECTED_GAME_COUNT) {
+    return { ok: false, message: "sync did not attempt all five configured games" };
   }
-  if (!Number.isInteger(payload.gamesSucceeded) || payload.gamesSucceeded < 1) {
+  if (!Number.isInteger(payload.gamesSucceeded) || payload.gamesSucceeded < 1
+    || payload.gamesSucceeded > payload.gamesAttempted) {
     return { ok: false, message: "sync did not update any game" };
   }
   if (!Number.isInteger(payload.snapshotsPersisted) || payload.snapshotsPersisted < 1) {
@@ -37,7 +45,7 @@ export function validateSyncResponse(payload, httpStatus) {
   if (payload.snapshotsPersisted !== payload.gamesSucceeded) {
     return { ok: false, message: "sync success count does not match persisted snapshots" };
   }
-  if (!Number.isInteger(payload.gamesFailed)
+  if (!Number.isInteger(payload.gamesFailed) || payload.gamesFailed < 0
     || payload.gamesSucceeded + payload.gamesFailed !== payload.gamesAttempted) {
     return { ok: false, message: "sync game outcome counts are inconsistent" };
   }
