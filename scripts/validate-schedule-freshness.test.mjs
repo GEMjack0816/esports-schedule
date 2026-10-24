@@ -224,5 +224,8 @@ describe("schedule freshness monitor validation", () => {
       "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
     ]);
     expect(workflow).toContain("persist-credentials: false");
+    expect(workflow).toContain('MAX_HEALTH_RESPONSE_BYTES: "262144"');
+    expect(workflow).toContain('--max-filesize "$MAX_HEALTH_RESPONSE_BYTES"');
   });
 });
+
