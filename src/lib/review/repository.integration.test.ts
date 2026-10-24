@@ -229,6 +229,40 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect(audits[1].after_json).toMatchObject({ imported: 0, duplicate: 2, scanned: 2, invalid: 0 });
   });
 
+  it("serializes concurrent imports of the same legacy batch and audits both outcomes", async () => {
+    const actorA = `integration-legacy-race-a-${randomUUID()}`;
+    const actorB = `integration-legacy-race-b-${randomUUID()}`;
+    legacyImportActors.push(actorA, actorB);
+    const records = [legacyRecord(randomUUID()), legacyRecord(randomUUID())];
+    const counts = { scanned: records.length, invalid: 0 };
+
+    const results = await Promise.all([
+      repository.importLegacySubmissions(actorA, records, counts),
+      repository.importLegacySubmissions(actorB, records, counts),
+    ]);
+
+    expect(results.reduce((total, result) => total + result.imported, 0)).toBe(records.length);
+    expect(results.reduce((total, result) => total + result.duplicate, 0)).toBe(records.length);
+    expect(results.every((result) => result.scanned === records.length && result.invalid === 0)).toBe(true);
+
+    const rows = await cleanup`
+      select count(*)::int as value
+      from match_submissions
+      where id = any(${records.map((record) => record.id)}::uuid[])
+    `;
+    expect(Number(rows[0].value)).toBe(records.length);
+
+    const audits = await cleanup`
+      select after_json
+      from admin_audit_events
+      where actor_id = any(${[actorA, actorB]}::text[])
+        and action = 'legacy_submissions.imported'
+    `;
+    expect(audits).toHaveLength(2);
+    expect(audits.reduce((total, audit) => total + Number(audit.after_json.imported), 0)).toBe(records.length);
+    expect(audits.reduce((total, audit) => total + Number(audit.after_json.duplicate), 0)).toBe(records.length);
+  });
+
   it("rolls back imported rows if the summary audit insert fails", async () => {
     const actorId = `integration-legacy-rollback-${randomUUID()}`;
     legacyImportActors.push(actorId);
