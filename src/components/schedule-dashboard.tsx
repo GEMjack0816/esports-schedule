@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
-import { isPandaScoreTeamLogoUrl } from "@/lib/schedule/team-logo";
+import { isPandaScoreTeamLogoUrl, retryPandaScoreTeamLogoUrl } from "@/lib/schedule/team-logo";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -115,7 +115,9 @@ function TeamLogo({ src, label }: { src: string; label: string }) {
   const wrapperRef = useRef<HTMLSpanElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const activeAttemptRef = useRef<{ key: string; settled: boolean; timer: number } | null>(null);
-  const current = failure === "remote" || failure === "all" ? "/team-placeholder.svg" : src;
+  const current = failure === "remote" || failure === "all"
+    ? "/team-placeholder.svg"
+    : remoteRetries > 0 ? retryPandaScoreTeamLogoUrl(src) ?? src : src;
   const attemptKey = `${current}:${failure}:${remoteRetries}`;
 
   useEffect(() => {

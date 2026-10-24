@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPandaScoreTeamLogoUrl } from "./team-logo";
+import { isPandaScoreTeamLogoUrl, retryPandaScoreTeamLogoUrl } from "./team-logo";
 
 describe("isPandaScoreTeamLogoUrl", () => {
   it("allows canonical official team logo paths", () => {
@@ -36,5 +36,14 @@ describe("isPandaScoreTeamLogoUrl", () => {
     "not a URL",
   ])("rejects non-canonical or non-PandaScore source %s", (value) => {
     expect(isPandaScoreTeamLogoUrl(value)).toBe(false);
+  });
+});
+
+describe("retryPandaScoreTeamLogoUrl", () => {
+  it("adds a distinct retry cache key only to a canonical CDN URL", () => {
+    expect(retryPandaScoreTeamLogoUrl(
+      "https://cdn-api.pandascore.co/images/team/image/136955/logo.png",
+    )).toBe("https://cdn-api.pandascore.co/images/team/image/136955/logo.png?esports_logo_retry=1");
+    expect(retryPandaScoreTeamLogoUrl("https://images.example.test/logo.png")).toBeNull();
   });
 });

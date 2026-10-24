@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { chromium } from "playwright-core";
+import sharp from "sharp";
 
 const base = new URL(process.argv[2] || "http://localhost:3105");
 if (!["localhost", "127.0.0.1"].includes(base.hostname)) {
@@ -47,7 +48,9 @@ const template = {
 const transientLogo = "https://cdn-api.pandascore.co/images/team/image/136955/transient.png";
 const persistentLogo = "https://cdn.pandascore.co/images/team/image/900002/persistent.png";
 const hangingLogo = "https://cdn.pandascore.co/images/team/image/900003/hanging.png";
-const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jvT8AAAAASUVORK5CYII=", "base64");
+const png = await sharp({
+  create: { width: 1, height: 1, channels: 4, background: { r: 255, g: 0, b: 0, alpha: 1 } },
+}).png().toBuffer();
 const installedChrome = process.env.CHROME_PATH ?? [
   "C:/Program Files/Google/Chrome/Application/chrome.exe",
   "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
@@ -76,10 +79,21 @@ try {
     let persistentAttempts = 0;
     let hangingAttempts = 0;
     let optimizedLogoRequests = 0;
+    const optimizedLogoSources = [];
     const referrerHeaders = [];
+    const logoResponses = [];
+    const logoRequestFailures = [];
     const page = await context.newPage();
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
+    page.on("response", response => {
+      if (new URL(response.url()).pathname === "/_next/image") {
+        logoResponses.push({ status: response.status(), contentType: response.headers()["content-type"], url: response.url() });
+      }
+    });
+    page.on("requestfailed", request => {
+      if (new URL(request.url()).pathname === "/_next/image") logoRequestFailures.push(request.failure()?.errorText);
+    });
     await context.route("**/*", async route => {
       const url = new URL(route.request().url());
       if (url.origin === base.origin) {
@@ -88,16 +102,13 @@ try {
         }
         if (url.pathname === "/_next/image") {
           const source = url.searchParams.get("url");
+          optimizedLogoSources.push(source);
           referrerHeaders.push(route.request().headers().referer ?? null);
           if (source === transientLogo) {
             optimizedLogoRequests += 1;
             transientAttempts += 1;
             if (transientAttempts === 1) return route.abort("connectionreset");
-            return route.fulfill({
-              status: 200,
-              contentType: "image/svg+xml",
-              body: "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"><rect width=\"1\" height=\"1\" fill=\"red\"/></svg>",
-            });
+            return route.fulfill({ status: 200, contentType: "image/png", body: png });
           }
           if (source === persistentLogo) {
             optimizedLogoRequests += 1;
@@ -118,11 +129,17 @@ try {
         }
         return route.continue();
       }
-      if (url.href === transientLogo) {
+      if (`${url.origin}${url.pathname}` === transientLogo
+        && url.searchParams.get("esports_logo_retry") === "1") {
         transientAttempts += 1;
         referrerHeaders.push(route.request().headers().referer ?? null);
         if (transientAttempts === 1) return route.abort("connectionreset");
         return route.fulfill({ status: 200, contentType: "image/png", body: png });
+      }
+      if (`${url.origin}${url.pathname}` === persistentLogo) {
+        persistentAttempts += 1;
+        referrerHeaders.push(route.request().headers().referer ?? null);
+        return route.abort("connectionreset");
       }
       if (url.pathname.match(/\.(?:png|jpe?g|webp|gif|svg)$/i)) {
         return route.fulfill({ status: 200, contentType: "image/png", body: png });
@@ -138,13 +155,35 @@ try {
         const image = document.querySelector(".team-mark img");
         if (!image?.currentSrc || !image.complete || image.naturalWidth === 0) return false;
         const current = new URL(image.currentSrc, window.location.href);
-        return current.href === url || current.searchParams.get("url") === url;
+        const expected = new URL(url);
+        return current.origin === expected.origin
+          && current.pathname === expected.pathname
+          && current.searchParams.get("esports_logo_retry") === "1";
       }, transientLogo, { timeout: 10_000 });
     } catch (error) {
       console.error(JSON.stringify({
         width,
         transientAttempts,
         optimizedLogoRequests,
+        optimizedLogoSources,
+        logoResponses,
+        logoRequestFailures,
+        imageResponseProbe: await page.evaluate(async () => {
+          const image = document.querySelector(".team-mark img");
+          if (!image?.currentSrc) return null;
+          try {
+            const response = await fetch(image.currentSrc);
+            const body = await response.arrayBuffer();
+            const blob = new Blob([body], { type: response.headers.get("content-type") || "" });
+            const probe = new Image();
+            probe.src = URL.createObjectURL(blob);
+            await probe.decode().catch(() => undefined);
+            return { status: response.status, type: response.headers.get("content-type"), bytes: body.byteLength,
+              signature: Array.from(new Uint8Array(body).slice(0, 8)), probeWidth: probe.naturalWidth, probeHeight: probe.naturalHeight };
+          } catch (probeError) {
+            return probeError instanceof Error ? probeError.message : String(probeError);
+          }
+        }),
         images: await page.locator(".team-mark img").evaluateAll(images => images.map(image => ({
           src: image.src,
           currentSrc: image.currentSrc,

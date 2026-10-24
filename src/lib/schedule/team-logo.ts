@@ -20,3 +20,15 @@ export function isPandaScoreTeamLogoUrl(value: string): boolean {
     return false;
   }
 }
+
+/**
+ * Give a failed canonical logo one distinct browser/CDN cache key. The retry
+ * URL is intentionally not optimizer-eligible, so it bypasses a cached Next
+ * image-optimization failure while remaining pinned to an allowlisted host.
+ */
+export function retryPandaScoreTeamLogoUrl(value: string): string | null {
+  if (!isPandaScoreTeamLogoUrl(value)) return null;
+  const url = new URL(value);
+  url.searchParams.set("esports_logo_retry", "1");
+  return url.toString();
+}
