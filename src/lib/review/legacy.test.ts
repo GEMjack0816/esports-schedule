@@ -100,4 +100,3 @@ describe("legacy Runtime Cache submission migration", () => {
     expect(importLegacySubmissions).not.toHaveBeenCalled();
   });
 });
-

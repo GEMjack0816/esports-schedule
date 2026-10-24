@@ -74,4 +74,3 @@ export async function importLegacyRuntimeSubmissions(
 
   return repository.importLegacySubmissions(actorId, records, ids.length, invalid);
 }
-
