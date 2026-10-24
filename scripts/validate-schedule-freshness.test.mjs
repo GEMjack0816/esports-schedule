@@ -127,6 +127,9 @@ describe("schedule freshness monitor validation", () => {
   it("sanitizes log messages into one bounded line", () => {
     expect(sanitizeFreshnessMessage("failed\r\n## forged log"))
       .toBe("failed ## forged log");
+    const terminalControls = sanitizeFreshnessMessage("bad\u001b[2J\u009b31m\u2028forged\u0000log");
+    expect(terminalControls).toBe("bad [2J 31m forged log");
+    expect(terminalControls).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
     expect(sanitizeFreshnessMessage("x".repeat(301))).toHaveLength(300);
   });
 

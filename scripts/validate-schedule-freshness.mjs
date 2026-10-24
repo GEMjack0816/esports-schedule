@@ -11,7 +11,8 @@ function escapeMarkdown(value) {
 
 export function sanitizeFreshnessMessage(message) {
   return String(message ?? "freshness check returned no detail")
-    .replace(/[\r\n]+/g, " ")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ")
+    .replace(/ {2,}/g, " ")
     .slice(0, 300);
 }
 
