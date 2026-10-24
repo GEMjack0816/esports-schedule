@@ -9,6 +9,10 @@ import {
 describe("public external URL sanitization", () => {
   it.each([
     "https://stream.example/live?access_token=private",
+    "https://stream.example/live;jsessionid=private",
+    "https://stream.example/live%3Bsession_id%3Dprivate",
+    "https://stream.example/live%253BX%252DAPI%252DKey%253Dprivate",
+    "https://stream.example/live;X-Access-Key=private",
     "https://stream.example/live?API-Key=private",
     "https://stream.example/live?X-API-Key=private",
     "https://stream.example/live?X-API-Key-Id=private",
@@ -72,6 +76,8 @@ describe("public external URL sanitization", () => {
       .toBe("https://example.com/?x-vercel-set-bypass-cookie=true");
     expect(sanitizePublicExternalUrl("https://stream.example/match?match_code=42"))
       .toBe("https://stream.example/match?match_code=42");
+    expect(sanitizePublicExternalUrl("https://stream.example/match;view=full"))
+      .toBe("https://stream.example/match;view=full");
   });
 
   it("keeps public OAuth metadata that does not contain authentication credentials", () => {
@@ -121,6 +127,7 @@ describe("public external URL sanitization", () => {
     `https://stream.example/watch?redirect=${encodeURIComponent("https://viewer:password@inner.example/live")}`,
     `https://stream.example/watch#return=${encodeURIComponent("https://viewer:password@inner.example/live")}`,
     `https://stream.example/watch?next=${encodeURIComponent("//viewer:password@inner.example/live")}`,
+    `https://stream.example/watch?next=${encodeURIComponent("https://inner.example/live;jsessionid=private")}`,
   ])("rejects userinfo hidden in a nested URL", (value) => {
     expect(sanitizePublicExternalUrl(value)).toBeNull();
   });
@@ -147,6 +154,8 @@ describe("public external URL sanitization", () => {
     expect(sanitizePublicTeam({ name: "Team", logo: "/\\attacker.example/logo.svg" }).logo)
       .toBe("/team-placeholder.svg");
     expect(sanitizePublicTeam({ name: "Team", logo: "/logo.svg?access_token=secret" }).logo)
+      .toBe("/team-placeholder.svg");
+    expect(sanitizePublicTeam({ name: "Team", logo: "/logo.svg;jsessionid=secret" }).logo)
       .toBe("/team-placeholder.svg");
   });
 

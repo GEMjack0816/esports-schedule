@@ -5,7 +5,7 @@ const credentialParameterNames = new Set([
   "credential", "idtoken", "jwt", "oauth", "oauthtoken", "password", "passwd",
   "privatekey", "refreshtoken", "secret", "session", "signature", "sig", "token",
   "authorizationcode", "authenticode", "authtoken", "awsaccesskeyid", "bearer",
-  "bearertoken", "code", "key", "keyid", "nonce", "sessionid", "state", "ticket",
+  "bearertoken", "code", "key", "keyid", "nonce", "sessionid", "jsessionid", "state", "ticket",
   "assertion", "clientassertion", "codeverifier", "idtokenhint", "samlresponse",
   // Vercel Deployment Protection also accepts its bypass secret in a query parameter.
   "xvercelprotectionbypass",
@@ -54,6 +54,30 @@ function isCredentialParameter(name: string): boolean {
   return true;
 }
 
+function hasCredentialPathParameters(pathname: string): boolean {
+  let candidate = pathname;
+  // Some servers put session IDs and other credentials in matrix-style path
+  // parameters (for example, /watch;jsessionid=...). Inspect encoded forms too,
+  // using the same bounded ASCII decoding policy as query parameter names.
+  for (let depth = 0; depth < MAX_PARAMETER_ENCODING_DEPTH; depth += 1) {
+    for (const segment of candidate.split("/")) {
+      const [, ...parameters] = segment.split(";");
+      for (const parameter of parameters) {
+        const name = parameter.split("=", 1)[0] ?? "";
+        if (isCredentialParameter(name)) return true;
+      }
+    }
+
+    const decoded = decodeAsciiPercentEscapes(candidate);
+    if (decoded === candidate) return false;
+    candidate = decoded;
+  }
+
+  // If the depth cap is reached, still reject an encoded semicolon separator
+  // rather than allowing a deeply encoded matrix credential through.
+  return /%(?:25)*3b/i.test(candidate);
+}
+
 function hasCredentialParameters(search: string, nestedDepth = 0): boolean {
   for (const [name, value] of new URLSearchParams(search)) {
     if (isCredentialParameter(name)) return true;
@@ -75,6 +99,7 @@ function hasNestedCredentialParameters(value: string, nestedDepth: number): bool
       try {
         const nested = new URL(candidate, "https://nested-url.invalid");
         if (nested.username || nested.password
+          || hasCredentialPathParameters(nested.pathname)
           || hasCredentialParameters(nested.search, nestedDepth + 1)
           || hasCredentialParameters(nested.hash.slice(1), nestedDepth + 1)) return true;
       } catch {
@@ -101,7 +126,9 @@ function sanitizePublicUrl(value: unknown, httpsOnly: boolean): string | null {
   }
   if ((httpsOnly ? url.protocol !== "https:" : !["http:", "https:"].includes(url.protocol))
     || url.username || url.password) return null;
-  if (hasCredentialParameters(url.search) || hasCredentialParameters(url.hash.slice(1))) return null;
+  if (hasCredentialPathParameters(url.pathname)
+    || hasCredentialParameters(url.search)
+    || hasCredentialParameters(url.hash.slice(1))) return null;
   return url.toString();
 }
 
@@ -135,6 +162,7 @@ export function sanitizePublicTeam(team: Team): Team {
     try {
       const parsed = new URL(team.logo, "https://schedule.invalid");
       if (parsed.origin === "https://schedule.invalid"
+        && !hasCredentialPathParameters(parsed.pathname)
         && !hasCredentialParameters(parsed.search)
         && !hasCredentialParameters(parsed.hash.slice(1))) {
         localLogo = team.logo;
