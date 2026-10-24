@@ -59,6 +59,39 @@ function isCredentialParameter(name: string): boolean {
   return true;
 }
 
+const MAX_STRUCTURED_VALUE_NODES = 128;
+const MAX_STRUCTURED_VALUE_DEPTH = 16;
+
+function hasCredentialInJson(value: unknown, nestedDepth: number): boolean {
+  const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+  let visited = 0;
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current) continue;
+    visited += 1;
+    if (visited > MAX_STRUCTURED_VALUE_NODES || current.depth > MAX_STRUCTURED_VALUE_DEPTH) {
+      return true;
+    }
+
+    if (typeof current.value === "string") {
+      if (hasNestedCredentialParameters(current.value, nestedDepth + 1)) return true;
+      continue;
+    }
+    if (Array.isArray(current.value)) {
+      for (const item of current.value) pending.push({ value: item, depth: current.depth + 1 });
+      continue;
+    }
+    if (!current.value || typeof current.value !== "object") continue;
+
+    for (const [name, nested] of Object.entries(current.value)) {
+      if (isCredentialParameter(name)) return true;
+      pending.push({ value: nested, depth: current.depth + 1 });
+    }
+  }
+
+  return false;
+}
 function hasCredentialPathParameters(pathname: string): boolean {
   let candidate = pathname;
   // Some servers put session IDs and other credentials in matrix-style path
@@ -112,8 +145,21 @@ function hasCredentialParameters(search: string, nestedDepth = 0): boolean {
 }
 
 function hasNestedCredentialParameters(value: string, nestedDepth: number): boolean {
+  if (nestedDepth > MAX_NESTED_URL_DEPTH) return true;
   let candidate = value;
   for (let encodingDepth = 0; encodingDepth < MAX_PARAMETER_ENCODING_DEPTH; encodingDepth += 1) {
+    const trimmed = candidate.trimStart();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      // Some providers wrap credentials in a JSON-valued query parameter (for
+      // example, `payload={\"access_token\":...}`). Parse only bounded URL
+      // values and fail closed when structured inspection reaches its limit.
+      if (nestedDepth >= MAX_NESTED_URL_DEPTH) return true;
+      try {
+        if (hasCredentialInJson(JSON.parse(candidate), nestedDepth)) return true;
+      } catch {
+        // A query-string value need not be valid JSON.
+      }
+    }
     const looksNested = candidate.includes("?") || candidate.includes("#")
       || /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(candidate)
       || /^[^/?#=&]+(?:=[^&]*)?(?:&[^=&]+=[^&]*)*$/.test(candidate);
