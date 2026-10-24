@@ -1,10 +1,10 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { TeamLogo } from "@/components/team-logo";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -97,14 +97,7 @@ function TeamRow({ team, score, winning }: {
   return (
     <div className={`team-row ${winning ? "team-winning" : ""}`}>
       <span className="team-mark" aria-hidden="true">
-        <Image
-          src={team.logo || "/team-placeholder.svg"}
-          alt=""
-          width={28}
-          height={28}
-          unoptimized
-          onError={(event) => { event.currentTarget.src = "/team-placeholder.svg"; }}
-        />
+        <TeamLogo key={team.logo} src={team.logo || "/team-placeholder.svg"} />
         <span>{team.acronym?.slice(0, 3) || initials(team.name)}</span>
       </span>
       <span className="team-name">{team.name}</span>
