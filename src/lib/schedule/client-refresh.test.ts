@@ -106,6 +106,26 @@ describe("schedule refresh transport", () => {
     expect(await result).toEqual({ ok: false });
     expect(vi.getTimerCount()).toBe(0);
   });
+  it("aborts a stalled response body and releases its deadline timer", async () => {
+    vi.useFakeTimers();
+    let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((_url, init) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          bodyController = controller;
+          controller.enqueue(new TextEncoder().encode("{"));
+        },
+      });
+      init?.signal?.addEventListener("abort", () => bodyController?.error(new Error("aborted")), { once: true });
+      return Promise.resolve(new Response(body, { headers: { "Content-Type": "application/json" } }));
+    });
+
+    const result = requestScheduleRefresh(fetcher);
+    await vi.advanceTimersByTimeAsync(SCHEDULE_REFRESH_TIMEOUT_MS);
+
+    expect(await result).toEqual({ ok: false });
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it("clears the deadline immediately after success", async () => {
     vi.useFakeTimers();
     await requestScheduleRefresh(vi.fn<typeof fetch>().mockResolvedValue(Response.json({ matches: [] })));
