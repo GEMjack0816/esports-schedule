@@ -217,6 +217,8 @@ a { color: inherit; text-decoration: none; }
 .team-mark { width: 28px; height: 28px; display: grid; place-items: center; overflow: hidden; background: var(--team-bg); color: var(--muted-bright); border: 1px solid var(--line); font: 650 8px var(--font-geist-mono), monospace; }
 .team-mark img { width: 100%; height: 100%; object-fit: contain; }
 .team-mark > span { display: none; }
+.team-mark > .team-logo-frame { display: block; width: 100%; height: 100%; }
+.team-mark > .team-logo-text { display: block; }
 .team-name { font-size: 12px; font-weight: 580; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .team-score { text-align: right; font: 700 17px var(--font-geist-mono), monospace; color: #6e7783; }
 .team-winning .team-name, .team-winning .team-score { color: var(--foreground); }
