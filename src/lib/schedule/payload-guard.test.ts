@@ -81,6 +81,18 @@ describe("isSchedulePayload", () => {
     expect(isSchedulePayload(payload)).toBe(false);
   });
 
+  it("rejects a coverage mode that conflicts with the top-level mode", () => {
+    const payload = validPayload();
+    payload.coverage.mode = "unavailable";
+    expect(isSchedulePayload(payload)).toBe(false);
+  });
+
+  it("rejects a coverage stale flag that conflicts with the top-level stale flag", () => {
+    const payload = validPayload();
+    payload.coverage.stale = true;
+    expect(isSchedulePayload(payload)).toBe(false);
+  });
+
   it("rejects incomplete totals, provider metadata, and malformed optional warning text", () => {
     expect(isSchedulePayload({ ...validPayload(), coverage: { ...validPayload().coverage, totals: {} } })).toBe(false);
     expect(isSchedulePayload({ ...validPayload(), providers: { pandascore: "connected", manual: "unknown" } })).toBe(false);
