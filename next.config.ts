@@ -23,6 +23,11 @@ const nextConfig: NextConfig = {
     // PandaScore team logos are stable by URL; keep their optimized copies warm
     // for 24 hours to ride through short CDN outages without caching forever.
     minimumCacheTTL: 86_400,
+    // The optimizer only needs to fetch small team logos; never follow a CDN
+    // redirect to a host that is outside the explicit remote-pattern allowlist.
+    maximumRedirects: 0,
+    maximumResponseBody: 5_000_000,
+    dangerouslyAllowLocalIP: false,
     remotePatterns: [
       {
         protocol: "https",

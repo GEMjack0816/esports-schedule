@@ -1,9 +1,36 @@
 import { describe, expect, it } from "vitest";
+import nextConfig from "../../../next.config";
 import {
   isCompletedImageFailure,
   isPandaScoreTeamLogoUrl,
   retryPandaScoreTeamLogoUrl,
 } from "./team-logo";
+
+describe("Next Image optimizer restrictions", () => {
+  it("bounds logo fetches and disables redirects to untrusted destinations", () => {
+    expect(nextConfig.images).toMatchObject({
+      maximumRedirects: 0,
+      maximumResponseBody: 5_000_000,
+      dangerouslyAllowLocalIP: false,
+      remotePatterns: [
+        {
+          protocol: "https",
+          hostname: "cdn.pandascore.co",
+          port: "",
+          pathname: "/images/team/image/**",
+          search: "",
+        },
+        {
+          protocol: "https",
+          hostname: "cdn-api.pandascore.co",
+          port: "",
+          pathname: "/images/team/image/**",
+          search: "",
+        },
+      ],
+    });
+  });
+});
 
 describe("completed image state", () => {
   it("recognizes a failed image whose error event may have preceded hydration", () => {
