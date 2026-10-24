@@ -11,6 +11,7 @@ describe("admin E2E cleanup deployment guard", () => {
       VERCEL_URL: "preview.example.vercel.app",
       DATABASE_URL: "postgres://review:placeholder@preview-db.example.test/app_test",
       ADMIN_VERIFY_PREVIEW_DATABASE_HOSTS: "preview-db.example.test",
+      ADMIN_VERIFY_PREVIEW_GIT_REFS: "safety/verify-admin-preview-target",
     })).toBe(true);
   });
 
@@ -58,8 +59,12 @@ describe("admin E2E cleanup deployment guard", () => {
   it.each([
     { DATABASE_URL: undefined },
     { ADMIN_VERIFY_PREVIEW_DATABASE_HOSTS: undefined },
+    { ADMIN_VERIFY_PREVIEW_GIT_REFS: undefined },
     { DATABASE_URL: "postgres://review:placeholder@production-db.example.test/app_test" },
     { ADMIN_VERIFY_PREVIEW_DATABASE_HOSTS: "preview-db.example.test.attacker.test" },
+    { ADMIN_VERIFY_PREVIEW_GIT_REFS: "some-other-branch" },
+    { ADMIN_VERIFY_PREVIEW_GIT_REFS: "safety/*" },
+    { ADMIN_VERIFY_PREVIEW_GIT_REFS: "safety/verify-admin-preview-target,main" },
     { DATABASE_URL: "https://preview-db.example.test/app_test" },
     { DATABASE_URL: "not-a-database-url" },
     { ADMIN_VERIFY_PREVIEW_DATABASE_HOSTS: "preview-db.example.test,*.example.test" },
@@ -72,6 +77,7 @@ describe("admin E2E cleanup deployment guard", () => {
       VERCEL_URL: "preview.example.vercel.app",
       DATABASE_URL: "postgres://review:placeholder@preview-db.example.test/app_test",
       ADMIN_VERIFY_PREVIEW_DATABASE_HOSTS: "preview-db.example.test",
+      ADMIN_VERIFY_PREVIEW_GIT_REFS: "safety/verify-admin-preview-target",
       ...override,
     })).toBe(false);
   });
@@ -85,6 +91,7 @@ describe("admin E2E cleanup deployment guard", () => {
       VERCEL_URL: "preview.example.vercel.app",
       DATABASE_URL: "postgresql://review:placeholder@preview-db-2.example.test/app_test?sslmode=require",
       ADMIN_VERIFY_PREVIEW_DATABASE_HOSTS: "preview-db.example.test, preview-db-2.example.test",
+      ADMIN_VERIFY_PREVIEW_GIT_REFS: "safety/verify-admin-preview-target, another-preview-branch",
     })).toBe(true);
   });
 });

@@ -41,6 +41,7 @@ describe("Preview-only admin E2E cleanup endpoint", () => {
     vi.stubEnv("VERCEL_URL", "preview.example.vercel.app");
     vi.stubEnv("DATABASE_URL", "postgres://review:placeholder@preview-db.example.test/app_test");
     vi.stubEnv("ADMIN_VERIFY_PREVIEW_DATABASE_HOSTS", "preview-db.example.test");
+    vi.stubEnv("ADMIN_VERIFY_PREVIEW_GIT_REFS", "safety/verify-admin-preview-target");
     mocks.requireAdminApi.mockReset().mockResolvedValue({ ok: true, sub: "admin-test" });
     mocks.trustedMutationOrigin.mockReset();
     mocks.getReviewRepository.mockReset().mockReturnValue({
@@ -58,6 +59,7 @@ describe("Preview-only admin E2E cleanup endpoint", () => {
   it.each([
     ["production", "safety/verify-admin-preview-target"],
     ["preview", "main"],
+    ["preview", "another-preview-branch"],
     ["", "safety/verify-admin-preview-target"],
   ])("is unavailable outside its exact Preview branch", async (environment, ref) => {
     vi.stubEnv("VERCEL_ENV", environment);

@@ -26,6 +26,7 @@ describe("Preview admin E2E database preflight", () => {
     vi.stubEnv("VERCEL_URL", "preview.example.vercel.app");
     vi.stubEnv("DATABASE_URL", "postgres://review:placeholder@preview-db.example.test/app_test");
     vi.stubEnv("ADMIN_VERIFY_PREVIEW_DATABASE_HOSTS", "preview-db.example.test");
+    vi.stubEnv("ADMIN_VERIFY_PREVIEW_GIT_REFS", "safety/verify-admin-preview-target");
     mocks.requireAdminApi.mockReset().mockResolvedValue({ ok: true, sub: "admin-test" });
     mocks.trustedMutationOrigin.mockReset();
   });
