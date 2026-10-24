@@ -97,8 +97,10 @@ function hasCredentialPathParameters(pathname: string): boolean {
     candidate = decoded;
   }
 
-  // If the decoding cap is reached, fail closed on still-encoded path markers.
-  return /%(?:25)*(?:3b|3f|26|3d)/i.test(candidate);
+  // Reaching the cap means some path structure may still be encoded, or a
+  // credential marker may have been revealed only by the final decode pass.
+  // Reject the path rather than return a URL we could not fully inspect.
+  return true;
 }
 
 function hasCredentialParameters(search: string, nestedDepth = 0): boolean {

@@ -70,6 +70,23 @@ describe("public external URL sanitization", () => {
     expect(sanitizePublicExternalUrl(value)).toBeNull();
   });
 
+  it("fails closed when credential path encoding reaches the inspection limit", () => {
+    function encodeLayers(value: string, layers: number): string {
+      let candidate = value;
+      for (let layer = 0; layer < layers; layer += 1) {
+        candidate = candidate.replace(/%/g, "%25");
+      }
+      return candidate;
+    }
+
+    for (const layers of [31, 32, 33]) {
+      const encodedSlashPath = encodeLayers("%2Ftoken%2Fopaque-test-marker", layers);
+      const encodedNamePath = encodeLayers("%74%6f%6b%65%6e%2Fopaque-test-marker", layers);
+      expect(sanitizePublicExternalUrl(`https://stream.example/watch/${encodedSlashPath}`)).toBeNull();
+      expect(sanitizePublicExternalUrl(`https://stream.example/watch/${encodedNamePath}`)).toBeNull();
+    }
+  });
+
   it("keeps ordinary public stream links and harmless query parameters", () => {
     expect(sanitizePublicExternalUrl("https://www.youtube.com/watch?v=abc&t=30s"))
       .toBe("https://www.youtube.com/watch?v=abc&t=30s");
