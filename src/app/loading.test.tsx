@@ -35,13 +35,13 @@ describe("homepage loading state", () => {
 
   it("limits application animations and transitions for reduced-motion users", () => {
     const css = readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8");
-    const reducedMotionBlocks = [...css.matchAll(/@media\\s*\\(prefers-reduced-motion:\\s*reduce\\)\\s*\\{([\\s\\S]*?)\\n\\}/g)];
+    const reducedMotionBlocks = [...css.matchAll(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\n\}/g)];
     const globalMotionBlock = reducedMotionBlocks.find(([, block]) =>
-      /\\*\\s*,\\s*\\*::before\\s*,\\s*\\*::after\\s*\\{/.test(block),
+      /\*\s*,\s*\*::before\s*,\s*\*::after\s*\{/.test(block),
     )?.[1];
 
-    expect(css).toMatch(/\\.is-spinning\\s*\\{[^}]*animation:/);
-    expect(css).toMatch(/\\.live-dot\\s*\\{[^}]*animation:/);
+    expect(css).toMatch(/\.is-spinning\s*\{[^}]*animation:/);
+    expect(css).toMatch(/\.live-dot\s*\{[^}]*animation:/);
     expect(globalMotionBlock).toContain("animation-duration: .01ms !important");
     expect(globalMotionBlock).toContain("animation-iteration-count: 1 !important");
     expect(globalMotionBlock).toContain("transition-duration: .01ms !important");
