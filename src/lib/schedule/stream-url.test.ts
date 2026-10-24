@@ -9,6 +9,10 @@ import {
 describe("public external URL sanitization", () => {
   it.each([
     "https://stream.example/live?access_token=private",
+    "https://stream.example/live?cookie=session-value",
+    "https://stream.example/live?X-Session-Cookie=session-value",
+    "https://stream.example/live#set-cookie=session-value",
+    "https://stream.example/live;cookie=session-value",
     "https://stream.example/live;jsessionid=private",
     "https://stream.example/live%3Bsession_id%3Dprivate",
     "https://stream.example/live%253BX%252DAPI%252DKey%253Dprivate",
@@ -78,6 +82,8 @@ describe("public external URL sanitization", () => {
       .toBe("https://stream.example/match?match_code=42");
     expect(sanitizePublicExternalUrl("https://stream.example/match;view=full"))
       .toBe("https://stream.example/match;view=full");
+    expect(sanitizePublicExternalUrl("https://stream.example/watch?cookie_consent=accepted"))
+      .toBe("https://stream.example/watch?cookie_consent=accepted");
   });
 
   it("keeps public OAuth metadata that does not contain authentication credentials", () => {

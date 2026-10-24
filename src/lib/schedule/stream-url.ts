@@ -18,6 +18,9 @@ const MAX_NESTED_URL_DEPTH = 4;
 
 function matchesCredentialParameter(name: string): boolean {
   const normalized = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+  // This Vercel query flag controls whether a cookie is set; it is not itself
+  // a cookie value or authentication credential.
+  if (normalized === "xvercelsetbypasscookie") return false;
   return credentialParameterNames.has(normalized)
     // Signed cloud-storage URLs use vendor-prefixed names such as
     // X-Amz-Credential / X-Amz-Signature and X-Goog-Signature. Match the
@@ -31,6 +34,8 @@ function matchesCredentialParameter(name: string): boolean {
     // Providers commonly prefix API-Key with X- or another vendor name.
     // Keep this specific so harmless keys such as `monkey` remain allowed.
     || /(?:api|auth|access)key(?:id)?$/.test(normalized)
+    // Cookie values can carry an authenticated session just like bearer tokens.
+    || /cookie$/.test(normalized)
     // Azure API Management and other gateways use prefixed subscription keys.
     || /subscriptionkey$/.test(normalized);
 }
