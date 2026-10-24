@@ -174,5 +174,5 @@ export function isSchedulePayload(value: unknown): value is SchedulePayload {
     || !isNullableString(value.deployment.environment)
     || (value.warning !== undefined && typeof value.warning !== "string")) return false;
 
-  return true;
+  return value.coverage.mode === value.mode && value.coverage.stale === value.stale;
 }
