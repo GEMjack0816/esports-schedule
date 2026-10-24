@@ -13,5 +13,8 @@ actual schema. Do not rerun an applied migration or edit the database journal
 just to make a checksum match.
 
 CI compares the PR or branch against its base and rejects modifications or
-deletions of existing `drizzle/NNNN_*.sql` files. New additive migration files
-are allowed.
+deletions of existing `drizzle/NNNN_*.sql` files and snapshots. The Drizzle
+journal must preserve its existing metadata and entries; appended entries must
+use sequential indexes, unique tags, the configured journal version, valid
+breakpoint flags, and strictly increasing safe-integer timestamps. New
+additive migration files are allowed.

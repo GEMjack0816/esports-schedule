@@ -26,7 +26,7 @@ function createRepository() {
   writeFileSync(join(fixtureDirectory, "drizzle", "meta", "_journal.json"), JSON.stringify({
     version: "7",
     dialect: "postgresql",
-    entries: [{ idx: 0, tag: "0001_initial", when: 1, breakpoints: true }],
+    entries: [{ idx: 0, version: "7", tag: "0001_initial", when: 1, breakpoints: true }],
   }));
   writeFileSync(join(fixtureDirectory, "drizzle", "meta", "0001_snapshot.json"), "{\"id\":\"base\"}\n");
   runGit(["add", "drizzle"]);
@@ -75,7 +75,7 @@ describe("migration immutability checker", () => {
     writeFileSync(join(fixtureDirectory, "drizzle", "meta", "_journal.json"), JSON.stringify({
       version: "7",
       dialect: "postgresql",
-      entries: [{ idx: 0, tag: "0001_replaced", when: 1, breakpoints: true }],
+      entries: [{ idx: 0, version: "7", tag: "0001_replaced", when: 1, breakpoints: true }],
     }));
     runGit(["add", "drizzle/meta/_journal.json"]);
     runGit(["commit", "--quiet", "-m", "rewrite migration journal"]);
@@ -104,8 +104,8 @@ describe("migration immutability checker", () => {
       version: "7",
       dialect: "postgresql",
       entries: [
-        { idx: 0, tag: "0001_initial", when: 1, breakpoints: true },
-        { idx: 1, tag: "0002_additive", when: 2, breakpoints: true },
+        { idx: 0, version: "7", tag: "0001_initial", when: 1, breakpoints: true },
+        { idx: 1, version: "7", tag: "0002_additive", when: 2, breakpoints: true },
       ],
     }));
     runGit(["add", "drizzle"]);

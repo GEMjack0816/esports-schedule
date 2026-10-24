@@ -47,11 +47,24 @@ export function isAppendOnlyMigrationJournal(baseContent, currentContent) {
     if (JSON.stringify(baseEntries[index]) !== JSON.stringify(currentEntries[index])) return false;
   }
 
+  const knownTags = new Set(baseEntries.map((entry) => entry?.tag));
+  let previousTimestamp = baseEntries.at(-1)?.when;
   for (let index = baseEntries.length; index < currentEntries.length; index += 1) {
     const entry = currentEntries[index];
-    if (!entry || entry.idx !== index || typeof entry.tag !== "string" || entry.tag.length === 0) {
+    if (!entry
+      || entry.idx !== index
+      || entry.version !== baseMetadata.version
+      || typeof entry.tag !== "string"
+      || entry.tag.length === 0
+      || knownTags.has(entry.tag)
+      || !Number.isSafeInteger(entry.when)
+      || !Number.isSafeInteger(previousTimestamp)
+      || entry.when <= previousTimestamp
+      || typeof entry.breakpoints !== "boolean") {
       return false;
     }
+    knownTags.add(entry.tag);
+    previousTimestamp = entry.when;
   }
   return true;
 }

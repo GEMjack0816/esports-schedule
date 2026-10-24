@@ -48,14 +48,14 @@ describe("existing Drizzle migration immutability", () => {
     const base = JSON.stringify({
       version: "7",
       dialect: "postgresql",
-      entries: [{ idx: 0, tag: "0000_initial", when: 1, breakpoints: true }],
+      entries: [{ idx: 0, version: "7", tag: "0000_initial", when: 1, breakpoints: true }],
     });
     const current = JSON.stringify({
       version: "7",
       dialect: "postgresql",
       entries: [
-        { idx: 0, tag: "0000_initial", when: 1, breakpoints: true },
-        { idx: 1, tag: "0001_additive", when: 2, breakpoints: true },
+        { idx: 0, version: "7", tag: "0000_initial", when: 1, breakpoints: true },
+        { idx: 1, version: "7", tag: "0001_additive", when: 2, breakpoints: true },
       ],
     });
     expect(isAppendOnlyMigrationJournal(base, current)).toBe(true);
@@ -63,9 +63,12 @@ describe("existing Drizzle migration immutability", () => {
 
   it.each([
     JSON.stringify({ version: "7", dialect: "postgresql", entries: [] }),
-    JSON.stringify({ version: "7", dialect: "postgresql", entries: [{ idx: 0, tag: "0000_changed", when: 1, breakpoints: true }] }),
-    JSON.stringify({ version: "7", dialect: "sqlite", entries: [{ idx: 0, tag: "0000_initial", when: 1, breakpoints: true }] }),
-    JSON.stringify({ version: "7", dialect: "postgresql", entries: [{ idx: 0, tag: "0000_initial", when: 1, breakpoints: true }, { idx: 2, tag: "0001_gap", when: 2, breakpoints: true }] }),
+    JSON.stringify({ version: "7", dialect: "postgresql", entries: [{ idx: 0, version: "7", tag: "0000_changed", when: 1, breakpoints: true }] }),
+    JSON.stringify({ version: "7", dialect: "sqlite", entries: [{ idx: 0, version: "7", tag: "0000_initial", when: 1, breakpoints: true }] }),
+    JSON.stringify({ version: "7", dialect: "postgresql", entries: [{ idx: 0, version: "7", tag: "0000_initial", when: 1, breakpoints: true }, { idx: 2, version: "7", tag: "0001_gap", when: 2, breakpoints: true }] }),
+    JSON.stringify({ version: "7", dialect: "postgresql", entries: [{ idx: 0, version: "7", tag: "0000_initial", when: 1, breakpoints: true }, { idx: 1, version: "7", tag: "0001_older_timestamp", when: 1, breakpoints: true }] }),
+    JSON.stringify({ version: "7", dialect: "postgresql", entries: [{ idx: 0, version: "7", tag: "0000_initial", when: 1, breakpoints: true }, { idx: 1, version: "7", tag: "0000_initial", when: 2, breakpoints: true }] }),
+    JSON.stringify({ version: "7", dialect: "postgresql", entries: [{ idx: 0, version: "7", tag: "0000_initial", when: 1, breakpoints: true }, { idx: 1, version: "7", tag: "0001_unsafe_timestamp", when: "2", breakpoints: true }] }),
     "not-json",
   ])("rejects modified, truncated, malformed, or invalid journal history", (current) => {
     const base = JSON.stringify({
