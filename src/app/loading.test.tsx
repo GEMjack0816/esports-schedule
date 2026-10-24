@@ -32,4 +32,14 @@ describe("homepage loading state", () => {
     expect(reducedMotionRule?.[1]).toContain("animation: none");
     expect(reducedMotionRule?.[1]).toContain("background: none");
   });
+
+  it("keeps placeholders visible in forced-colors mode without animation", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8");
+    const forcedColorsRule = css.match(/@media\s*\(forced-colors:\s*active\)\s*\{([\s\S]*?)\n\}/);
+
+    expect(forcedColorsRule?.[1]).toContain(".loading-skeleton");
+    expect(forcedColorsRule?.[1]).toContain("background: Canvas");
+    expect(forcedColorsRule?.[1]).toContain("border: 1px solid CanvasText");
+    expect(forcedColorsRule?.[1]).toContain(".loading-skeleton::after { display: none; }");
+  });
 });

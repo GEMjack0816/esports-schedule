@@ -173,6 +173,14 @@ a { color: inherit; text-decoration: none; }
 @media (prefers-reduced-motion: reduce) {
   .loading-skeleton::after { animation: none; background: none; }
 }
+@media (forced-colors: active) {
+  .loading-skeleton {
+    box-sizing: border-box;
+    background: Canvas;
+    border: 1px solid CanvasText;
+  }
+  .loading-skeleton::after { display: none; }
+}
 .eyebrow { display: flex; align-items: center; gap: 9px; color: var(--cyan); font-family: var(--font-geist-mono), monospace; font-size: 11px; font-weight: 650; letter-spacing: .18em; }
 .eyebrow i { width: 30px; height: 1px; background: var(--cyan); box-shadow: 12px 0 16px var(--cyan); }
 .hero-copy h1 { margin: 20px 0 22px; font-size: clamp(50px, 6.2vw, 92px); line-height: .98; letter-spacing: -.065em; font-weight: 680; }
