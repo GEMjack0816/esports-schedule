@@ -161,6 +161,25 @@ describe("public external URL sanitization", () => {
     expect(sanitizePublicExternalUrl(value)).toBeNull();
   });
 
+  it("rejects credentials nested inside JSON-valued URL parameters", () => {
+    const payloads = [
+      JSON.stringify({ access_token: "private" }),
+      JSON.stringify({ nested: [{ client_secret: "private" }] }),
+      JSON.stringify({ redirect: "https://inner.example/callback?token=private" }),
+    ];
+
+    for (const payload of payloads) {
+      const encoded = encodeURIComponent(payload);
+      expect(sanitizePublicExternalUrl(`https://stream.example/watch?payload=${encoded}`)).toBeNull();
+      expect(sanitizePublicExternalUrl(`https://stream.example/watch?payload=${encodeURIComponent(encoded)}`))
+        .toBeNull();
+    }
+  });
+
+  it("keeps harmless JSON-valued URL parameters", () => {
+    const payload = encodeURIComponent(JSON.stringify({ match_code: "final", region: "cn" }));
+    expect(sanitizePublicExternalUrl(`https://stream.example/watch?payload=${payload}`)).not.toBeNull();
+  });
   it("keeps public HTTP source links but rejects credentials in either protocol", () => {
     expect(sanitizePublicHttpUrl("http://league.example/match?id=42"))
       .toBe("http://league.example/match?id=42");
