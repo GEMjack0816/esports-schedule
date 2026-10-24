@@ -4,16 +4,10 @@ import { getCache } from "@vercel/functions";
 import { getReviewRepository } from "./repository";
 import type { DrizzleReviewRepository } from "./repository";
 import { validateSubmission } from "@/lib/submissions";
+import type { LegacyImportCounts, LegacySubmissionImportRecord } from "./types";
 
 const INDEX_KEY = "pending-index-v1";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-type ImportCounts = {
-  scanned: number;
-  imported: number;
-  duplicate: number;
-  invalid: number;
-};
 
 function legacyCache() {
   return getCache({ namespace: "esports-schedule-submissions" });
@@ -22,36 +16,61 @@ function legacyCache() {
 export async function importLegacyRuntimeSubmissions(
   actorId: string,
   repository: DrizzleReviewRepository = getReviewRepository(),
-): Promise<ImportCounts> {
+): Promise<LegacyImportCounts> {
   const cache = legacyCache();
   const index = await cache.get(INDEX_KEY);
+  if (
+    index !== undefined
+    && index !== null
+    && (!Array.isArray(index) || index.some((value) => typeof value !== "string"))
+  ) {
+    // A malformed index cannot safely be treated as empty or partially read.
+    // Abort before repository writes so the audit cannot claim a partial import.
+    throw new Error("Legacy submission index is invalid.");
+  }
   const ids = Array.isArray(index)
-    ? [...new Set(index.filter((value): value is string => typeof value === "string"))]
+    ? [...new Set(index)]
     : [];
-  const counts: ImportCounts = { scanned: ids.length, imported: 0, duplicate: 0, invalid: 0 };
+  const records: LegacySubmissionImportRecord[] = [];
+  let invalid = 0;
 
   for (const id of ids) {
+    if (!UUID_PATTERN.test(id)) {
+      invalid += 1;
+      continue;
+    }
+
+    let raw: unknown;
     try {
-      if (!UUID_PATTERN.test(id)) throw new Error("invalid id");
-      const raw = await cache.get(`pending:${id}`);
-      if (!raw || typeof raw !== "object") throw new Error("missing");
+      raw = await cache.get(`pending:${id}`);
+    } catch {
+      // A cache read failure is not evidence that the record is malformed.
+      // Abort before database writes so an outage cannot produce a misleading
+      // partial import and aggregate audit event.
+      throw new Error("LEGACY_RUNTIME_CACHE_READ_FAILED");
+    }
+
+    if (!raw || typeof raw !== "object") {
+      invalid += 1;
+      continue;
+    }
+
+    try {
       const record = raw as Record<string, unknown>;
       const submittedAt = typeof record.submittedAt === "string"
         ? new Date(record.submittedAt)
         : new Date(Number.NaN);
       if (Number.isNaN(submittedAt.getTime())) throw new Error("invalid time");
       const input = validateSubmission({ ...record, notes: record.notes ?? null });
-      const result = await repository.insertLegacySubmission(input, id, submittedAt);
-      counts[result] += 1;
+      records.push({ id, input, submittedAt });
     } catch (error) {
       if (error && typeof error === "object" && "code" in error
         && (error as { code?: string }).code === "DATABASE_UNAVAILABLE") {
         throw error;
       }
-      counts.invalid += 1;
+      invalid += 1;
     }
   }
 
-  await repository.auditLegacyImport(actorId, counts);
-  return counts;
+  return repository.importLegacySubmissions(actorId, records, ids.length, invalid);
 }
