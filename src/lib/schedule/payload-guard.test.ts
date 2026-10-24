@@ -134,4 +134,20 @@ describe("isSchedulePayload", () => {
     expect(isSchedulePayload({ ...validPayload(), providers: { pandascore: "connected", manual: "unknown" } })).toBe(false);
     expect(isSchedulePayload({ ...validPayload(), warning: { message: "unexpected object" } })).toBe(false);
   });
+  it("accepts stale and unavailable game sync statuses", () => {
+    for (const syncStatus of ["stale", "unavailable"] as const) {
+      const payload = validPayload();
+      const games = {
+        ...payload.coverage.games,
+        lol: { ...payload.coverage.games.lol, syncStatus },
+      };
+
+      expect(isSchedulePayload({
+        ...payload,
+        stale: true,
+        coverage: { ...payload.coverage, stale: true, games },
+      })).toBe(true);
+    }
+  });
+
 });

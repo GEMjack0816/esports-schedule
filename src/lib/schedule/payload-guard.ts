@@ -114,7 +114,7 @@ function isGameCoverage(value: unknown): value is GameCoverage {
     || !isNullableDateTimeString(value.sourceFetchedAt)
     || !isNullableNumber(value.snapshotAgeSeconds)
     || typeof value.refreshInProgress !== "boolean"
-    || (value.syncStatus !== "normal" && value.syncStatus !== "delayed" && value.syncStatus !== "failed")
+    || (value.syncStatus !== "normal" && value.syncStatus !== "delayed" && value.syncStatus !== "stale" && value.syncStatus !== "failed" && value.syncStatus !== "unavailable")
     || !isNullableNumber(value.staleMinutes)
     || (value.dataSource !== "fresh" && value.dataSource !== "cache" && value.dataSource !== "persistent" && value.dataSource !== "unavailable")
     || !isNullableString(value.lastErrorCode)
