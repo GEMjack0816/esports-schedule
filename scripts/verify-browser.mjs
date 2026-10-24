@@ -146,6 +146,25 @@ for (const profile of [
   const todayRunningVisible = await page.locator(".match-card").count();
   const injectedLiveFixtureVisible = await page.locator(".match-card")
     .filter({ hasText: "Codex live fixture" }).count() === 1;
+  const dateFilter = page.locator('.date-field input[type="date"]');
+  const dateValues = await page.evaluate(() => {
+    const asInputDate = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    const today = new Date();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    return { today: asInputDate(today), tomorrow: asInputDate(tomorrow) };
+  });
+  await dateFilter.fill(dateValues.today);
+  await page.waitForFunction(
+    (expected) => document.querySelectorAll(".match-card").length === expected,
+    apiBody.matches.filter((match) => match.status === "running").length,
+  );
+  const selectedTodayRunningVisible = await page.locator(".match-card").count()
+    === apiBody.matches.filter((match) => match.status === "running").length;
+  await dateFilter.fill(dateValues.tomorrow);
+  await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 0);
+  const selectedOtherDateHidesRunning = await page.locator(".match-card").count() === 0;
+  await dateFilter.fill("");
   await statusSelect.selectOption("all");
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
@@ -218,6 +237,8 @@ for (const profile of [
     todayRunningVisible,
     expectedRunningFixturesAfterMock: apiBody.matches.filter((match) => match.status === "running").length,
     injectedLiveFixtureVisible,
+    selectedTodayRunningVisible,
+    selectedOtherDateHidesRunning,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -272,6 +293,8 @@ for (const result of results) {
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.todayRunningVisible !== result.expectedRunningFixturesAfterMock) failures.push(`${prefix}: Today range hides running matches outside today's date or without a start time`);
   if (!result.injectedLiveFixtureVisible) failures.push(`${prefix}: browser-only no-time live fixture is not visible in Today`);
+  if (!result.selectedTodayRunningVisible) failures.push(`${prefix}: selecting Today by date hides active fixtures`);
+  if (!result.selectedOtherDateHidesRunning) failures.push(`${prefix}: selecting another date includes active fixtures`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);

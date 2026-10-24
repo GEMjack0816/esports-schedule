@@ -52,9 +52,10 @@ describe("isMatchOnSelectedDate", () => {
     expect(isMatchOnSelectedDate("running", "2026-10-21", today, today)).toBe(true);
   });
 
-  it("preserves exact-date behavior for other matches and non-Today selections", () => {
+  it("preserves exact-date behavior for other matches and keeps running matches out of other dates", () => {
     expect(isMatchOnSelectedDate("scheduled", "unscheduled", today, today)).toBe(false);
     expect(isMatchOnSelectedDate("running", "unscheduled", tomorrow, today)).toBe(false);
+    expect(isMatchOnSelectedDate("running", tomorrow, tomorrow, today)).toBe(false);
     expect(isMatchOnSelectedDate("scheduled", tomorrow, tomorrow, today)).toBe(true);
   });
 });

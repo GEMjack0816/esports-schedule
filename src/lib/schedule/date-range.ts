@@ -26,7 +26,8 @@ export function isMatchOnSelectedDate(
   selectedDate: string,
   today: string,
 ): boolean {
-  return dateKey === selectedDate || (selectedDate === today && status === "running");
+  if (status === "running") return selectedDate === today;
+  return dateKey === selectedDate;
 }
 
 export function scheduleDateGroupKey(match: Pick<EsportsMatch, "status">, dateKey: string): string {
