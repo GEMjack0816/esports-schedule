@@ -10,6 +10,10 @@ describe("public external URL sanitization", () => {
   it.each([
     "https://stream.example/live?access_token=private",
     "https://stream.example/live?cookie=session-value",
+    "https://stream.example/live?PHPSESSID=private-session",
+    "https://stream.example/live?ASP.NET_SessionId=private-session",
+    "https://stream.example/live?sid=private-session",
+    "https://stream.example/live?__cf_bm=private-clearance",
     "https://stream.example/live?X-Session-Cookie=session-value",
     "https://stream.example/live#set-cookie=session-value",
     "https://stream.example/live;cookie=session-value",
