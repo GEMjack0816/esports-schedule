@@ -252,7 +252,10 @@ export function shouldRefreshCachedSnapshot(
   cachedRevision: number,
   fence: { available: boolean; revision: number },
 ): boolean {
-  return !fence.available || cachedRevision < fence.revision;
+  // A regional fence may lag a newer shared Next Data Cache revision. Repair
+  // either direction of mismatch so a later database outage can fall back to
+  // this region's current Runtime Cache snapshot instead of an older version.
+  return !fence.available || cachedRevision !== fence.revision;
 }
 
 export async function preserveLastSuccessfulPublicMatches(

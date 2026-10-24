@@ -151,6 +151,67 @@ describe("manual match cache authoritative version checks", () => {
     expect(mocks.snapshot).toHaveBeenCalledOnce();
   });
 
+  it("repairs a lagging regional Runtime Cache fence before a later database outage", async () => {
+    const runtimeCache = new Map<string, unknown>([
+      ["published-manual-matches-fence-v1", { revision: 5 }],
+      ["published-manual-matches-v1:5", {
+        matches: [], fetchedAt: "regional Runtime Cache revision 5", revision: 5,
+      }],
+    ]);
+    const row = {
+      id: "11111111-1111-4111-8111-111111111111",
+      game: "honor-of-kings",
+      league: "KPL",
+      tournament: "Current database snapshot",
+      stage: null,
+      homeTeamName: "Alpha",
+      homeTeamAcronym: null,
+      homeTeamLogo: null,
+      awayTeamName: "Beta",
+      awayTeamAcronym: null,
+      awayTeamLogo: null,
+      startTimeUtc: new Date("2026-10-15T12:00:00.000Z"),
+      bestOf: 5,
+      status: "scheduled",
+      homeScore: null,
+      awayScore: null,
+      streamUrl: null,
+      sourceUrl: null,
+      updatedAt: new Date("2026-10-15T11:00:00.000Z"),
+    } as PublishedManualMatchRow;
+    mocks.get.mockImplementation(async (key: string) => runtimeCache.get(key) ?? null);
+    mocks.set.mockImplementation(async (key: string, value: unknown) => {
+      runtimeCache.set(key, value);
+    });
+    mocks.cacheStatus
+      .mockResolvedValueOnce({ revision: 6, pendingRevisions: 0 })
+      .mockResolvedValueOnce({ revision: 6, pendingRevisions: 0 })
+      .mockRejectedValueOnce(new Error("database unavailable"));
+    mocks.cached.mockResolvedValue({
+      matches: [{
+        id: "manual:honor-of-kings:db-11111111-1111-4111-8111-111111111111",
+        tournament: "Current database snapshot",
+      } as EsportsMatch],
+      fetchedAt: "shared Next Data Cache revision 6",
+      revision: 6,
+    });
+    mocks.snapshot.mockImplementation(async (writeFence?: (revision: number) => Promise<void>) => {
+      await writeFence?.(6);
+      return { rows: [row], revision: 6, pendingRevisions: 0, fenceWritten: true };
+    });
+
+    const refreshed = await getPublishedDatabaseMatches();
+    expect(refreshed.matches[0]?.tournament).toBe("Current database snapshot");
+    expect(refreshed.state.cacheRevision).toBe(6);
+    expect(runtimeCache.get("published-manual-matches-fence-v1")).toEqual({ revision: 6 });
+    expect(runtimeCache.get("published-manual-matches-v1:6")).toMatchObject({ revision: 6 });
+
+    const duringOutage = await getPublishedDatabaseMatches();
+    expect(duringOutage.state.status).toBe("cached");
+    expect(duringOutage.state.cacheRevision).toBe(6);
+    expect(duringOutage.matches[0]?.tournament).toBe("Current database snapshot");
+  });
+
   it("does not retry a pending Runtime Cache delivery before its database-backed retry time", async () => {
     mocks.get.mockImplementation(async (key: string) => key === "published-manual-matches-fence-v1"
       ? { revision: 5 }
