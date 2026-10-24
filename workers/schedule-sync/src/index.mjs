@@ -329,8 +329,10 @@ export async function invokeScheduleSync({
         payload = await readJsonBody(response);
       } catch (error) {
         if (!(error instanceof SyncInvocationError)) {
-          const recovered = await verifyFreshAfterAmbiguousSyncResponse({ fetchImpl, nowImpl, timeoutSignalImpl });
-          if (recovered) return recovered;
+          if (response.ok) {
+            const recovered = await verifyFreshAfterAmbiguousSyncResponse({ fetchImpl, nowImpl, timeoutSignalImpl });
+            if (recovered) return recovered;
+          }
         }
         if (attempt === MAX_ATTEMPTS - 1) throw error;
         const delay = retryDelayFor(response, attempt, nowImpl());
@@ -373,8 +375,12 @@ export async function invokeScheduleSync({
       // remain deterministic protocol failures.
       if (error instanceof SyncInvocationError) throw error;
       cancelResponseBodyWithoutBlocking(response);
-      const recovered = await verifyFreshAfterAmbiguousSyncResponse({ fetchImpl, nowImpl, timeoutSignalImpl });
-      if (recovered) return recovered;
+      if (response.ok) {
+        const recovered = await verifyFreshAfterAmbiguousSyncResponse({ fetchImpl, nowImpl, timeoutSignalImpl });
+        if (recovered) return recovered;
+      } else if (response.status < 500 && response.status !== 429) {
+        throw new SyncInvocationError("response_read_failure", response.status);
+      }
       if (attempt === MAX_ATTEMPTS - 1) {
         throw new SyncInvocationError("response_read_failure", response.status);
       }

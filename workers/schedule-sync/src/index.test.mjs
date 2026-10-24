@@ -288,6 +288,27 @@ describe("schedule sync Worker client", () => {
     ]);
   });
 
+  it("does not let a fresh cached snapshot hide an authorization failure with a broken body", async () => {
+    const requests = [];
+    await expect(invokeScheduleSync({
+      secret: syncSecret,
+      fetchImpl: async (url) => {
+        requests.push(url);
+        const body = new ReadableStream({
+          start(controller) {
+            controller.error(new Error(`private auth response ${syncSecret}`));
+          },
+        });
+        return new Response(body, {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    })).rejects.toMatchObject({ code: "response_read_failure", httpStatus: 401 });
+
+    expect(requests).toEqual(["https://esports-schedule-two.vercel.app/api/cron/sync"]);
+  });
+
   it("bounds repeated response-body transport failures and sanitizes the final error", async () => {
     const waits = [];
     let syncAttempts = 0;
