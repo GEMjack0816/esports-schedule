@@ -20,6 +20,10 @@ describe("production sync request boundary", () => {
     expect(workflow).not.toMatch(/echo\s+.*CRON_SECRET/);
   });
 
+  it("prevents non-main manual dispatches from accessing the production sync credential", () => {
+    expect(workflow).toMatch(/\bif:\s*github\.ref\s*==\s*['"]refs\/heads\/main['"]/);
+  });
+
   it("sends one fixed-target request with the secret only in the authorization header", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ status: "busy" }, { status: 409 }));
     const timeoutSignal = new AbortController().signal;

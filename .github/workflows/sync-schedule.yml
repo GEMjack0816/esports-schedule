@@ -14,11 +14,15 @@ concurrency:
 
 jobs:
   refresh:
+    # workflow_dispatch can target a non-default ref; only main may use the production sync credential.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
       - name: Check out response validator
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Trigger the protected production sync
         env:
