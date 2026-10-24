@@ -35,12 +35,19 @@ for (const profile of [
   const criticalRequestFailures = [];
   const optionalResourceFailures = [];
   const browserResourceWarnings = [];
+  let expectedRefreshError = false;
+  let expectedRefreshNetworkFailure = false;
+  let expected503ConsoleErrors = 0;
   const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage"];
   const auditUrl = new URL(baseUrl);
   auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const text = message.text();
+    if (expected503ConsoleErrors > 0 && /status of 503 \(Service Unavailable\)/.test(text)) {
+      expected503ConsoleErrors -= 1;
+      return;
+    }
     if (/^Failed to load resource: net::ERR_/.test(text)) {
       browserResourceWarnings.push(text);
       return;
@@ -50,6 +57,10 @@ for (const profile of [
   page.on("pageerror", (error) => errors.push(`page:${error.message}`));
   page.on("requestfailed", (request) => {
     const failedUrl = new URL(request.url());
+    if (expectedRefreshNetworkFailure && failedUrl.origin === auditUrl.origin && failedUrl.pathname === "/api/matches") {
+      expectedRefreshNetworkFailure = false;
+      return;
+    }
     if (request.failure()?.errorText === "net::ERR_ABORTED") {
       optionalResourceFailures.push(`${request.method()} ${failedUrl.pathname} aborted`);
       return;
@@ -67,6 +78,10 @@ for (const profile of [
       && criticalPaths.includes(candidateUrl.pathname)
       && candidate.status() >= 400
     ) {
+      if (expectedRefreshError && candidateUrl.pathname === "/api/matches" && candidate.status() === 503) {
+        expectedRefreshError = false;
+        return;
+      }
       criticalRequestFailures.push(`${candidate.request().method()} ${candidateUrl.pathname} HTTP ${candidate.status()}`);
     }
   });
@@ -102,6 +117,39 @@ for (const profile of [
     (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
     { timeout: 120_000 },
   );
+  // Client-only outage fixture: validate first-snapshot empty-state copy without mutating the backend.
+  let outageFixtureRequests = 0;
+  await page.route("**/api/matches", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    if (outageFixtureRequests === 2) {
+      outageFixtureRequests += 1;
+      return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+    }
+    if (outageFixtureRequests === 3) {
+      outageFixtureRequests += 1;
+      return route.abort("failed");
+    }
+    if (outageFixtureRequests === 4) {
+      outageFixtureRequests += 1;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: null }) });
+    }
+    const response = await route.fetch();
+    const body = await response.json();
+    outageFixtureRequests += 1;
+    body.matches = [];
+    body.demoMode = false;
+    if (outageFixtureRequests === 1) {
+      body.mode = "unavailable";
+      body.stale = true;
+      body.warning = "Browser verification outage fixture";
+    } else {
+      // Deterministically model recovery after the retry without changing API or database state.
+      body.mode = "live";
+      body.stale = false;
+      body.warning = "Browser verification retry recovered";
+    }
+    await route.fulfill({ response, body: JSON.stringify(body) });
+  });
   await page.locator(".refresh-button").click();
   const apiResponse = await apiResponsePromise;
   let apiBody;
@@ -116,6 +164,47 @@ for (const profile of [
       return response.json();
     });
   }
+  await page.getByRole("heading", { name: "赛程数据暂不可用" }).waitFor({ state: "visible" });
+  const unavailableEmptyStateVisible = await page.getByRole("heading", { name: "赛程数据暂不可用" }).count() === 1;
+  const unavailableRetryVisible = await page.getByRole("button", { name: "重新检查赛程" }).isVisible();
+  const unavailableOffersFilterReset = await page.getByRole("button", { name: "清除筛选" }).isVisible();
+  const screenshot = path.join(os.tmpdir(), `esports-schedule-${profile.name}.png`);
+  await page.screenshot({ path: screenshot, fullPage: true });
+  const retryResponsePromise = page.waitForResponse(
+    (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
+    { timeout: 120_000 },
+  );
+  await page.getByRole("button", { name: "重新检查赛程" }).click();
+  const retryResponse = await retryResponsePromise;
+  const retryBody = await retryResponse.json();
+  await page.getByRole("heading", { name: "没有找到符合条件的比赛" }).waitFor({ state: "visible" });
+  const retryRecoveredStateVisible = await page.getByText("Browser verification retry recovered").isVisible();
+  const retryRequestCount = outageFixtureRequests;
+  expectedRefreshError = true;
+  expected503ConsoleErrors += 1;
+  const failedRefreshResponsePromise = page.waitForResponse(
+    (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
+    { timeout: 120_000 },
+  );
+  await page.locator(".refresh-button").click();
+  const failedRefreshResponse = await failedRefreshResponsePromise;
+  await page.getByText("暂时无法重新获取赛程，请稍后重试。").waitFor({ state: "visible" });
+  const refreshFailureHandled = failedRefreshResponse.status() === 503
+    && await page.getByText("暂时无法重新获取赛程，请稍后重试。").isVisible();
+  expectedRefreshNetworkFailure = true;
+  const failedNetworkRequestPromise = page.waitForEvent("requestfailed", {
+    predicate: (request) => request.url().includes("/api/matches"),
+    timeout: 120_000,
+  });
+  await page.locator(".refresh-button").click();
+  await failedNetworkRequestPromise;
+  await page.getByText("暂时无法重新获取赛程，请检查网络后重试。").waitFor({ state: "visible" });
+  const refreshNetworkFailureHandled = await page.getByText("暂时无法重新获取赛程，请检查网络后重试。").isVisible();
+  const recoveredSchedulePreservedAfterFailures = await page.getByText("Browser verification retry recovered").isVisible();
+  await page.locator(".refresh-button").click();
+  await page.getByText("赛程响应格式无效，已保留当前赛程，请稍后重试。").waitFor({ state: "visible" });
+  const malformedRefreshHandled = await page.getByText("赛程响应格式无效，已保留当前赛程，请稍后重试。").isVisible();
+  const recoveredSchedulePreservedAfterMalformedResponse = await page.getByText("Browser verification retry recovered").isVisible();
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -133,9 +222,6 @@ for (const profile of [
       .filter((element) => element.left < -1 || element.right > document.documentElement.clientWidth + 1)
       .slice(0, 12),
   }));
-  const screenshot = path.join(os.tmpdir(), `esports-schedule-${profile.name}.png`);
-  await page.screenshot({ path: screenshot, fullPage: true });
-
   let versionResult = { status: 0, body: {} };
   let healthResult = { status: 0, body: {} };
   try {
@@ -189,6 +275,19 @@ for (const profile of [
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
     refreshedApiStale: apiBody.stale,
+    unavailableEmptyStateVisible,
+    unavailableRetryVisible,
+    unavailableOffersFilterReset,
+    retryRecoveredStateVisible,
+    retryRequestCount,
+    retryResponseStatus: retryResponse.status(),
+    retryMode: retryBody.mode,
+    refreshFailureHandled,
+    failedRefreshStatus: failedRefreshResponse.status(),
+    refreshNetworkFailureHandled,
+    recoveredSchedulePreservedAfterFailures,
+    malformedRefreshHandled,
+    recoveredSchedulePreservedAfterMalformedResponse,
     refreshedApiDeployment: apiBody.deployment,
     apiBodyReadFallback,
     healthStatus: healthResult.status,
@@ -237,6 +336,21 @@ for (const result of results) {
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
+  if (!result.unavailableEmptyStateVisible || !result.unavailableRetryVisible || result.unavailableOffersFilterReset) {
+    failures.push(`${prefix}: unavailable empty state is misleading or lacks retry action`);
+  }
+  if (!result.retryRecoveredStateVisible || result.retryRequestCount !== 2
+    || result.retryResponseStatus !== 200 || result.retryMode !== "live") {
+    failures.push(`${prefix}: unavailable retry did not consume a recovered schedule response`);
+  }
+  if (!result.refreshFailureHandled || result.failedRefreshStatus !== 503) {
+    failures.push(`${prefix}: refresh HTTP failure was not handled with user feedback`);
+  }
+  if (!result.refreshNetworkFailureHandled) failures.push(`${prefix}: network refresh failure was not handled with user feedback`);
+  if (!result.recoveredSchedulePreservedAfterFailures) failures.push(`${prefix}: refresh failure discarded the last displayed schedule`);
+  if (!result.malformedRefreshHandled || !result.recoveredSchedulePreservedAfterMalformedResponse) {
+    failures.push(`${prefix}: malformed HTTP 200 refresh response replaced or crashed the last displayed schedule`);
+  }
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
   if (result.versionStatus !== 200) failures.push(`${prefix}: version HTTP ${result.versionStatus}`);
