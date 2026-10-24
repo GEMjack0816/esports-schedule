@@ -115,6 +115,7 @@ function emptyGameCoverage(): GameCoverage {
   for (const endpoint of pandaEndpointKeys) endpoints[endpoint] = emptyEndpointCoverage();
   return {
     endpoints,
+    syncGeneration: null,
     pages: 0,
     xTotal: 0,
     raw: 0,
@@ -187,6 +188,7 @@ export function deriveGameCoverage(
 
     games[game] = {
       ...base,
+      syncGeneration: snapshot?.syncGeneration ?? null,
       lastSuccessfulSyncAt,
       lastAttemptAt,
       sourceFetchedAt,

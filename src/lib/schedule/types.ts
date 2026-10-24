@@ -82,6 +82,8 @@ export type ProviderVerificationSample = {
 };
 
 export type GameCoverage = {
+  /** Monotonic PandaScore snapshot version used to reject stale client refresh responses. */
+  syncGeneration?: number | null;
   endpoints: Record<PandaEndpointKey, EndpointCoverage>;
   pages: number;
   xTotal: number;

@@ -52,8 +52,12 @@ function coverage(): GameCoverage {
   };
 }
 
-function snapshot(game: PandaGameKey, fetchedAt = "2026-07-18T00:00:00.000Z"): PandaGameSnapshot {
-  return { game, matches: [], fetchedAt, rateLimitRemaining: 100, coverage: coverage() };
+function snapshot(
+  game: PandaGameKey,
+  fetchedAt = "2026-07-18T00:00:00.000Z",
+  syncGeneration?: number,
+): PandaGameSnapshot {
+  return { game, matches: [], fetchedAt, syncGeneration, rateLimitRemaining: 100, coverage: coverage() };
 }
 
 describe("refresh coordination and health metadata", () => {
@@ -79,7 +83,7 @@ describe("refresh coordination and health metadata", () => {
   });
 
   it("uses the source snapshot time for age and marks a fresh successful sync normal", () => {
-    const snapshots = Object.fromEntries(pandaGameKeys.map((game) => [game, snapshot(game)]));
+    const snapshots = Object.fromEntries(pandaGameKeys.map((game, index) => [game, snapshot(game, undefined, index + 1)]));
     const states = Object.fromEntries(pandaGameKeys.map((game) => [
       game,
       stateAfterSuccess(game, snapshots[game], new Date("2026-07-18T00:00:05.000Z")),
@@ -94,6 +98,7 @@ describe("refresh coordination and health metadata", () => {
       sourceFetchedAt: "2026-07-18T00:00:00.000Z",
       snapshotAgeSeconds: 600,
       syncStatus: "normal",
+      syncGeneration: 1,
       lastError: null,
     });
   });
