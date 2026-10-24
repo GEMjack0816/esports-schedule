@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { chromium } from "playwright-core";
 import {
   assertAdminSessionLanding,
+  createPreviewCleanupRequest,
   assertIsolatedDatabasePreflight,
   assertPreviewDeployment,
   parseVerificationTarget,
@@ -162,11 +163,8 @@ try {
 } finally {
   if (cleanupEnabled && context) {
     try {
-      const cleanupResponse = await context.request.post(`${deploymentBaseUrl}/api/admin/e2e-cleanup`, {
-        headers: { Origin: new URL(deploymentBaseUrl).origin },
-        data: { runId },
-        timeout: 15_000,
-      });
+      const cleanupRequest = createPreviewCleanupRequest(verifiedDeployment, runId);
+      const cleanupResponse = await context.request.post(cleanupRequest.url, cleanupRequest.options);
       const cleanupPayload = await cleanupResponse.json().catch(() => null);
       if (cleanupResponse.status() !== 200 || cleanupPayload?.ok !== true) {
         const status = cleanupPayload?.cleaned === true
