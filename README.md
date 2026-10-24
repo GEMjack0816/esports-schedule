@@ -97,6 +97,9 @@ npm start
 ```powershell
 Invoke-RestMethod http://localhost:3000/api/health/data-coverage
 npm run verify:browser -- http://localhost:3000
+# Optional exact-build assertion:
+npm run verify:browser -- http://localhost:3000 <expected-40-character-commit-sha>
+# Alternatively set EXPECTED_GIT_COMMIT_SHA in the process environment.
 npm run verify:production -- http://localhost:3000 <expected-git-sha>
 ```
 
