@@ -28,6 +28,9 @@ export function validateSyncResponse(payload, httpStatus) {
   if (httpStatus < 200 || httpStatus >= 300) {
     return { ok: false, message: `sync endpoint returned HTTP ${httpStatus}` };
   }
+  if (payload.ok !== true) {
+    return { ok: false, message: "sync endpoint did not confirm a successful response" };
+  }
   if (payload.lockAcquired !== true) {
     return { ok: false, message: "sync did not acquire the refresh lock" };
   }

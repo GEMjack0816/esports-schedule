@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { validateSyncResponse } from "./validate-sync-response.mjs";
 
 const success = {
+  ok: true,
   status: "success",
   lockAcquired: true,
   generation: 41,
@@ -21,6 +22,17 @@ const success = {
 describe("sync workflow response validation", () => {
   it("accepts a complete successful refresh", () => {
     expect(validateSyncResponse(success, 200).ok).toBe(true);
+  });
+
+  it.each([false, undefined])("rejects a success-shaped response without explicit ok=true (%s)", (ok) => {
+    const payload = { ...success };
+    if (ok === undefined) delete payload.ok;
+    else payload.ok = ok;
+
+    expect(validateSyncResponse(payload, 200)).toEqual({
+      ok: false,
+      message: "sync endpoint did not confirm a successful response",
+    });
   });
 
   it.each([
