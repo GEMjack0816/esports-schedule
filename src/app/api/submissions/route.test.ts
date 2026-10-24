@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleSubmissionPost } from "./route";
+import * as routeModule from "./route";
+import { handleSubmissionPost } from "./handler";
 
 const valid = {
   game: "lol",
@@ -22,6 +23,10 @@ function request(body: unknown) {
 }
 
 describe("POST /api/submissions", () => {
+  it("exports only supported route handlers and segment configuration", () => {
+    expect(Object.keys(routeModule).sort()).toEqual(["POST", "dynamic"]);
+  });
+
   it("returns only the public receipt fields and no-store headers", async () => {
     const createSubmission = vi.fn(async (...args: unknown[]) => {
       expect(args).toHaveLength(2);
