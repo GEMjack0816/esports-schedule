@@ -14,6 +14,9 @@ describe("public external URL sanitization", () => {
     "https://stream.example/live#set-cookie=session-value",
     "https://stream.example/live;cookie=session-value",
     "https://stream.example/live;jsessionid=private",
+    "https://stream.example/watch/token/opaque-secret",
+    "https://stream.example/watch/access_token/opaque-secret",
+    "https://stream.example/watch/eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.signature",
     "https://stream.example/live%3Bsession_id%3Dprivate",
     "https://stream.example/live%253BX%252DAPI%252DKey%253Dprivate",
     "https://stream.example/live;X-Access-Key=private",
@@ -82,6 +85,8 @@ describe("public external URL sanitization", () => {
       .toBe("https://stream.example/match?match_code=42");
     expect(sanitizePublicExternalUrl("https://stream.example/match;view=full"))
       .toBe("https://stream.example/match;view=full");
+    expect(sanitizePublicExternalUrl("https://stream.example/matches/season-2026/game-3"))
+      .toBe("https://stream.example/matches/season-2026/game-3");
     expect(sanitizePublicExternalUrl("https://stream.example/watch?cookie_consent=accepted"))
       .toBe("https://stream.example/watch?cookie_consent=accepted");
   });
@@ -134,6 +139,7 @@ describe("public external URL sanitization", () => {
     `https://stream.example/watch#return=${encodeURIComponent("https://viewer:password@inner.example/live")}`,
     `https://stream.example/watch?next=${encodeURIComponent("//viewer:password@inner.example/live")}`,
     `https://stream.example/watch?next=${encodeURIComponent("https://inner.example/live;jsessionid=private")}`,
+    `https://stream.example/watch?next=${encodeURIComponent("https://inner.example/watch/token/opaque-secret")}`,
   ])("rejects userinfo hidden in a nested URL", (value) => {
     expect(sanitizePublicExternalUrl(value)).toBeNull();
   });

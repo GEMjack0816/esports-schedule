@@ -62,14 +62,27 @@ function isCredentialParameter(name: string): boolean {
 function hasCredentialPathParameters(pathname: string): boolean {
   let candidate = pathname;
   // Some servers put session IDs and other credentials in matrix-style path
-  // parameters (for example, /watch;jsessionid=...). Inspect encoded forms too,
-  // using the same bounded ASCII decoding policy as query parameter names.
+  // parameters or key/value path components. Inspect encoded forms too, using
+  // the same bounded ASCII decoding policy as query parameter names.
   for (let depth = 0; depth < MAX_PARAMETER_ENCODING_DEPTH; depth += 1) {
-    for (const segment of candidate.split("/")) {
+    const segments = candidate.split("/");
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = segments[index] ?? "";
+      if (/^eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(segment)) return true;
+
+      const pathName = segment.split(/[;?&=]/, 1)[0] ?? "";
+      const hasFollowingValue = segments.slice(index + 1).some((part) => part.length > 0);
+      if (hasFollowingValue && matchesCredentialParameter(pathName)) return true;
+
       const [, ...parameters] = segment.split(";");
       for (const parameter of parameters) {
         const name = parameter.split("=", 1)[0] ?? "";
         if (isCredentialParameter(name)) return true;
+      }
+
+      for (const component of segment.split(/[?&]/)) {
+        const separator = component.indexOf("=");
+        if (separator > 0 && isCredentialParameter(component.slice(0, separator))) return true;
       }
     }
 
@@ -78,9 +91,8 @@ function hasCredentialPathParameters(pathname: string): boolean {
     candidate = decoded;
   }
 
-  // If the depth cap is reached, still reject an encoded semicolon separator
-  // rather than allowing a deeply encoded matrix credential through.
-  return /%(?:25)*3b/i.test(candidate);
+  // If the decoding cap is reached, fail closed on still-encoded path markers.
+  return /%(?:25)*(?:3b|3f|26|3d)/i.test(candidate);
 }
 
 function hasCredentialParameters(search: string, nestedDepth = 0): boolean {
