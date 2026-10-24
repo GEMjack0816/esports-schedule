@@ -27,6 +27,14 @@ function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
 
+function isDateTimeString(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function isNullableDateTimeString(value: unknown): value is string | null {
+  return value === null || isDateTimeString(value);
+}
+
 function isNullableNumber(value: unknown): value is number | null {
   return value === null || (typeof value === "number" && Number.isFinite(value));
 }
@@ -37,7 +45,7 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isSyncError(value: unknown): value is SyncErrorInfo | null {
   return value === null || (isRecord(value)
-    && typeof value.at === "string"
+    && isDateTimeString(value.at)
     && typeof value.code === "string"
     && isNullableNumber(value.httpStatus));
 }
@@ -65,13 +73,13 @@ function isMatch(value: unknown): value is EsportsMatch {
     && isNullableNumber(value.bestOf)
     && typeof value.status === "string"
     && matchStatuses.has(value.status as MatchStatus)
-    && isNullableString(value.startTimeUtc)
+    && isNullableDateTimeString(value.startTimeUtc)
     && Array.isArray(value.streams)
     && value.streams.every((stream) => isRecord(stream)
       && typeof stream.label === "string"
       && typeof stream.url === "string"
       && (stream.official === undefined || typeof stream.official === "boolean"))
-    && typeof value.lastUpdatedAt === "string"
+    && isDateTimeString(value.lastUpdatedAt)
     && (value.sourceUrl === undefined || isNullableString(value.sourceUrl))
     && (value.manualOverride === undefined || typeof value.manualOverride === "boolean");
 }
@@ -99,11 +107,11 @@ function isGameCoverage(value: unknown): value is GameCoverage {
       isFiniteNumber(value[key]) && value[key] >= 0)
     || !isRecord(value.statusCounts)
     || !isNonNegativeNumberRecord(value.statusCounts, [...matchStatuses])
-    || !isNullableString(value.earliestMatchAt)
-    || !isNullableString(value.latestMatchAt)
-    || !isNullableString(value.lastSuccessfulSyncAt)
-    || !isNullableString(value.lastAttemptAt)
-    || !isNullableString(value.sourceFetchedAt)
+    || !isNullableDateTimeString(value.earliestMatchAt)
+    || !isNullableDateTimeString(value.latestMatchAt)
+    || !isNullableDateTimeString(value.lastSuccessfulSyncAt)
+    || !isNullableDateTimeString(value.lastAttemptAt)
+    || !isNullableDateTimeString(value.sourceFetchedAt)
     || !isNullableNumber(value.snapshotAgeSeconds)
     || typeof value.refreshInProgress !== "boolean"
     || (value.syncStatus !== "normal" && value.syncStatus !== "delayed" && value.syncStatus !== "failed")
@@ -118,19 +126,19 @@ function isGameCoverage(value: unknown): value is GameCoverage {
     && typeof sample.providerMatchId === "string"
     && (sample.endpoint === "upcoming" || sample.endpoint === "running" || sample.endpoint === "past")
     && typeof sample.providerTournament === "string"
-    && isNullableString(sample.providerStartTimeUtc)
+    && isNullableDateTimeString(sample.providerStartTimeUtc)
     && typeof sample.normalizedTournament === "string"
-    && isNullableString(sample.normalizedStartTimeUtc);
+    && isNullableDateTimeString(sample.normalizedStartTimeUtc);
 }
 
 function isDataCoverage(value: unknown): value is DataCoverage {
   if (!isRecord(value)
     || (value.mode !== "live" && value.mode !== "unavailable")
     || typeof value.stale !== "boolean"
-    || !isNullableString(value.syncAttemptedAt)
-    || !isNullableString(value.lastAttemptAt)
-    || !isNullableString(value.lastSuccessfulSyncAt)
-    || !isNullableString(value.sourceFetchedAt)
+    || !isNullableDateTimeString(value.syncAttemptedAt)
+    || !isNullableDateTimeString(value.lastAttemptAt)
+    || !isNullableDateTimeString(value.lastSuccessfulSyncAt)
+    || !isNullableDateTimeString(value.sourceFetchedAt)
     || !isNullableNumber(value.snapshotAgeSeconds)
     || typeof value.refreshInProgress !== "boolean"
     || !isSyncError(value.lastError)
@@ -138,8 +146,8 @@ function isDataCoverage(value: unknown): value is DataCoverage {
     || !isRecord(value.range)
     || value.range.pastDays !== 30
     || value.range.futureDays !== 60
-    || !isNullableString(value.range.earliestMatchAt)
-    || !isNullableString(value.range.latestMatchAt)
+    || !isNullableDateTimeString(value.range.earliestMatchAt)
+    || !isNullableDateTimeString(value.range.latestMatchAt)
     || !isRecord(value.totals)
     || !isNonNegativeNumberRecord(value.totals, ["xTotal", "raw", "normalized", "deduplicated", "finalPandaScore", "finalWithManual", "filtered"])
     || !isRecord(value.games)
@@ -155,11 +163,11 @@ export function isSchedulePayload(value: unknown): value is SchedulePayload {
   if (!isRecord(value)
     || !Array.isArray(value.matches)
     || !value.matches.every(isMatch)
-    || typeof value.generatedAt !== "string"
+    || !isDateTimeString(value.generatedAt)
     || (value.mode !== "live" && value.mode !== "unavailable")
     || typeof value.demoMode !== "boolean"
     || typeof value.stale !== "boolean"
-    || (value.lastSuccessfulSyncAt !== null && typeof value.lastSuccessfulSyncAt !== "string")
+    || !isNullableDateTimeString(value.lastSuccessfulSyncAt)
     || !isRecord(value.providers)
     || (value.providers.pandascore !== "connected"
       && value.providers.pandascore !== "stale-cache"
