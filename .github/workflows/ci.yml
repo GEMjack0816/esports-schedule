@@ -56,6 +56,30 @@ jobs:
       - name: Verify isolated database schema
         run: npm run db:check
 
+      - name: Generate development route types without writing data
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev -- --hostname 127.0.0.1 --port 3100 > /tmp/esports-schedule-next-dev.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          for attempt in $(seq 1 30); do
+            status=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3100/api/submissions || true)
+            if [ "$status" = "405" ]; then
+              break
+            fi
+            if [ "$attempt" = "30" ]; then
+              echo "Next.js dev server did not compile the read-only submissions route."
+              exit 1
+            fi
+            sleep 2
+          done
+
       - name: Check TypeScript
         run: npm run typecheck
 
