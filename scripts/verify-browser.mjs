@@ -1,8 +1,16 @@
 import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright-core";
+import { matchesExpectedCommitSha, resolveExpectedCommitSha } from "./verify-browser-fingerprint.mjs";
 
 const baseUrl = process.argv[2] || "http://localhost:3000";
+let expectedCommitSha;
+try {
+  expectedCommitSha = resolveExpectedCommitSha(process.argv[3], process.env.EXPECTED_GIT_COMMIT_SHA);
+} catch (error) {
+  console.error(error.message);
+  process.exit(2);
+}
 const executableCandidates = [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -199,6 +207,12 @@ for (const profile of [
     versionGitCommitSha: versionResult.body.gitCommitSha ?? null,
     homepageGitCommitSha: homepageCommit || null,
     healthVersionGitCommitSha: healthResult.body.version?.gitCommitSha ?? null,
+    expectedCommitSha,
+    expectedCommitMatches: matchesExpectedCommitSha(expectedCommitSha, {
+      homepage: homepageCommit,
+      version: versionResult.body.gitCommitSha,
+      health: healthResult.body.version?.gitCommitSha,
+    }),
     versionMatchesHomepage:
       !!homepageCommit && homepageCommit === versionResult.body.gitCommitSha,
     healthVersionMatches:
@@ -242,6 +256,7 @@ for (const result of results) {
   if (result.versionStatus !== 200) failures.push(`${prefix}: version HTTP ${result.versionStatus}`);
   if (!result.versionMatchesHomepage) failures.push(`${prefix}: homepage/version commit mismatch`);
   if (!result.healthVersionMatches) failures.push(`${prefix}: health/version commit mismatch`);
+  if (!result.expectedCommitMatches) failures.push(`${prefix}: deployment fingerprint does not match the expected commit SHA`);
   if (result.submitFields < 6) failures.push(`${prefix}: submission form incomplete`);
   if (result.anonymousAdminStatus !== 200) failures.push(`${prefix}: admin login HTTP ${result.anonymousAdminStatus}`);
   if (!result.anonymousAdminAtLogin) failures.push(`${prefix}: anonymous admin page was not redirected to login`);
