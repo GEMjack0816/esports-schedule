@@ -1,6 +1,11 @@
 const PANDASCORE_TEAM_LOGO_PATH = /^\/images\/team\/image\/\d+\/[A-Za-z0-9][A-Za-z0-9._-]*\.(?:avif|jpe?g|png|webp)$/i;
 const PANDASCORE_TEAM_LOGO_HOSTS = new Set(["cdn.pandascore.co", "cdn-api.pandascore.co"]);
 
+/** A cached image may have failed before hydration attached its error handler. */
+export function isCompletedImageFailure(complete: boolean, naturalWidth: number): boolean {
+  return complete && naturalWidth === 0;
+}
+
 /**
  * Only route canonical PandaScore team images through Next's server-side
  * optimizer. Other existing logo sources keep the direct-image fallback path.

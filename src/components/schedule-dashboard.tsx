@@ -4,7 +4,11 @@ import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
-import { isPandaScoreTeamLogoUrl, retryPandaScoreTeamLogoUrl } from "@/lib/schedule/team-logo";
+import {
+  isCompletedImageFailure,
+  isPandaScoreTeamLogoUrl,
+  retryPandaScoreTeamLogoUrl,
+} from "@/lib/schedule/team-logo";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -164,7 +168,15 @@ function TeamLogo({ src, label }: { src: string; label: string }) {
   };
 
   useEffect(() => {
-    if (!nearViewport || failure === "all" || imageRef.current?.complete) return;
+    if (!nearViewport || failure === "all") return;
+    const image = imageRef.current;
+    if (image?.complete) {
+      // A remote failure can happen before hydration, so its onError event is
+      // missed. `complete` is true for both success and failure; naturalWidth
+      // distinguishes them and lets the normal bounded fallback take over.
+      if (isCompletedImageFailure(image.complete, image.naturalWidth)) failCurrentAttempt();
+      return;
+    }
 
     const attempt = { key: attemptKey, settled: false, timer: 0 };
     attempt.timer = window.setTimeout(() => {

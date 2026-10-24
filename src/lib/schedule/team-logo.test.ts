@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { isPandaScoreTeamLogoUrl, retryPandaScoreTeamLogoUrl } from "./team-logo";
+import {
+  isCompletedImageFailure,
+  isPandaScoreTeamLogoUrl,
+  retryPandaScoreTeamLogoUrl,
+} from "./team-logo";
+
+describe("completed image state", () => {
+  it("recognizes a failed image whose error event may have preceded hydration", () => {
+    expect(isCompletedImageFailure(true, 0)).toBe(true);
+    expect(isCompletedImageFailure(true, 28)).toBe(false);
+    expect(isCompletedImageFailure(false, 0)).toBe(false);
+  });
+});
 
 describe("isPandaScoreTeamLogoUrl", () => {
   it("allows canonical official team logo paths", () => {
