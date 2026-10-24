@@ -676,6 +676,15 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
 
     expect(status.revision).toBe(revision);
     expect(status.pendingRevisions).toBe(1);
+
+    const nextInput = submission(`cache-status-next-${randomUUID()}`);
+    const nextMatch = await repository.createManualMatch(published(nextInput), "admin-a", fence);
+    manualMatchIds.push(nextMatch.id);
+    const nextRevision = fence.mock.calls.at(-1)?.[0];
+    const nextStatus = await repository.getManualMatchCacheStatus();
+
+    expect(nextRevision).toBeGreaterThan(revision);
+    expect(nextStatus.revision).toBe(nextRevision);
   });
 
   it("cancels a blocked cache-status statement at the PostgreSQL timeout", async () => {
