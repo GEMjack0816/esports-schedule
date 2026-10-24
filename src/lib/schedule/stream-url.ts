@@ -66,13 +66,19 @@ function hasCredentialPathParameters(pathname: string): boolean {
   // the same bounded ASCII decoding policy as query parameter names.
   for (let depth = 0; depth < MAX_PARAMETER_ENCODING_DEPTH; depth += 1) {
     const segments = candidate.split("/");
+    const hasFollowingValue = new Array<boolean>(segments.length);
+    let hasNonEmptySegmentAfter = false;
+    for (let index = segments.length - 1; index >= 0; index -= 1) {
+      hasFollowingValue[index] = hasNonEmptySegmentAfter;
+      if (segments[index]) hasNonEmptySegmentAfter = true;
+    }
+
     for (let index = 0; index < segments.length; index += 1) {
       const segment = segments[index] ?? "";
       if (/^eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(segment)) return true;
 
       const pathName = segment.split(/[;?&=]/, 1)[0] ?? "";
-      const hasFollowingValue = segments.slice(index + 1).some((part) => part.length > 0);
-      if (hasFollowingValue && matchesCredentialParameter(pathName)) return true;
+      if (hasFollowingValue[index] && matchesCredentialParameter(pathName)) return true;
 
       const [, ...parameters] = segment.split(";");
       for (const parameter of parameters) {

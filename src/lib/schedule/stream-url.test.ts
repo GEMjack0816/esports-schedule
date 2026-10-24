@@ -171,6 +171,13 @@ describe("public external URL sanitization", () => {
       .toBe("/team-placeholder.svg");
   });
 
+  it("scans long ordinary paths without changing their public URL", () => {
+    const path = Array.from({ length: 300 }, (_, index) => `round-${index}`).join("/");
+    const url = `https://stream.example/matches/${path}`;
+
+    expect(sanitizePublicExternalUrl(url)).toBe(url);
+  });
+
   it("bounds local logo paths to the same public URL limit", () => {
     const atLimit = `/${"a".repeat(2_047)}`;
     const overLimit = `/${"a".repeat(2_048)}`;
