@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertAdminSessionLanding,
+  createPreviewCleanupRequest,
   assertIsolatedDatabasePreflight,
   assertPreviewDeployment,
   parseVerificationTarget,
@@ -70,6 +71,40 @@ describe("verify:admin fail-closed target guard", () => {
     { deploymentId: null },
   ])("rejects mismatched or incomplete deployment metadata", (override) => {
     expect(() => assertPreviewDeployment(target(), version(override))).toThrow();
+  });
+});
+
+describe("verify:admin cleanup target", () => {
+  const runId = "11111111-1111-4111-8111-111111111111";
+  const verifiedDeployment = {
+    deploymentId: "dpl_preview",
+    deploymentUrl: "https://deployment.example.vercel.app",
+    gitCommitSha: sha,
+    gitCommitRef: ref,
+  };
+
+  it("targets cleanup at the immutable deployment URL, not the mutable branch alias", () => {
+    expect(createPreviewCleanupRequest(verifiedDeployment, runId)).toEqual({
+      url: "https://deployment.example.vercel.app/api/admin/e2e-cleanup",
+      options: {
+        headers: { Origin: "https://deployment.example.vercel.app" },
+        data: { runId },
+        timeout: 15_000,
+      },
+    });
+  });
+
+  it.each([
+    { ...verifiedDeployment, deploymentUrl: "http://deployment.example.vercel.app" },
+    { ...verifiedDeployment, deploymentUrl: "https://user:password@deployment.example.vercel.app" },
+    { ...verifiedDeployment, deploymentUrl: "https://deployment.example.vercel.app:8443" },
+    { ...verifiedDeployment, deploymentUrl: "https://deployment.example.vercel.app/path" },
+  ])("rejects an invalid immutable cleanup URL", (deployment) => {
+    expect(() => createPreviewCleanupRequest(deployment, runId)).toThrow();
+  });
+
+  it("rejects a malformed cleanup run id", () => {
+    expect(() => createPreviewCleanupRequest(verifiedDeployment, "not-a-uuid")).toThrow();
   });
 });
 
