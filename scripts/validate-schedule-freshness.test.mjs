@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_MAX_AGE_SECONDS, PANDA_GAMES, validateScheduleFreshness } from "./validate-schedule-freshness.mjs";
+import {
+  DEFAULT_MAX_AGE_SECONDS,
+  formatFreshnessStepSummary,
+  PANDA_GAMES,
+  validateScheduleFreshness,
+} from "./validate-schedule-freshness.mjs";
 
 const now = Date.parse("2026-10-22T12:00:00.000Z");
 const freshTime = new Date(now - 5 * 60_000).toISOString();
@@ -101,6 +106,20 @@ describe("schedule freshness monitor validation", () => {
     expect(validateScheduleFreshness(health({ lastSuccessfulSyncAt: null }), 200, now).message)
       .toBe("lastSuccessfulSyncAt is missing or invalid");
   });
+
+  it("formats a concise PASS summary for a fresh schedule", () => {
+    expect(formatFreshnessStepSummary({ ok: true, message: "fresh: all 5 games are within 900s" }))
+      .toBe("### Schedule freshness: PASS\n\nfresh: all 5 games are within 900s\n");
+  });
+
+  it("formats failures as one Markdown-safe line without allowing upstream text to inject headings", () => {
+    const summary = formatFreshnessStepSummary({
+      ok: false,
+      message: "lol sync status is bad [details]\n## forged heading",
+    });
+    expect(summary).toBe("### Schedule freshness: FAIL\n\nlol sync status is bad \\[details\\] \\#\\# forged heading\n");
+  });
+
   it("pins the monitor checkout action immutably and disables persisted credentials", () => {
     const workflow = readFileSync(
       resolve(process.cwd(), ".github/workflows/monitor-schedule-freshness.yml"),

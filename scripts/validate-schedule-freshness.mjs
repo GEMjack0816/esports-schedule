@@ -4,6 +4,30 @@ import { pathToFileURL } from "node:url";
 export const PANDA_GAMES = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"];
 export const DEFAULT_MAX_AGE_SECONDS = 15 * 60;
 
+function escapeMarkdown(value) {
+  return value.replace(/[\\`*_{}\[\]()#+.!|<>]/g, "\\$&");
+}
+
+export function formatFreshnessStepSummary(result) {
+  const status = result.ok ? "PASS" : "FAIL";
+  const message = String(result.message ?? "freshness check returned no detail")
+    .replace(/[\r\n]+/g, " ")
+    .slice(0, 300);
+  return `### Schedule freshness: ${status}\n\n${escapeMarkdown(message)}\n`;
+}
+
+function appendStepSummary(result) {
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (!summaryPath) return;
+
+  try {
+    fs.appendFileSync(summaryPath, formatFreshnessStepSummary(result), "utf8");
+  } catch {
+    // The summary is useful presentation, but must not replace the actual health result.
+    console.warn("could not write GitHub Actions step summary");
+  }
+}
+
 const EXPLICIT_TIMEZONE_TIMESTAMP =
   /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:0\d|1[0-4]):[0-5]\d)$/;
 
@@ -95,14 +119,21 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exit(2);
   }
   let payload;
+  let parseError = false;
   try {
     payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch {
-    console.error("health endpoint returned unreadable JSON");
-    process.exit(1);
+    parseError = true;
   }
-  const maxAgeSeconds = Number(process.env.MAX_SCHEDULE_AGE_SECONDS ?? DEFAULT_MAX_AGE_SECONDS);
-  const result = validateScheduleFreshness(payload, Number(rawHttpStatus), Date.now(), maxAgeSeconds);
+  const result = parseError
+    ? { ok: false, message: "health endpoint returned unreadable JSON" }
+    : validateScheduleFreshness(
+      payload,
+      Number(rawHttpStatus),
+      Date.now(),
+      Number(process.env.MAX_SCHEDULE_AGE_SECONDS ?? DEFAULT_MAX_AGE_SECONDS),
+    );
   console.log(result.message);
+  appendStepSummary(result);
   if (!result.ok) process.exit(1);
 }
