@@ -7,6 +7,7 @@ import {
   desc,
   eq,
   gte,
+  inArray,
   ilike,
   or,
   sql,
@@ -555,6 +556,47 @@ export class DrizzleReviewRepository {
       });
     } catch (error) {
       if (error instanceof ReviewNotFoundError || error instanceof ReviewConflictError) throw error;
+      translateDatabaseError(error);
+    }
+  }
+
+  async cleanupAdminVerificationRun(runId: string): Promise<{
+    deletedSubmissions: number;
+    deletedPublishedMatches: number;
+  }> {
+    const league = `Codex isolated review ${runId}`;
+    const notes = `Isolated Preview verification record ${runId}`;
+    const sourceUrl = `https://example.com/isolated-admin-verification/${runId}`;
+    try {
+      return await getDatabase().transaction(async (tx) => {
+        const submissions = await tx.select({ id: matchSubmissions.id })
+          .from(matchSubmissions)
+          .where(and(
+            eq(matchSubmissions.league, league),
+            eq(matchSubmissions.notes, notes),
+            eq(matchSubmissions.sourceUrl, sourceUrl),
+          ))
+          .for("update");
+        const submissionIds = submissions.map((row) => row.id);
+        if (submissionIds.length === 0) {
+          return { deletedSubmissions: 0, deletedPublishedMatches: 0 };
+        }
+
+        const published = await tx.select({ id: publishedManualMatches.id })
+          .from(publishedManualMatches)
+          .where(inArray(publishedManualMatches.sourceSubmissionId, submissionIds))
+          .for("update");
+        const entityIds = [...submissionIds, ...published.map((row) => row.id)];
+        await tx.delete(adminAuditEvents).where(inArray(adminAuditEvents.entityId, entityIds));
+        await tx.delete(publishedManualMatches)
+          .where(inArray(publishedManualMatches.sourceSubmissionId, submissionIds));
+        await tx.delete(matchSubmissions).where(inArray(matchSubmissions.id, submissionIds));
+        return {
+          deletedSubmissions: submissionIds.length,
+          deletedPublishedMatches: published.length,
+        };
+      });
+    } catch (error) {
       translateDatabaseError(error);
     }
   }

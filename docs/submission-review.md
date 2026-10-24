@@ -50,7 +50,9 @@ npm start
 npm run verify:browser -- http://localhost:3000
 $env:ALLOW_ISOLATED_ADMIN_VERIFY = "1"
 $env:ADMIN_STORAGE_STATE = "<authenticated-playwright-storage-state>"
-npm run verify:admin -- <isolated-preview-url>
+npm run verify:admin -- <preview-url> <expected-preview-branch> <expected-preview-sha> <allowed-preview-hosts-csv>
 ```
 
-`verify:admin` 会拒绝生产 Alias，并且只有在显式标记隔离环境且提供已认证浏览器状态时才执行公开提交、批准、编辑、隐藏、恢复、驳回和审计验证。
+`verify:admin` 在任何写操作前通过已认证上下文读取 `/api/version`，并要求环境为 `preview`、ref/SHA 与显式传入值完全一致、Deployment ID 有效；目标主机和版本接口返回的部署主机都必须精确命中 allowlist（不支持通配符）。因此无论 Production 使用哪个 Alias 或部署 URL，Production 元数据都会被拒绝。
+
+验证器为每次运行生成 UUID 标记。无论中途成功或失败，`finally` 都会尝试调用 Preview-only 清理接口，删除该标记下的提交、关联人工比赛和对应审计事件，并刷新公开人工比赛缓存。清理端点还会在服务端核验 `VERCEL_ENV=preview`、当前 ref/SHA、管理员会话和同源 Origin；数据库错误只返回通用错误。短期提交限流窗口由现有限流清理机制按期过期，不会通过宽泛条件删除。

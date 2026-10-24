@@ -162,6 +162,57 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     return result.value?.matches ?? [];
   }
 
+  it("cleans only the uniquely marked admin verification run and its audit trail", async () => {
+    const runId = randomUUID();
+    const input: MatchSubmissionInput = {
+      game: "honor-of-kings",
+      league: `Codex isolated review ${runId}`,
+      teamA: `Approval A ${runId}`,
+      teamB: `Approval B ${runId}`,
+      scheduledAt: "2026-08-01T00:00:00.000Z",
+      bestOf: 5,
+      sourceUrl: `https://example.com/isolated-admin-verification/${runId}`,
+      notes: `Isolated Preview verification record ${runId}`,
+    };
+    const created = await repository.createSubmission(input);
+    submissionIds.push(created.id);
+    const publishedMatch = await repository.approveSubmission(
+      created.id,
+      { submission: input, published: published(input) },
+      "admin-verification-test",
+      created.updatedAt,
+    );
+    manualMatchIds.push(publishedMatch.id);
+
+    const nearMatch = await repository.createSubmission({
+      ...input,
+      teamA: `Other A ${runId}`,
+      teamB: `Other B ${runId}`,
+      notes: "not a verification record",
+    });
+    submissionIds.push(nearMatch.id);
+
+    const result = await repository.cleanupAdminVerificationRun(runId);
+    expect(result).toEqual({ deletedSubmissions: 1, deletedPublishedMatches: 1 });
+
+    const [deletedSubmission] = await cleanup`
+      select count(*)::int as value from match_submissions where id = ${created.id}
+    `;
+    const [deletedMatch] = await cleanup`
+      select count(*)::int as value from published_manual_matches where id = ${publishedMatch.id}
+    `;
+    const [deletedAudit] = await cleanup`
+      select count(*)::int as value from admin_audit_events where entity_id = any(${[created.id, publishedMatch.id]}::uuid[])
+    `;
+    const [preservedNearMatch] = await cleanup`
+      select count(*)::int as value from match_submissions where id = ${nearMatch.id}
+    `;
+    expect(deletedSubmission.value).toBe(0);
+    expect(deletedMatch.value).toBe(0);
+    expect(deletedAudit.value).toBe(0);
+    expect(preservedNearMatch.value).toBe(1);
+  });
+
   it("allows only one winner when two administrators approve concurrently", async () => {
     const { id, input, row } = await create(`race-${randomUUID()}`);
     const results = await Promise.allSettled([
