@@ -12,6 +12,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 
 type CleanupRequest = { runId: string };
 
+class RequestBodyTooLargeError extends Error {}
+
 function parseCleanupRequest(value: unknown): CleanupRequest | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const input = value as Record<string, unknown>;
@@ -25,6 +27,37 @@ function noStore(body: Record<string, unknown>, status: number): Response {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
 
+async function readBoundedJson(request: Request): Promise<unknown> {
+  if (!request.body) throw new Error("Missing request body");
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_BODY_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new RequestBodyTooLargeError();
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+}
+
 export async function POST(request: Request): Promise<Response> {
   if (!isAdminE2ECleanupEnabled()) return noStore({ error: "Not found" }, 404);
 
@@ -36,23 +69,22 @@ export async function POST(request: Request): Promise<Response> {
     return noStore({ error: "请求来源无效。" }, 403);
   }
 
-  const declaredLength = Number(request.headers.get("content-length") ?? 0);
-  if (declaredLength > MAX_BODY_BYTES) return noStore({ error: "请求无效。" }, 413);
-  let text: string;
-  try {
-    text = await request.text();
-  } catch {
-    return noStore({ error: "请求无效。" }, 400);
-  }
-  if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) {
-    return noStore({ error: "请求无效。" }, 413);
+  const declaredLength = request.headers.get("content-length");
+  if (declaredLength !== null) {
+    const normalizedLength = declaredLength.trim();
+    if (!/^\d+$/.test(normalizedLength)) {
+      return noStore({ error: "请求无效。" }, 400);
+    }
+    if (Number(normalizedLength) > MAX_BODY_BYTES) {
+      return noStore({ error: "请求无效。" }, 413);
+    }
   }
 
   let payload: unknown;
   try {
-    payload = JSON.parse(text);
-  } catch {
-    return noStore({ error: "请求无效。" }, 400);
+    payload = await readBoundedJson(request);
+  } catch (error) {
+    return noStore({ error: "请求无效。" }, error instanceof RequestBodyTooLargeError ? 413 : 400);
   }
   const input = parseCleanupRequest(payload);
   if (!input) return noStore({ error: "请求无效。" }, 400);

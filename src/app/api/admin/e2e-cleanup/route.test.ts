@@ -32,6 +32,30 @@ function request(body: unknown = { runId }) {
   });
 }
 
+function streamedRequest(chunks: Uint8Array[], onCancel: () => void) {
+  let index = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (index < chunks.length) {
+        controller.enqueue(chunks[index]);
+        index += 1;
+      } else {
+        controller.close();
+      }
+    },
+    cancel() {
+      onCancel();
+    },
+  });
+
+  return new Request("https://preview.example.vercel.app/api/admin/e2e-cleanup", {
+    method: "POST",
+    headers: { origin: "https://preview.example.vercel.app" },
+    body,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+}
+
 describe("Preview-only admin E2E cleanup endpoint", () => {
   beforeEach(() => {
     vi.stubEnv("VERCEL_ENV", "preview");
@@ -107,6 +131,36 @@ describe("Preview-only admin E2E cleanup endpoint", () => {
       matchesDeleted: 0,
     });
     expect((await POST(request())).status).toBe(409);
+  });
+
+  it("cancels an oversized chunked body without Content-Length before parsing or writing", async () => {
+    let cancelled = false;
+    const tooLarge = streamedRequest([
+      new Uint8Array(2_048),
+      new Uint8Array(2_049),
+      ...Array.from({ length: 10 }, () => new Uint8Array(4_096)),
+    ], () => { cancelled = true; });
+
+    const response = await POST(tooLarge);
+    expect(response.status).toBe(413);
+    expect(cancelled).toBe(true);
+    expect(mocks.cleanupE2eVerificationRun).not.toHaveBeenCalled();
+    expect(mocks.synchronizePublishedManualMatchesSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed Content-Length before reading the request body", async () => {
+    const malformed = new Request("https://preview.example.vercel.app/api/admin/e2e-cleanup", {
+      method: "POST",
+      headers: {
+        origin: "https://preview.example.vercel.app",
+        "content-length": "unknown",
+      },
+      body: JSON.stringify({ runId }),
+    });
+
+    const response = await POST(malformed);
+    expect(response.status).toBe(400);
+    expect(mocks.cleanupE2eVerificationRun).not.toHaveBeenCalled();
   });
 
   it("returns a non-success result if the committed rows are deleted but cache recovery fails", async () => {
