@@ -31,6 +31,7 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
   let cleanup: ReturnType<typeof postgres>;
   const submissionIds: string[] = [];
   const manualMatchIds: string[] = [];
+  const legacyImportActors: string[] = [];
   const rateLimitSources: string[] = [];
   const rateLimitWindowKeys: string[] = [];
 
@@ -53,6 +54,13 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     }
     if (auditEntityIds.length > 0) {
       await cleanup`delete from admin_audit_events where entity_id = any(${auditEntityIds}::uuid[])`;
+    }
+    if (legacyImportActors.length > 0) {
+      await cleanup`
+        delete from admin_audit_events
+        where actor_id = any(${legacyImportActors}::text[])
+          and action = 'legacy_submissions.imported'
+      `;
     }
     if (submissionIds.length > 0) {
       await cleanup`delete from match_submissions where id = any(${submissionIds}::uuid[])`;
@@ -98,6 +106,16 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       awayScore: null,
       streamUrl: null,
       sourceUrl: input.sourceUrl,
+    };
+  }
+
+  function legacyRecord(suffix: string): { id: string; input: MatchSubmissionInput; submittedAt: Date } {
+    const id = randomUUID();
+    submissionIds.push(id);
+    return {
+      id,
+      input: submission(`legacy-${suffix}`),
+      submittedAt: new Date("2026-07-01T00:00:00.000Z"),
     };
   }
 
@@ -173,6 +191,84 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect((await repository.listManualMatches()).rows.filter(
       (match) => match.sourceSubmissionId === id,
     )).toHaveLength(1);
+  });
+
+  it("imports legacy submissions idempotently and commits each summary audit with its batch", async () => {
+    const actorId = `integration-legacy-${randomUUID()}`;
+    legacyImportActors.push(actorId);
+    const records = [legacyRecord(randomUUID()), legacyRecord(randomUUID())];
+
+    const first = await repository.importLegacySubmissions(actorId, records, {
+      scanned: 2,
+      invalid: 0,
+    });
+    expect(first).toEqual({ scanned: 2, invalid: 0, imported: 2, duplicate: 0 });
+
+    const retry = await repository.importLegacySubmissions(actorId, records, {
+      scanned: 2,
+      invalid: 0,
+    });
+    expect(retry).toEqual({ scanned: 2, invalid: 0, imported: 0, duplicate: 2 });
+
+    const imported = await cleanup`
+      select count(*)::int as value
+      from match_submissions
+      where id = any(${records.map((record) => record.id)}::uuid[])
+    `;
+    expect(Number(imported[0].value)).toBe(2);
+
+    const audits = await cleanup`
+      select after_json
+      from admin_audit_events
+      where actor_id = ${actorId}
+        and action = 'legacy_submissions.imported'
+      order by created_at
+    `;
+    expect(audits).toHaveLength(2);
+    expect(audits[0].after_json).toMatchObject({ imported: 2, duplicate: 0, scanned: 2, invalid: 0 });
+    expect(audits[1].after_json).toMatchObject({ imported: 0, duplicate: 2, scanned: 2, invalid: 0 });
+  });
+
+  it("rolls back imported rows if the summary audit insert fails", async () => {
+    const actorId = `integration-legacy-rollback-${randomUUID()}`;
+    legacyImportActors.push(actorId);
+    const record = legacyRecord(randomUUID());
+    const suffix = randomUUID().replaceAll("-", "");
+    const trigger = `fail_legacy_audit_${suffix}`;
+    const fn = `fail_legacy_audit_${suffix}`;
+    await cleanup.unsafe(`
+      create function public.${fn}() returns trigger language plpgsql as $$
+      begin
+        if new.action = 'legacy_submissions.imported' then
+          raise exception 'forced isolated integration failure';
+        end if;
+        return new;
+      end;
+      $$
+    `);
+    await cleanup.unsafe(`
+      create trigger ${trigger}
+      before insert on admin_audit_events
+      for each row execute function public.${fn}()
+    `);
+
+    try {
+      await expect(repository.importLegacySubmissions(actorId, [record], {
+        scanned: 1,
+        invalid: 0,
+      })).rejects.toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+      const rows = await cleanup`select count(*)::int as value from match_submissions where id = ${record.id}::uuid`;
+      const audits = await cleanup`
+        select count(*)::int as value
+        from admin_audit_events
+        where actor_id = ${actorId} and action = 'legacy_submissions.imported'
+      `;
+      expect(Number(rows[0].value)).toBe(0);
+      expect(Number(audits[0].value)).toBe(0);
+    } finally {
+      await cleanup.unsafe(`drop trigger if exists ${trigger} on admin_audit_events`);
+      await cleanup.unsafe(`drop function if exists public.${fn}()`);
+    }
   });
 
   it("rolls back the published insert and submission update when approval fails", async () => {

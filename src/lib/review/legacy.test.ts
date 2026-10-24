@@ -1,15 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DrizzleReviewRepository } from "./repository";
-import type { MatchSubmissionInput } from "@/lib/submissions";
+import type { LegacyImportInputCounts, LegacySubmissionRecord } from "./types";
 
 const cacheState = vi.hoisted(() => ({
   values: new Map<string, unknown>(),
+  failures: new Set<string>(),
   delete: vi.fn(),
 }));
 
 vi.mock("@vercel/functions", () => ({
   getCache: () => ({
-    get: async (key: string) => cacheState.values.get(key),
+    get: async (key: string) => {
+      if (cacheState.failures.has(key)) throw new Error("cache unavailable");
+      return cacheState.values.get(key);
+    },
     delete: cacheState.delete,
   }),
 }));
@@ -17,10 +21,11 @@ vi.mock("@vercel/functions", () => ({
 import { importLegacyRuntimeSubmissions } from "./legacy";
 
 describe("legacy Runtime Cache submission migration", () => {
-  it("preserves ids and timestamps, skips duplicates, audits counts and never deletes cache", async () => {
+  it("validates legacy records and delegates one atomic import with ids and timestamps", async () => {
     const importedId = "11111111-1111-4111-8111-111111111111";
     const duplicateId = "22222222-2222-4222-8222-222222222222";
     cacheState.values.clear();
+    cacheState.failures.clear();
     cacheState.delete.mockReset();
     cacheState.values.set("pending-index-v1", [importedId, duplicateId, "bad-id", importedId]);
     for (const id of [importedId, duplicateId]) {
@@ -36,29 +41,46 @@ describe("legacy Runtime Cache submission migration", () => {
         submittedAt: "2026-07-01T00:00:00.000Z",
       });
     }
-    const insertLegacySubmission = vi.fn(async (
-      _input: MatchSubmissionInput,
-      id: string,
-      submittedAt: Date,
+    const importLegacySubmissions = vi.fn(async (
+      _actor: string,
+      records: LegacySubmissionRecord[],
+      counts: LegacyImportInputCounts,
     ) => {
-      expect(submittedAt.toISOString()).toBe("2026-07-01T00:00:00.000Z");
-      return id === importedId ? "imported" as const : "duplicate" as const;
+      expect(records.map((record) => record.id)).toEqual([importedId, duplicateId]);
+      expect(records.map((record) => record.submittedAt.toISOString())).toEqual([
+        "2026-07-01T00:00:00.000Z",
+        "2026-07-01T00:00:00.000Z",
+      ]);
+      expect(counts).toEqual({ scanned: 3, invalid: 1 });
+      return { ...counts, imported: 1, duplicate: 1 };
     });
-    const auditLegacyImport = vi.fn();
     const repository = {
-      insertLegacySubmission,
-      auditLegacyImport,
+      importLegacySubmissions,
     } as unknown as DrizzleReviewRepository;
 
     const counts = await importLegacyRuntimeSubmissions("admin-user", repository);
 
     expect(counts).toEqual({ scanned: 3, imported: 1, duplicate: 1, invalid: 1 });
-    expect(insertLegacySubmission).toHaveBeenCalledTimes(2);
-    expect(insertLegacySubmission.mock.calls.map((call) => call[1])).toEqual([
-      importedId,
-      duplicateId,
-    ]);
-    expect(auditLegacyImport).toHaveBeenCalledWith("admin-user", counts);
+    expect(importLegacySubmissions).toHaveBeenCalledTimes(1);
+    expect(importLegacySubmissions).toHaveBeenCalledWith("admin-user", expect.any(Array), {
+      scanned: 3,
+      invalid: 1,
+    });
     expect(cacheState.delete).not.toHaveBeenCalled();
+  });
+
+  it("does not record a partial import when reading the legacy cache fails", async () => {
+    cacheState.values.clear();
+    cacheState.failures.clear();
+    const id = "33333333-3333-4333-8333-333333333333";
+    cacheState.values.set("pending-index-v1", [id]);
+    cacheState.failures.add(`pending:${id}`);
+    const importLegacySubmissions = vi.fn();
+    const repository = { importLegacySubmissions } as unknown as DrizzleReviewRepository;
+
+    await expect(importLegacyRuntimeSubmissions("admin-user", repository)).rejects.toThrow(
+      "cache unavailable",
+    );
+    expect(importLegacySubmissions).not.toHaveBeenCalled();
   });
 });
