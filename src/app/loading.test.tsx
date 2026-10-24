@@ -33,6 +33,20 @@ describe("homepage loading state", () => {
     expect(reducedMotionRule?.[1]).toContain("background: none");
   });
 
+  it("limits application animations and transitions for reduced-motion users", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8");
+    const reducedMotionBlocks = [...css.matchAll(/@media\\s*\\(prefers-reduced-motion:\\s*reduce\\)\\s*\\{([\\s\\S]*?)\\n\\}/g)];
+    const globalMotionBlock = reducedMotionBlocks.find(([, block]) =>
+      /\\*\\s*,\\s*\\*::before\\s*,\\s*\\*::after\\s*\\{/.test(block),
+    )?.[1];
+
+    expect(css).toMatch(/\\.is-spinning\\s*\\{[^}]*animation:/);
+    expect(css).toMatch(/\\.live-dot\\s*\\{[^}]*animation:/);
+    expect(globalMotionBlock).toContain("animation-duration: .01ms !important");
+    expect(globalMotionBlock).toContain("animation-iteration-count: 1 !important");
+    expect(globalMotionBlock).toContain("transition-duration: .01ms !important");
+  });
+
   it("keeps placeholders visible in forced-colors mode without animation", () => {
     const css = readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8");
     const forcedColorsRule = css.match(/@media\s*\(forced-colors:\s*active\)\s*\{([\s\S]*?)\n\}/);
