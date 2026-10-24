@@ -8,11 +8,15 @@ function escapeMarkdown(value) {
   return value.replace(/[\\`*_{}\[\]()#+.!|<>]/g, "\\$&");
 }
 
-export function formatFreshnessStepSummary(result) {
-  const status = result.ok ? "PASS" : "FAIL";
-  const message = String(result.message ?? "freshness check returned no detail")
+export function sanitizeFreshnessMessage(message) {
+  return String(message ?? "freshness check returned no detail")
     .replace(/[\r\n]+/g, " ")
     .slice(0, 300);
+}
+
+export function formatFreshnessStepSummary(result) {
+  const status = result.ok ? "PASS" : "FAIL";
+  const message = sanitizeFreshnessMessage(result.message);
   return `### Schedule freshness: ${status}\n\n${escapeMarkdown(message)}\n`;
 }
 
@@ -133,7 +137,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       Date.now(),
       Number(process.env.MAX_SCHEDULE_AGE_SECONDS ?? DEFAULT_MAX_AGE_SECONDS),
     );
-  console.log(result.message);
+  console.log(sanitizeFreshnessMessage(result.message));
   appendStepSummary(result);
   if (!result.ok) process.exit(1);
 }

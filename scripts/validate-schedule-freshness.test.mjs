@@ -5,6 +5,7 @@ import {
   DEFAULT_MAX_AGE_SECONDS,
   formatFreshnessStepSummary,
   PANDA_GAMES,
+  sanitizeFreshnessMessage,
   validateScheduleFreshness,
 } from "./validate-schedule-freshness.mjs";
 
@@ -118,6 +119,12 @@ describe("schedule freshness monitor validation", () => {
       message: "lol sync status is bad [details]\n## forged heading",
     });
     expect(summary).toBe("### Schedule freshness: FAIL\n\nlol sync status is bad \\[details\\] \\#\\# forged heading\n");
+  });
+
+  it("sanitizes log messages into one bounded line", () => {
+    expect(sanitizeFreshnessMessage("failed\r\n## forged log"))
+      .toBe("failed ## forged log");
+    expect(sanitizeFreshnessMessage("x".repeat(301))).toHaveLength(300);
   });
 
   it("pins the monitor checkout action immutably and disables persisted credentials", () => {
