@@ -148,6 +148,8 @@ for (const profile of [
       body.stale = false;
       body.warning = "Browser verification retry recovered";
     }
+    body.coverage.mode = body.mode;
+    body.coverage.stale = body.stale;
     await route.fulfill({ response, body: JSON.stringify(body) });
   });
   await page.locator(".refresh-button").click();

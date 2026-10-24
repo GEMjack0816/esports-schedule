@@ -6,6 +6,7 @@ import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { getScheduleEmptyState } from "@/lib/schedule/empty-state";
 import { isSchedulePayload } from "@/lib/schedule/payload-guard";
+import { fetchScheduleRefresh, getScheduleRefreshErrorMessage } from "@/lib/schedule/refresh-request";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -235,7 +236,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     setRefreshing(true);
     setRefreshError(null);
     try {
-      const response = await fetch("/api/matches", { cache: "no-store" });
+      const response = await fetchScheduleRefresh();
       if (!response.ok) {
         setRefreshError("暂时无法重新获取赛程，请稍后重试。");
         return;
@@ -246,9 +247,9 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
         return;
       }
       setPayload(refreshedPayload);
-    } catch {
+    } catch (error) {
       // Keep the last usable payload and expose a safe, generic retry message.
-      setRefreshError("暂时无法重新获取赛程，请检查网络后重试。");
+      setRefreshError(getScheduleRefreshErrorMessage(error));
     } finally {
       setRefreshing(false);
     }
