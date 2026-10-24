@@ -1,5 +1,7 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MAX_AGE_SECONDS,
@@ -125,6 +127,55 @@ describe("schedule freshness monitor validation", () => {
     expect(sanitizeFreshnessMessage("failed\r\n## forged log"))
       .toBe("failed ## forged log");
     expect(sanitizeFreshnessMessage("x".repeat(301))).toHaveLength(300);
+  });
+
+  it("writes a PASS summary from the CLI and exits successfully for fresh data", () => {
+    const directory = mkdtempSync(join(tmpdir(), "schedule-freshness-pass-"));
+    try {
+      const responsePath = join(directory, "health.json");
+      const summaryPath = join(directory, "summary.md");
+      const currentTime = new Date().toISOString();
+      const currentHealth = health({
+        sourceFetchedAt: currentTime,
+        lastSuccessfulSyncAt: currentTime,
+        games: Object.fromEntries(PANDA_GAMES.map((game) => [game, {
+          syncStatus: "normal",
+          sourceFetchedAt: currentTime,
+          lastSuccessfulSyncAt: currentTime,
+        }])),
+      });
+      writeFileSync(responsePath, JSON.stringify(currentHealth));
+      const result = spawnSync(
+        process.execPath,
+        [resolve(process.cwd(), "scripts/validate-schedule-freshness.mjs"), responsePath, "200"],
+        { encoding: "utf8", env: { ...process.env, GITHUB_STEP_SUMMARY: summaryPath } },
+      );
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(summaryPath, "utf8")).toContain("### Schedule freshness: PASS");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a FAIL summary and preserves the non-zero CLI exit for malformed JSON", () => {
+    const directory = mkdtempSync(join(tmpdir(), "schedule-freshness-fail-"));
+    try {
+      const responsePath = join(directory, "health.json");
+      const summaryPath = join(directory, "summary.md");
+      writeFileSync(responsePath, "{malformed");
+      const result = spawnSync(
+        process.execPath,
+        [resolve(process.cwd(), "scripts/validate-schedule-freshness.mjs"), responsePath, "200"],
+        { encoding: "utf8", env: { ...process.env, GITHUB_STEP_SUMMARY: summaryPath } },
+      );
+
+      expect(result.status).toBe(1);
+      expect(readFileSync(summaryPath, "utf8"))
+        .toContain("### Schedule freshness: FAIL\n\nhealth endpoint returned unreadable JSON");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("pins the monitor checkout action immutably and disables persisted credentials", () => {
