@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { getScheduleEmptyState } from "@/lib/schedule/empty-state";
+import { isSchedulePayload } from "@/lib/schedule/payload-guard";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -239,7 +240,12 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
         setRefreshError("暂时无法重新获取赛程，请稍后重试。");
         return;
       }
-      setPayload((await response.json()) as SchedulePayload);
+      const refreshedPayload: unknown = await response.json();
+      if (!isSchedulePayload(refreshedPayload)) {
+        setRefreshError("赛程响应格式无效，已保留当前赛程，请稍后重试。");
+        return;
+      }
+      setPayload(refreshedPayload);
     } catch {
       // Keep the last usable payload and expose a safe, generic retry message.
       setRefreshError("暂时无法重新获取赛程，请检查网络后重试。");

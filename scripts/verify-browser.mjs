@@ -129,6 +129,10 @@ for (const profile of [
       outageFixtureRequests += 1;
       return route.abort("failed");
     }
+    if (outageFixtureRequests === 4) {
+      outageFixtureRequests += 1;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: null }) });
+    }
     const response = await route.fetch();
     const body = await response.json();
     outageFixtureRequests += 1;
@@ -197,6 +201,10 @@ for (const profile of [
   await page.getByText("暂时无法重新获取赛程，请检查网络后重试。").waitFor({ state: "visible" });
   const refreshNetworkFailureHandled = await page.getByText("暂时无法重新获取赛程，请检查网络后重试。").isVisible();
   const recoveredSchedulePreservedAfterFailures = await page.getByText("Browser verification retry recovered").isVisible();
+  await page.locator(".refresh-button").click();
+  await page.getByText("赛程响应格式无效，已保留当前赛程，请稍后重试。").waitFor({ state: "visible" });
+  const malformedRefreshHandled = await page.getByText("赛程响应格式无效，已保留当前赛程，请稍后重试。").isVisible();
+  const recoveredSchedulePreservedAfterMalformedResponse = await page.getByText("Browser verification retry recovered").isVisible();
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -278,6 +286,8 @@ for (const profile of [
     failedRefreshStatus: failedRefreshResponse.status(),
     refreshNetworkFailureHandled,
     recoveredSchedulePreservedAfterFailures,
+    malformedRefreshHandled,
+    recoveredSchedulePreservedAfterMalformedResponse,
     refreshedApiDeployment: apiBody.deployment,
     apiBodyReadFallback,
     healthStatus: healthResult.status,
@@ -338,6 +348,9 @@ for (const result of results) {
   }
   if (!result.refreshNetworkFailureHandled) failures.push(`${prefix}: network refresh failure was not handled with user feedback`);
   if (!result.recoveredSchedulePreservedAfterFailures) failures.push(`${prefix}: refresh failure discarded the last displayed schedule`);
+  if (!result.malformedRefreshHandled || !result.recoveredSchedulePreservedAfterMalformedResponse) {
+    failures.push(`${prefix}: malformed HTTP 200 refresh response replaced or crashed the last displayed schedule`);
+  }
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
   if (result.versionStatus !== 200) failures.push(`${prefix}: version HTTP ${result.versionStatus}`);
