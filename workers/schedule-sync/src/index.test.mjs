@@ -567,6 +567,28 @@ describe("schedule sync Worker client", () => {
     expect(requests).toEqual([healthUrl, "https://esports-schedule-two.vercel.app/api/cron/sync"]);
   });
 
+  it("does not accept 24:00 timestamps that Date.parse normalizes to the next day", async () => {
+    const requests = [];
+    const worker = createScheduleSyncWorker({
+      nowImpl: () => Date.parse("2026-10-25T00:00:00.000Z"),
+      fetchImpl: async (url) => {
+        requests.push(url);
+        return url === healthUrl
+          ? healthResponse({
+              sourceFetchedAt: "2026-10-24T24:00:00.000Z",
+              lastSuccessfulSyncAt: "2026-10-24T24:00:00.000Z",
+              snapshotAgeSeconds: 0,
+            })
+          : response();
+      },
+      log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+    await expect(worker.scheduled({ scheduledTime: 1, noRetry: vi.fn() }, { CRON_SECRET: syncSecret }))
+      .resolves.toMatchObject({ outcome: "success", generation: 12 });
+    expect(requests).toEqual([healthUrl, "https://esports-schedule-two.vercel.app/api/cron/sync"]);
+  });
+
   it("accepts unambiguous ISO timestamps with an explicit non-UTC offset", async () => {
     const requests = [];
     const worker = createScheduleSyncWorker({

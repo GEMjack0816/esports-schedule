@@ -196,6 +196,14 @@ function parseTimestampWithTimezone(value) {
     return null;
   }
 
+  // Date.parse accepts 24:00:00 and normalizes it to the following day even
+  // though the health contract emits RFC 3339 timestamps with hours 00–23.
+  // Reject normalized clock values so malformed data cannot suppress a sync.
+  const hour = Number(value.slice(11, 13));
+  const minute = Number(value.slice(14, 16));
+  const second = Number(value.slice(17, 19));
+  if (hour > 23 || minute > 59 || second > 59) return null;
+
   const calendarDate = new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
   if (
     !Number.isFinite(calendarDate.getTime()) ||
