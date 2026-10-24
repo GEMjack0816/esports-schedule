@@ -1,0 +1,41 @@
+name: Monitor esports schedule freshness
+
+on:
+  schedule:
+    # Run shortly after each expected sync slot; GitHub schedule timing is best-effort.
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: esports-schedule-freshness-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Check out freshness validator
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Check production schedule freshness
+        env:
+          HEALTH_URL: https://esports-schedule-two.vercel.app/api/health/data-coverage
+          MAX_SCHEDULE_AGE_SECONDS: "900"
+          MAX_HEALTH_RESPONSE_BYTES: "262144"
+        run: |
+          set -euo pipefail
+          response_file="$RUNNER_TEMP/schedule-health.json"
+          trap 'rm -f "$response_file"' EXIT
+          http_status=$(curl --silent --show-error --retry 2 --retry-all-errors --retry-max-time 45 --max-time 20 \
+            --max-filesize "$MAX_HEALTH_RESPONSE_BYTES" \
+            --output "$response_file" \
+            --write-out "%{http_code}" \
+            "$HEALTH_URL")
+          node scripts/validate-schedule-freshness.mjs "$response_file" "$http_status"
