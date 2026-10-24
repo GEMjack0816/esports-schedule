@@ -69,6 +69,7 @@ const noCacheFence: ManualMatchCacheFence = async () => {};
 export const MANUAL_MATCH_MUTATION_LOCK = 7_214_603_119;
 const MANUAL_MATCH_LOCK_TIMEOUT_MS = 2_500;
 const MANUAL_MATCH_STATUS_STATEMENT_TIMEOUT_MS = 2_000;
+let manualMatchCacheStatusRead: Promise<ManualMatchCacheStatus> | null = null;
 const DELIVERED_OUTBOX_CLEANUP_BATCH = 100;
 
 type ReviewTransaction = Parameters<Parameters<ReturnType<typeof getDatabase>["transaction"]>[0]>[0];
@@ -811,37 +812,49 @@ export class DrizzleReviewRepository {
     }
   }
 
-  async getManualMatchCacheStatus(): Promise<ManualMatchCacheStatus> {
-    try {
-      // This status is checked on every public schedule read. Keep the values
-      // in one compact result query rather than separate status queries. The
-      // caller's Promise.race only bounds how long it waits; it cannot cancel a
-      // postgres-js query. Set a transaction-local server timeout so a lock or
-      // slow query cannot keep consuming a pool connection after that timeout.
-      return await getDatabase().transaction(async (tx) => {
-        await tx.execute(sql`select set_config(
-          'statement_timeout',
-          ${`${MANUAL_MATCH_STATUS_STATEMENT_TIMEOUT_MS}ms`},
-          true
-        )`);
-        const [row] = await tx.execute(sql`
-          select
-            (select case when is_called then last_value else 0 end
-              from public.manual_match_cache_revision_seq) as revision,
-            (select count(*) from public.manual_match_cache_outbox
-              where delivered_at is null) as pending_revisions,
-            (select retry_after from public.manual_match_cache_outbox
-              where delivered_at is null order by revision desc limit 1) as retry_after
-        `);
-        return {
-          revision: Number(row?.revision ?? 0),
-          pendingRevisions: Number(row?.pending_revisions ?? 0),
-          retryAfter: row?.retry_after ? new Date(row.retry_after as string | Date) : null,
-        };
-      });
-    } catch (error) {
-      translateDatabaseError(error);
-    }
+  getManualMatchCacheStatus(): Promise<ManualMatchCacheStatus> {
+    if (manualMatchCacheStatusRead) return manualMatchCacheStatusRead;
+
+    // Concurrent public reads in one function instance need the same tiny
+    // status result. Coalesce them so a busy pool does not accumulate one
+    // uncancellable postgres-js waiter per incoming request. This is strictly
+    // in-flight sharing: no result is retained after the query settles.
+    const pending = (async (): Promise<ManualMatchCacheStatus> => {
+      try {
+        // The caller's Promise.race only bounds how long it waits; it cannot
+        // cancel a postgres-js query. Set a transaction-local server timeout so
+        // a lock or slow query releases its pool connection promptly.
+        return await getDatabase().transaction(async (tx) => {
+          await tx.execute(sql`select set_config(
+            'statement_timeout',
+            ${`${MANUAL_MATCH_STATUS_STATEMENT_TIMEOUT_MS}ms`},
+            true
+          )`);
+          const [row] = await tx.execute(sql`
+            select
+              (select case when is_called then last_value else 0 end
+                from public.manual_match_cache_revision_seq) as revision,
+              (select count(*) from public.manual_match_cache_outbox
+                where delivered_at is null) as pending_revisions,
+              (select retry_after from public.manual_match_cache_outbox
+                where delivered_at is null order by revision desc limit 1) as retry_after
+          `);
+          return {
+            revision: Number(row?.revision ?? 0),
+            pendingRevisions: Number(row?.pending_revisions ?? 0),
+            retryAfter: row?.retry_after ? new Date(row.retry_after as string | Date) : null,
+          };
+        });
+      } catch (error) {
+        translateDatabaseError(error);
+      }
+    })();
+    manualMatchCacheStatusRead = pending;
+    void pending.then(
+      () => { if (manualMatchCacheStatusRead === pending) manualMatchCacheStatusRead = null; },
+      () => { if (manualMatchCacheStatusRead === pending) manualMatchCacheStatusRead = null; },
+    );
+    return pending;
   }
 
   async getManualMatch(id: string): Promise<PublishedManualMatchRow | null> {

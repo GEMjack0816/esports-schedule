@@ -701,6 +701,61 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     }
   });
 
+  it("shares one blocked cache-status query across concurrent callers", async () => {
+    const observer = postgres(testUrl!, { max: 1, prepare: false });
+    let signalLockAcquired!: () => void;
+    const lockAcquired = new Promise<void>((resolve) => { signalLockAcquired = resolve; });
+    let releaseLock!: () => void;
+    const lockReleased = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const lockTransaction = cleanup.begin(async (tx) => {
+      await tx`lock table manual_match_cache_outbox in access exclusive mode`;
+      signalLockAcquired();
+      await lockReleased;
+    });
+
+    await lockAcquired;
+    const reads = [repository.getManualMatchCacheStatus()];
+    try {
+      let activeStatusQueries = 0;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const [row] = await observer`
+          select count(*)::int as count
+          from pg_stat_activity
+          where pid <> pg_backend_pid()
+            and state = 'active'
+            and query like ${"%manual_match_cache_revision_seq%"}
+        `;
+        activeStatusQueries = Number(row.count);
+        if (activeStatusQueries > 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(activeStatusQueries).toBe(1);
+
+      for (let caller = 0; caller < 12; caller += 1) {
+        reads.push(repository.getManualMatchCacheStatus());
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const [row] = await observer`
+        select count(*)::int as count
+        from pg_stat_activity
+        where pid <> pg_backend_pid()
+          and state = 'active'
+          and query like ${"%manual_match_cache_revision_seq%"}
+      `;
+      expect(Number(row.count)).toBe(1);
+      await expect(reads[0]).rejects.toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+    } finally {
+      releaseLock();
+      await lockTransaction;
+      await observer.end();
+    }
+
+    const results = await Promise.allSettled(reads);
+    expect(results).toHaveLength(13);
+    expect(results.every((result) => result.status === "rejected"
+      && result.reason?.code === "DATABASE_UNAVAILABLE")).toBe(true);
+  });
+
   it("coalesces repeated undelivered snapshots so cache failures cannot grow pending rows", async () => {
     const fence = vi.fn<(revision: number) => Promise<void>>().mockResolvedValue(undefined);
 
