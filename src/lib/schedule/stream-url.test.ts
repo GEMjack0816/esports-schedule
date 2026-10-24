@@ -44,6 +44,8 @@ describe("public external URL sanitization", () => {
     "https://stream.example/watch#return=%252Fredirect%253Fclient_secret%253Dprivate",
     "https://cdn.example/image?X-Amz-Credential=key%2Fscope&X-Amz-Signature=private",
     "https://cdn.example/image?X-Goog-Signature=private",
+    "https://stream.example/watch?hmac=private-signature&match=42",
+    "https://stream.example/watch?X-HMAC=private-signature&match=42",
     "https://stream.example/live?auth_token=private",
     "https://cdn.example/image?AWSAccessKeyId=private",
     "https://stream.example/live?session_id=private",
@@ -124,6 +126,7 @@ describe("public external URL sanitization", () => {
       "client_secret",
       "authorization",
       "session_id",
+      "hmac",
     ];
     let checked = 0;
 

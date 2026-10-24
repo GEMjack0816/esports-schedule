@@ -4,6 +4,7 @@ const credentialParameterNames = new Set([
   "accesskey", "accesstoken", "apikey", "auth", "authorization", "clientsecret",
   "credential", "idtoken", "jwt", "oauth", "oauthtoken", "password", "passwd",
   "privatekey", "refreshtoken", "secret", "session", "signature", "sig", "token",
+  "hmac",
   "authorizationcode", "authenticode", "authtoken", "awsaccesskeyid", "bearer",
   "bearertoken", "code", "key", "keyid", "nonce", "sessionid", "jsessionid", "state", "ticket",
   "assertion", "clientassertion", "codeverifier", "idtokenhint", "samlresponse",
@@ -25,7 +26,7 @@ function matchesCredentialParameter(name: string): boolean {
     // Signed cloud-storage URLs use vendor-prefixed names such as
     // X-Amz-Credential / X-Amz-Signature and X-Goog-Signature. Match the
     // credential-bearing suffix independently of its vendor prefix.
-    || /(?:token|secret|password|passwd|credential|authorization|auth|session|signature|jwt|sig|assertion|codeverifier|idtokenhint|samlresponse)$/.test(normalized)
+    || /(?:token|secret|password|passwd|credential|authorization|auth|session|signature|hmac|jwt|sig|assertion|codeverifier|idtokenhint|samlresponse)$/.test(normalized)
     // OAuth and login providers also use prefixed authorization-code names
     // such as oauth_code / auth_code. A raw `code` is covered by the exact set;
     // these suffixes close the common prefixed variants without rejecting
