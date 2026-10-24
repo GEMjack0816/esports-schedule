@@ -34,6 +34,8 @@
 | Vercel Production/isolated Preview | `NEXT_PUBLIC_VERCEL_APP_CLIENT_ID` | Vercel OAuth 公共 client ID |
 | Vercel Production/isolated Preview | `VERCEL_APP_CLIENT_SECRET` | Vercel OAuth 服务端 client secret |
 | Vercel Production/isolated Preview | `ADMIN_VERCEL_USER_IDS` | 逗号分隔的管理员稳定 `sub` 白名单 |
+| Vercel Preview verification branch only | `ADMIN_VERIFY_PREVIEW_DATABASE_HOSTS` | 允许 `verify:admin` 写入的隔离 Preview PostgreSQL 精确 hostname 列表；不得包含 Production hostname，不支持通配符 |
+| Vercel Preview verification branch only | `ADMIN_VERIFY_PREVIEW_GIT_REFS` | 服务端 preflight/cleanup 允许的精确 Preview Git ref 列表；必须 branch-scoped，不支持通配符或 `main` |
 
 这些变量不替代或改变现有的 `PANDASCORE_TOKEN` 与 `CRON_SECRET`。不要把任何真实值写入仓库。
 
@@ -50,7 +52,13 @@ npm start
 npm run verify:browser -- http://localhost:3000
 $env:ALLOW_ISOLATED_ADMIN_VERIFY = "1"
 $env:ADMIN_STORAGE_STATE = "<authenticated-playwright-storage-state>"
-npm run verify:admin -- <isolated-preview-url>
+$env:ADMIN_VERIFY_PREVIEW_HOSTS = "<preview-alias-host>,<unique-deployment-host>"
+npm run verify:admin -- <isolated-preview-url> <expected-preview-branch> <expected-full-commit-sha>
 ```
 
-`verify:admin` 会拒绝生产 Alias，并且只有在显式标记隔离环境且提供已认证浏览器状态时才执行公开提交、批准、编辑、隐藏、恢复、驳回和审计验证。
+运行前必须在当前验证分支的 Vercel **Preview-only、branch-scoped** 环境中配置 `ADMIN_VERIFY_PREVIEW_DATABASE_HOSTS` 与 `ADMIN_VERIFY_PREVIEW_GIT_REFS`。前者只列出此隔离数据库连接主机名（逗号分隔，不含 scheme、端口、路径或通配符）；后者只列出获准执行 E2E 的精确 Git ref（逗号分隔，不支持通配符或 `main`）。两者都不是 Secret，但只可由服务端读取；禁止加入 `NEXT_PUBLIC_`。不要把 Production 数据库主机加入列表。缺失、格式错误或不匹配时，服务端预检和清理端点都会 fail closed。
+
+`verify:admin` 在任何写入前都会要求 HTTPS URL 精确命中 `ADMIN_VERIFY_PREVIEW_HOSTS`，并使用已认证的浏览器状态读取 `/api/version`。只有服务名、`environment=preview`、Git ref、完整 commit SHA、Deployment ID 和 deployment URL 全部符合预期后，后续浏览器与 API 请求都会固定到该响应中的不可变 Deployment URL，而不再访问可移动的分支 alias。由于应用管理员 Cookie 是 host-only，`ADMIN_STORAGE_STATE` 必须包含对该不可变 Deployment host 的管理员会话；不要复制或改写 Cookie。脚本还必须调用管理员同源 `/api/admin/e2e-preflight`；该端点在服务端将当前 `DATABASE_URL` 主机与 `ADMIN_VERIFY_PREVIEW_DATABASE_HOSTS` 作精确匹配。仅当预检返回 `{ "ok": true }` 才会开始测试写入。API 不返回数据库主机或连接信息。生产域名、未列入 allowlist 的 host、缺失元数据及 SHA/ref 不匹配均 fail closed。
+
+测试提交在备注和来源链接中写入随机 run marker。验证通过部署指纹及服务端数据库预检后，即使尚未确认某次提交请求的响应，脚本也会在 `finally` 中按 run marker 调用管理员清理 API；清理可安全重试。该 API 仅在具有完整部署指纹、Git ref 命中 branch-scoped Preview allowlist 且数据库 hostname 命中 Preview allowlist 的 Vercel Preview deployment 中启用，且要求管理员 session、同源 Origin 和有效 run marker。它在一个数据库事务中删除本次测试提交、由其发布的比赛及关联审计行，并同步/失效公开比赛缓存。Production、未列入 allowlist 的 ref、Production 数据库 host 和缺失部署元数据时始终 fail closed。若清理失败，脚本会以非零状态失败并报告 run ID，不能将 E2E 误报为通过。
+
