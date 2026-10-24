@@ -16,7 +16,7 @@ Before invoking the authenticated sync endpoint, the Worker makes a bounded, una
 
 The Worker has no public HTTP route (`workers_dev` is disabled). Its only configuration is a Cron Trigger. It sends an authenticated `GET` to the existing production sync endpoint with the bearer secret in the `Authorization` header, never in the URL. Logs contain only a sanitized result summary and never the response body, request headers, or secret.
 
-Retries are bounded. A completed structured `failed` or `not-configured` response is terminal for that invocation and is not immediately resubmitted, avoiding amplification of provider throttling or database outages. Unstructured transient 5xx responses retain the bounded retry policy.
+Retries are bounded. A completed structured `failed` or `not-configured` response is terminal for that invocation and is not immediately resubmitted, avoiding amplification of provider throttling or database outages. Unstructured transient 5xx responses retain the bounded retry policy. If sync response headers arrive but the body stream fails, the Worker first rechecks the strict freshness contract; if the site now proves all five games are fresh, it records `verified_fresh_after_response_loss` instead of launching another full sync. If freshness cannot be proven, the existing bounded retry policy continues.
 
 ## Not deployed by this repository change
 

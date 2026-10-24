@@ -222,13 +222,14 @@ describe("schedule sync Worker client", () => {
 
   it("retries a response-body transport failure after the response headers arrive", async () => {
     const waits = [];
-    let attempts = 0;
+    let syncAttempts = 0;
     const result = await invokeScheduleSync({
       secret: syncSecret,
       waitImpl: async (milliseconds) => waits.push(milliseconds),
-      fetchImpl: async () => {
-        attempts += 1;
-        if (attempts > 1) return response();
+      fetchImpl: async (url) => {
+        if (url === healthUrl) return healthResponse();
+        syncAttempts += 1;
+        if (syncAttempts > 1) return response();
         const body = new ReadableStream({
           start(controller) {
             controller.error(new Error(`private stream detail ${syncSecret}`));
@@ -242,18 +243,60 @@ describe("schedule sync Worker client", () => {
     });
 
     expect(result).toMatchObject({ outcome: "success", generation: 12 });
-    expect(attempts).toBe(2);
+    expect(syncAttempts).toBe(2);
     expect(waits).toEqual([500]);
+  });
+
+  it("verifies freshness after an ambiguous successful response before retrying the sync", async () => {
+    const now = Date.parse("2026-10-25T10:00:00.000Z");
+    const requests = [];
+    const sourceFetchedAt = new Date(now - 30_000).toISOString();
+    let syncAttempts = 0;
+    const result = await invokeScheduleSync({
+      secret: syncSecret,
+      nowImpl: () => now,
+      fetchImpl: async (url) => {
+        requests.push(url);
+        if (url === healthUrl) {
+          return healthResponse({
+            sourceFetchedAt,
+            lastSuccessfulSyncAt: sourceFetchedAt,
+            snapshotAgeSeconds: 30,
+          });
+        }
+        syncAttempts += 1;
+        const body = new ReadableStream({
+          start(controller) {
+            controller.error(new Error(`lost response body ${syncSecret}`));
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: "verified_fresh_after_response_loss",
+      snapshotAgeSeconds: 30,
+    });
+    expect(syncAttempts).toBe(1);
+    expect(requests).toEqual([
+      "https://esports-schedule-two.vercel.app/api/cron/sync",
+      healthUrl,
+    ]);
   });
 
   it("bounds repeated response-body transport failures and sanitizes the final error", async () => {
     const waits = [];
-    let attempts = 0;
+    let syncAttempts = 0;
     await expect(invokeScheduleSync({
       secret: syncSecret,
       waitImpl: async (milliseconds) => waits.push(milliseconds),
-      fetchImpl: async () => {
-        attempts += 1;
+      fetchImpl: async (url) => {
+        if (url === healthUrl) return healthResponse();
+        syncAttempts += 1;
         const body = new ReadableStream({
           start(controller) {
             controller.error(new Error(`private stream detail ${syncSecret}`));
@@ -266,7 +309,7 @@ describe("schedule sync Worker client", () => {
       },
     })).rejects.toMatchObject({ code: "response_read_failure", httpStatus: 200 });
 
-    expect(attempts).toBe(3);
+    expect(syncAttempts).toBe(3);
     expect(waits).toEqual([500, 1_000]);
   });
 

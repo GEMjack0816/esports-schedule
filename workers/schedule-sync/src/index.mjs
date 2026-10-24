@@ -276,6 +276,13 @@ async function getFreshScheduleAge({ fetchImpl, nowImpl, timeoutSignalImpl }) {
   }
 }
 
+async function verifyFreshAfterAmbiguousSyncResponse({ fetchImpl, nowImpl, timeoutSignalImpl }) {
+  const snapshotAgeSeconds = await getFreshScheduleAge({ fetchImpl, nowImpl, timeoutSignalImpl });
+  return snapshotAgeSeconds === null
+    ? null
+    : { outcome: "verified_fresh_after_response_loss", snapshotAgeSeconds };
+}
+
 export async function invokeScheduleSync({
   fetchImpl = fetch,
   secret,
@@ -321,6 +328,10 @@ export async function invokeScheduleSync({
       try {
         payload = await readJsonBody(response);
       } catch (error) {
+        if (!(error instanceof SyncInvocationError)) {
+          const recovered = await verifyFreshAfterAmbiguousSyncResponse({ fetchImpl, nowImpl, timeoutSignalImpl });
+          if (recovered) return recovered;
+        }
         if (attempt === MAX_ATTEMPTS - 1) throw error;
         const delay = retryDelayFor(response, attempt, nowImpl());
         if (deadline - nowImpl() <= delay) throw new SyncInvocationError("retry_budget_exhausted");
@@ -362,6 +373,8 @@ export async function invokeScheduleSync({
       // remain deterministic protocol failures.
       if (error instanceof SyncInvocationError) throw error;
       cancelResponseBodyWithoutBlocking(response);
+      const recovered = await verifyFreshAfterAmbiguousSyncResponse({ fetchImpl, nowImpl, timeoutSignalImpl });
+      if (recovered) return recovered;
       if (attempt === MAX_ATTEMPTS - 1) {
         throw new SyncInvocationError("response_read_failure", response.status);
       }
