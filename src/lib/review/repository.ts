@@ -8,6 +8,7 @@ import {
   eq,
   gte,
   ilike,
+  inArray,
   or,
   sql,
 } from "drizzle-orm";
@@ -141,6 +142,51 @@ async function scalarCount(where?: SQL): Promise<number> {
 }
 
 export class DrizzleReviewRepository {
+  async cleanupE2eVerificationRun(
+    runId: string,
+  ): Promise<{ cleaned: boolean; submissionsDeleted: number; matchesDeleted: number }> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)) {
+      return { cleaned: false, submissionsDeleted: 0, matchesDeleted: 0 };
+    }
+
+    return getDatabase().transaction(async (tx) => {
+      const marker = `E2E verification run: ${runId}`;
+      const sourceUrl = `https://example.com/isolated-admin-verification/${runId}`;
+      const rows = await tx.select({
+        id: matchSubmissions.id,
+      })
+        .from(matchSubmissions)
+        .where(and(
+          eq(matchSubmissions.notes, marker),
+          eq(matchSubmissions.sourceUrl, sourceUrl),
+        ))
+        .limit(11)
+        .for("update");
+      if (rows.length > 10) {
+        return { cleaned: false, submissionsDeleted: 0, matchesDeleted: 0 };
+      }
+      if (rows.length === 0) {
+        // Idempotent so a retry after a committed deletion but lost HTTP response succeeds.
+        return { cleaned: true, submissionsDeleted: 0, matchesDeleted: 0 };
+      }
+
+      const submissionIds = rows.map((row) => row.id);
+      const matches = await tx.select({ id: publishedManualMatches.id })
+        .from(publishedManualMatches)
+        .where(inArray(publishedManualMatches.sourceSubmissionId, submissionIds));
+      const auditEntityIds = [...submissionIds, ...matches.map((match) => match.id)];
+      await tx.delete(adminAuditEvents).where(inArray(adminAuditEvents.entityId, auditEntityIds));
+      await tx.delete(publishedManualMatches)
+        .where(inArray(publishedManualMatches.sourceSubmissionId, submissionIds));
+      await tx.delete(matchSubmissions).where(inArray(matchSubmissions.id, submissionIds));
+      return {
+        cleaned: true,
+        submissionsDeleted: rows.length,
+        matchesDeleted: matches.length,
+      };
+    });
+  }
+
   async createSubmission(input: MatchSubmissionInput, options: CreateOptions = {}): Promise<MatchSubmissionRow> {
     try {
       const [row] = await getDatabase()
