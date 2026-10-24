@@ -5,7 +5,11 @@ import { selectInitialScheduleWindow } from "./initial-window";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
-function matchAt(startTimeUtc: string | null, id = "test"): EsportsMatch {
+function matchAt(
+  startTimeUtc: string | null,
+  id = "test",
+  status: EsportsMatch["status"] = "scheduled",
+): EsportsMatch {
   return {
     id,
     provider: "manual",
@@ -19,7 +23,7 @@ function matchAt(startTimeUtc: string | null, id = "test"): EsportsMatch {
     homeScore: null,
     awayScore: null,
     bestOf: null,
-    status: "scheduled",
+    status,
     startTimeUtc,
     streams: [],
     lastUpdatedAt: "2026-01-01T00:00:00.000Z",
@@ -66,6 +70,22 @@ describe("initial schedule window", () => {
     expect(selectInitialScheduleWindow(matches, now).map((match) => match.id)).toEqual([
       "window-start",
       "window-end-minus-one",
+    ]);
+  });
+
+  it("keeps running matches in the initial payload even when undated or outside the date window", () => {
+    const now = new Date("2026-10-25T12:00:00.000Z");
+    const matches = [
+      matchAt(null, "undated-running", "running"),
+      matchAt("2026-10-10T12:00:00.000Z", "older-running", "running"),
+      matchAt("not-a-date", "invalid-running", "running"),
+      matchAt(null, "undated-scheduled"),
+      matchAt("2026-10-10T12:00:00.000Z", "older-scheduled"),
+    ];
+
+    expect(selectInitialScheduleWindow(matches, now).map((match) => match.id)).toEqual([
+      "undated-running",
+      "older-running",
     ]);
   });
 });
