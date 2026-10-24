@@ -62,18 +62,22 @@ try {
     throw new Error("Preview deployment metadata is invalid; no test data was written.");
   }
   verifiedDeployment = assertPreviewDeployment(target, version);
+  // A branch alias is mutable. Once its metadata is validated, pin every
+  // subsequent browser/API request to the immutable deployment URL returned
+  // by that deployment, so an alias reassignment cannot redirect test writes.
+  const deploymentBaseUrl = verifiedDeployment.deploymentUrl;
 
   const page = await context.newPage();
-  const dashboardResponse = await page.goto(`${target.baseUrl}/admin`, { waitUntil: "networkidle" });
+  const dashboardResponse = await page.goto(`${deploymentBaseUrl}/admin`, { waitUntil: "networkidle" });
   assertAdminSessionLanding({
     status: dashboardResponse?.status(),
     url: page.url(),
-    baseUrl: target.baseUrl,
+    baseUrl: deploymentBaseUrl,
     bodyText: await page.locator("body").innerText(),
   });
 
-  const preflightResponse = await context.request.post(`${target.baseUrl}/api/admin/e2e-preflight`, {
-    headers: { Origin: new URL(target.baseUrl).origin },
+  const preflightResponse = await context.request.post(`${deploymentBaseUrl}/api/admin/e2e-preflight`, {
+    headers: { Origin: new URL(deploymentBaseUrl).origin },
     timeout: 15_000,
   });
   const preflightPayload = await preflightResponse.json().catch(() => null);
@@ -87,7 +91,7 @@ try {
   const startTime = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
   async function submit(teams) {
-    const response = await context.request.post(`${target.baseUrl}/api/submissions`, {
+    const response = await context.request.post(`${deploymentBaseUrl}/api/submissions`, {
       data: {
         game: "honor-of-kings",
         league,
@@ -107,7 +111,7 @@ try {
   }
 
   await submit(approvedTeams);
-  await page.goto(`${target.baseUrl}/admin/submissions?q=${encodeURIComponent(approvedTeams[0])}`, {
+  await page.goto(`${deploymentBaseUrl}/admin/submissions?q=${encodeURIComponent(approvedTeams[0])}`, {
     waitUntil: "networkidle",
   });
   await page.getByRole("link", { name: "查看" }).click();
@@ -116,7 +120,7 @@ try {
 
   let publicMatch;
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    const response = await context.request.get(`${target.baseUrl}/api/matches`, {
+    const response = await context.request.get(`${deploymentBaseUrl}/api/matches`, {
       headers: { "Cache-Control": "no-cache" },
     });
     const payload = await response.json();
@@ -128,7 +132,7 @@ try {
   }
   if (!publicMatch) throw new Error("approved match did not appear in the public schedule");
 
-  await page.goto(`${target.baseUrl}/admin/matches`, { waitUntil: "networkidle" });
+  await page.goto(`${deploymentBaseUrl}/admin/matches`, { waitUntil: "networkidle" });
   const approvedRow = page.getByRole("row").filter({ hasText: approvedTeams[0] });
   await approvedRow.getByRole("link", { name: "编辑" }).click();
   await page.getByLabel("赛事").fill(`${league} edited`);
@@ -137,19 +141,19 @@ try {
   await page.getByRole("button", { name: "恢复公开" }).click();
 
   const rejectedSubmission = await submit(rejectedTeams);
-  await page.goto(`${target.baseUrl}/admin/submissions/${rejectedSubmission.id}`, { waitUntil: "networkidle" });
+  await page.goto(`${deploymentBaseUrl}/admin/submissions/${rejectedSubmission.id}`, { waitUntil: "networkidle" });
   await page.getByLabel("驳回原因").fill("Automated isolated Preview rejection test");
   await page.getByRole("button", { name: "驳回" }).click();
   await page.waitForURL(/status=rejected/);
 
-  const rejectedPayload = await (await context.request.get(`${target.baseUrl}/api/matches`)).json();
+  const rejectedPayload = await (await context.request.get(`${deploymentBaseUrl}/api/matches`)).json();
   if (rejectedPayload.matches?.some(
     (match) => match.homeTeam?.name === rejectedTeams[0] || match.awayTeam?.name === rejectedTeams[1],
   )) {
     throw new Error("rejected match appeared in the public schedule");
   }
 
-  await page.goto(`${target.baseUrl}/admin`, { waitUntil: "networkidle" });
+  await page.goto(`${deploymentBaseUrl}/admin`, { waitUntil: "networkidle" });
   const dashboardText = await page.locator("body").innerText();
   if (!dashboardText.includes("最近操作")) throw new Error("admin audit summary is missing");
 
@@ -158,8 +162,8 @@ try {
 } finally {
   if (cleanupEnabled && context) {
     try {
-      const cleanupResponse = await context.request.post(`${target.baseUrl}/api/admin/e2e-cleanup`, {
-        headers: { Origin: new URL(target.baseUrl).origin },
+      const cleanupResponse = await context.request.post(`${deploymentBaseUrl}/api/admin/e2e-cleanup`, {
+        headers: { Origin: new URL(deploymentBaseUrl).origin },
         data: { runId },
         timeout: 15_000,
       });
@@ -190,3 +194,4 @@ console.log(JSON.stringify({
   gitCommitRef: verifiedDeployment.gitCommitRef,
   testDataCleanup: "passed",
 }));
+

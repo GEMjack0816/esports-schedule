@@ -56,7 +56,10 @@ describe("verify:admin fail-closed target guard", () => {
   });
 
   it("accepts only version metadata matching Preview, ref, SHA, and allowlisted deployment URL", () => {
-    expect(assertPreviewDeployment(target(), version()).gitCommitSha).toBe(sha);
+    const verified = assertPreviewDeployment(target(), version());
+    expect(verified.gitCommitSha).toBe(sha);
+    expect(verified.deploymentUrl).toBe("https://deployment.example.vercel.app");
+    expect(verified.deploymentUrl).not.toBe(target().baseUrl);
   });
 
   it.each([
@@ -107,3 +110,4 @@ describe("verify:admin isolated database preflight", () => {
     expect(() => assertIsolatedDatabasePreflight(result)).toThrow(/no test data was written/i);
   });
 });
+
