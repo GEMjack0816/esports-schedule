@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
+// The schedule sync contract covers these five configured games; partial
+// success may fail some of them but must not silently skip an attempted game.
+const EXPECTED_GAME_COUNT = 5;
+
 export function validateSyncResponse(payload, httpStatus) {
+  if (!Number.isInteger(httpStatus) || httpStatus < 100 || httpStatus > 599) {
+    return { ok: false, message: "sync response has an invalid HTTP status" };
+  }
   if (!payload || typeof payload !== "object") {
     return { ok: false, message: "sync endpoint returned invalid JSON" };
   }
@@ -10,11 +17,14 @@ export function validateSyncResponse(payload, httpStatus) {
       return { ok: false, message: "sync busy response unexpectedly reported a generation" };
     }
     return httpStatus === 409
-      ? { ok: true, message: "sync busy: another refresh owns the lock" }
+      ? { ok: false, message: "sync skipped: another refresh owns the lock" }
       : { ok: false, message: `sync busy response used unexpected HTTP ${httpStatus}` };
   }
   if (httpStatus < 200 || httpStatus >= 300) {
     return { ok: false, message: `sync endpoint returned HTTP ${httpStatus}` };
+  }
+  if (payload.ok !== true) {
+    return { ok: false, message: "sync endpoint did not confirm a successful response" };
   }
   if (payload.lockAcquired !== true) {
     return { ok: false, message: "sync did not acquire the refresh lock" };
@@ -22,10 +32,11 @@ export function validateSyncResponse(payload, httpStatus) {
   if (!Number.isSafeInteger(payload.generation) || payload.generation < 1) {
     return { ok: false, message: "sync did not report a valid fencing generation" };
   }
-  if (!Number.isInteger(payload.gamesAttempted) || payload.gamesAttempted < 1) {
-    return { ok: false, message: "sync did not report attempted games" };
+  if (!Number.isInteger(payload.gamesAttempted) || payload.gamesAttempted !== EXPECTED_GAME_COUNT) {
+    return { ok: false, message: "sync did not attempt all five configured games" };
   }
-  if (!Number.isInteger(payload.gamesSucceeded) || payload.gamesSucceeded < 1) {
+  if (!Number.isInteger(payload.gamesSucceeded) || payload.gamesSucceeded < 1
+    || payload.gamesSucceeded > payload.gamesAttempted) {
     return { ok: false, message: "sync did not update any game" };
   }
   if (!Number.isInteger(payload.snapshotsPersisted) || payload.snapshotsPersisted < 1) {
@@ -34,7 +45,7 @@ export function validateSyncResponse(payload, httpStatus) {
   if (payload.snapshotsPersisted !== payload.gamesSucceeded) {
     return { ok: false, message: "sync success count does not match persisted snapshots" };
   }
-  if (!Number.isInteger(payload.gamesFailed)
+  if (!Number.isInteger(payload.gamesFailed) || payload.gamesFailed < 0
     || payload.gamesSucceeded + payload.gamesFailed !== payload.gamesAttempted) {
     return { ok: false, message: "sync game outcome counts are inconsistent" };
   }
@@ -42,7 +53,7 @@ export function validateSyncResponse(payload, httpStatus) {
     return { ok: false, message: "sync did not report a valid lastSuccessfulSyncAt" };
   }
   if (payload.status !== "success" && payload.status !== "partial") {
-    return { ok: false, message: `sync reported logical status ${String(payload.status)}` };
+    return { ok: false, message: "sync endpoint reported an unsupported logical status" };
   }
   return {
     ok: true,
