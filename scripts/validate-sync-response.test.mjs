@@ -85,6 +85,14 @@ describe("sync workflow response validation", () => {
     }, 200).ok).toBe(false);
   });
 
+  it("does not echo an unsupported response status into workflow logs", () => {
+    const injectedStatus = "unknown\n::warning::forged workflow annotation";
+    expect(validateSyncResponse({ ...success, status: injectedStatus }, 200)).toEqual({
+      ok: false,
+      message: "sync endpoint reported an unsupported logical status",
+    });
+  });
+
   it("rejects a logical success that did not persist a snapshot", () => {
     expect(validateSyncResponse({ ...success, snapshotsPersisted: 0 }, 200).ok).toBe(false);
   });

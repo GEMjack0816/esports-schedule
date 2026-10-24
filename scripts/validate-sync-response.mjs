@@ -45,7 +45,7 @@ export function validateSyncResponse(payload, httpStatus) {
     return { ok: false, message: "sync did not report a valid lastSuccessfulSyncAt" };
   }
   if (payload.status !== "success" && payload.status !== "partial") {
-    return { ok: false, message: `sync reported logical status ${String(payload.status)}` };
+    return { ok: false, message: "sync endpoint reported an unsupported logical status" };
   }
   return {
     ok: true,
