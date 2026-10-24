@@ -18,6 +18,8 @@ describe("public external URL sanitization", () => {
     "https://stream.example/live#set-cookie=session-value",
     "https://stream.example/live;cookie=session-value",
     "https://stream.example/live;jsessionid=private",
+    "https://stream.example/live;PHPSESSID=private-session",
+    "https://stream.example/watch/sid/private-session",
     "https://stream.example/watch/token/opaque-secret",
     "https://stream.example/watch/access_token/opaque-secret",
     "https://stream.example/watch/eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.signature",
