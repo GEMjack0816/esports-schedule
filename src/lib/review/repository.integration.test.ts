@@ -678,6 +678,29 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect(status.pendingRevisions).toBe(1);
   });
 
+  it("cancels a blocked cache-status statement at the PostgreSQL timeout", async () => {
+    let signalLockAcquired!: () => void;
+    const lockAcquired = new Promise<void>((resolve) => { signalLockAcquired = resolve; });
+    let releaseLock!: () => void;
+    const lockReleased = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const lockTransaction = cleanup.begin(async (tx) => {
+      await tx`lock table manual_match_cache_outbox in access exclusive mode`;
+      signalLockAcquired();
+      await lockReleased;
+    });
+
+    await lockAcquired;
+    const startedAt = Date.now();
+    try {
+      await expect(repository.getManualMatchCacheStatus())
+        .rejects.toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+    } finally {
+      releaseLock();
+      await lockTransaction;
+    }
+  });
+
   it("coalesces repeated undelivered snapshots so cache failures cannot grow pending rows", async () => {
     const fence = vi.fn<(revision: number) => Promise<void>>().mockResolvedValue(undefined);
 
