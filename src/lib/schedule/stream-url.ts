@@ -213,14 +213,21 @@ export function sanitizePublicHttpUrl(value: unknown): string | null {
   return sanitizePublicUrl(value, false);
 }
 
-export function sanitizePublicStreams(streams: Stream[] | undefined): Stream[] {
-  return (streams ?? []).flatMap((stream) => {
-    const url = sanitizePublicExternalUrl(stream?.url);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function sanitizePublicStreams(streams: unknown): Stream[] {
+  if (!Array.isArray(streams)) return [];
+
+  return streams.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const url = sanitizePublicExternalUrl(entry.url);
     if (!url) return [];
     return [{
-      label: typeof stream.label === "string" ? stream.label : "直播",
+      label: typeof entry.label === "string" ? entry.label : "直播",
       url,
-      ...(typeof stream.official === "boolean" ? { official: stream.official } : {}),
+      ...(typeof entry.official === "boolean" ? { official: entry.official } : {}),
     }];
   });
 }

@@ -194,6 +194,17 @@ describe("public external URL sanitization", () => {
     ])).toEqual([{ label: "safe", url: "https://stream.example/live", official: true }]);
   });
 
+  it("fails closed on malformed cached stream shapes without throwing", () => {
+    expect(sanitizePublicStreams({ url: "https://stream.example/live" })).toEqual([]);
+    expect(sanitizePublicStreams("https://stream.example/live")).toEqual([]);
+    expect(sanitizePublicStreams([
+      null,
+      "not-a-stream",
+      { url: "https://stream.example/live?access_token=private" },
+      { url: "https://stream.example/live" },
+    ])).toEqual([{ label: "直播", url: "https://stream.example/live" }]);
+  });
+
   it("replaces credentialed public team logos with the local placeholder", () => {
     expect(sanitizePublicTeam({ name: "Team", logo: "https://cdn.example/logo.svg?token=secret" }))
       .toEqual({ name: "Team", logo: "/team-placeholder.svg" });
