@@ -467,6 +467,68 @@ describe("schedule sync Worker client", () => {
     expect(log.log.mock.calls[0][0]).toContain('"outcome":"skipped_fresh"');
   });
 
+  it("skips at the backup freshness threshold but syncs above it before the next 15-minute slot", async () => {
+    const now = Date.parse("2026-10-18T10:00:00.000Z");
+    const requestsByAge = new Map();
+
+    for (const ageSeconds of [600, 601]) {
+      const requests = [];
+      const sourceFetchedAt = new Date(now - ageSeconds * 1_000).toISOString();
+      const worker = createScheduleSyncWorker({
+        nowImpl: () => now,
+        fetchImpl: async (url) => {
+          requests.push(url);
+          return url === healthUrl
+            ? healthResponse({
+              sourceFetchedAt,
+              lastSuccessfulSyncAt: sourceFetchedAt,
+              snapshotAgeSeconds: ageSeconds,
+            })
+            : response();
+        },
+        log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      });
+
+      const result = await worker.scheduled({ scheduledTime: now, noRetry: vi.fn() }, { CRON_SECRET: syncSecret });
+      requestsByAge.set(ageSeconds, { result, requests });
+    }
+
+    expect(requestsByAge.get(600).result).toEqual({ outcome: "skipped_fresh", snapshotAgeSeconds: 600 });
+    expect(requestsByAge.get(600).requests).toEqual([healthUrl]);
+    expect(requestsByAge.get(601).result).toMatchObject({ outcome: "success", generation: 12 });
+    expect(requestsByAge.get(601).requests).toEqual([
+      healthUrl,
+      "https://esports-schedule-two.vercel.app/api/cron/sync",
+    ]);
+  });
+
+  it("does not skip a snapshot at the old 15-minute boundary", async () => {
+    const now = Date.parse("2026-10-18T10:00:00.000Z");
+    const requests = [];
+    const sourceFetchedAt = new Date(now - 900 * 1_000).toISOString();
+    const worker = createScheduleSyncWorker({
+      nowImpl: () => now,
+      fetchImpl: async (url) => {
+        requests.push(url);
+        return url === healthUrl
+          ? healthResponse({
+            sourceFetchedAt,
+            lastSuccessfulSyncAt: sourceFetchedAt,
+            snapshotAgeSeconds: 900,
+          })
+          : response();
+      },
+      log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+    await expect(worker.scheduled({ scheduledTime: now, noRetry: vi.fn() }, { CRON_SECRET: syncSecret }))
+      .resolves.toMatchObject({ outcome: "success", generation: 12 });
+    expect(requests).toEqual([
+      healthUrl,
+      "https://esports-schedule-two.vercel.app/api/cron/sync",
+    ]);
+  });
+
   it.each([
     ["missing", null],
     ["cacheable", "public, max-age=300"],

@@ -8,9 +8,10 @@ const MAX_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [500, 1_000];
 const REQUEST_TIMEOUT_MS = 300_000;
 const HEALTH_REQUEST_TIMEOUT_MS = 10_000;
-// Match the application's per-game freshness window. The health probe must
-// confirm every PandaScore game is fresh before the backup trigger can skip.
-const FRESHNESS_LIMIT_SECONDS = 15 * 60;
+// Keep the skip threshold below the 15-minute Worker schedule interval. If
+// GitHub misses a run, the next backup invocation must sync instead of
+// skipping at the same 15-minute boundary and waiting another full interval.
+const FRESHNESS_LIMIT_SECONDS = 10 * 60;
 const PANDA_GAMES = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"];
 // Cloudflare Cron invocations have a 15-minute wall-time ceiling. Keep an
 // explicit total budget below it so retries cannot be cut off by the platform.
