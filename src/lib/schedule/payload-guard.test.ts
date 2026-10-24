@@ -75,6 +75,42 @@ describe("isSchedulePayload", () => {
     expect(isSchedulePayload({ ...validPayload(), matches: [{ status: "running" }] })).toBe(false);
   });
 
+  it("rejects invalid timestamps before date formatting can crash the dashboard", () => {
+    const payload = validPayload();
+    const invalidMatch = {
+      id: "manual:1",
+      provider: "manual",
+      providerMatchId: "1",
+      game: "lol",
+      tournament: null,
+      league: "Test",
+      stage: null,
+      homeTeam: { name: "A", logo: "/team-placeholder.svg" },
+      awayTeam: { name: "B", logo: "/team-placeholder.svg" },
+      homeScore: null,
+      awayScore: null,
+      bestOf: null,
+      status: "scheduled",
+      startTimeUtc: "not-a-date",
+      streams: [],
+      lastUpdatedAt: "2026-10-24T00:00:00.000Z",
+    };
+
+    expect(isSchedulePayload({ ...payload, matches: [invalidMatch] })).toBe(false);
+    expect(isSchedulePayload({
+      ...payload,
+      coverage: {
+        ...payload.coverage,
+        range: { ...payload.coverage.range, earliestMatchAt: "not-a-date" },
+      },
+    })).toBe(false);
+    expect(isSchedulePayload({
+      ...payload,
+      coverage: { ...payload.coverage, sourceFetchedAt: "not-a-date" },
+    })).toBe(false);
+  });
+
+
   it("rejects incomplete per-game coverage", () => {
     const payload = validPayload();
     delete payload.coverage.games.dota2;
