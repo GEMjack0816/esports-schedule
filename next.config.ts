@@ -31,6 +31,13 @@ const nextConfig: NextConfig = {
         pathname: "/images/team/image/**",
         search: "",
       },
+      {
+        protocol: "https",
+        hostname: "cdn-api.pandascore.co",
+        port: "",
+        pathname: "/images/team/image/**",
+        search: "",
+      },
     ],
   },
   env: {

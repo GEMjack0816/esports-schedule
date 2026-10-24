@@ -44,7 +44,7 @@ const template = {
     }])),
   },
 };
-const transientLogo = "https://cdn.pandascore.co/images/team/image/test/transient.png";
+const transientLogo = "https://cdn-api.pandascore.co/images/team/image/136955/transient.png";
 const persistentLogo = "https://cdn.pandascore.co/images/team/image/900002/persistent.png";
 const hangingLogo = "https://cdn.pandascore.co/images/team/image/900003/hanging.png";
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jvT8AAAAASUVORK5CYII=", "base64");
@@ -93,7 +93,11 @@ try {
             optimizedLogoRequests += 1;
             transientAttempts += 1;
             if (transientAttempts === 1) return route.abort("connectionreset");
-            return route.fulfill({ status: 200, contentType: "image/png", body: png });
+            return route.fulfill({
+              status: 200,
+              contentType: "image/svg+xml",
+              body: "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"><rect width=\"1\" height=\"1\" fill=\"red\"/></svg>",
+            });
           }
           if (source === persistentLogo) {
             optimizedLogoRequests += 1;
@@ -129,10 +133,27 @@ try {
     await page.locator(".refresh-button").click();
     await page.getByRole("tab", { name: /全部收录/ }).click();
     await page.locator(".team-mark").first().scrollIntoViewIfNeeded();
-    await page.waitForFunction(url => {
-      const image = document.querySelector(".team-mark img");
-      return image?.currentSrc === url && image.complete && image.naturalWidth > 0;
-    }, transientLogo);
+    try {
+      await page.waitForFunction(url => {
+        const image = document.querySelector(".team-mark img");
+        if (!image?.currentSrc || !image.complete || image.naturalWidth === 0) return false;
+        const current = new URL(image.currentSrc, window.location.href);
+        return current.href === url || current.searchParams.get("url") === url;
+      }, transientLogo, { timeout: 10_000 });
+    } catch (error) {
+      console.error(JSON.stringify({
+        width,
+        transientAttempts,
+        optimizedLogoRequests,
+        images: await page.locator(".team-mark img").evaluateAll(images => images.map(image => ({
+          src: image.src,
+          currentSrc: image.currentSrc,
+          complete: image.complete,
+          naturalWidth: image.naturalWidth,
+        }))),
+      }));
+      throw error;
+    }
     assert.equal(transientAttempts, 2, "a transient logo failure should cause exactly one retry");
 
     const hangingMark = page.locator(".team-mark").nth(2);

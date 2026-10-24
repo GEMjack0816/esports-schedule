@@ -14,9 +14,16 @@ describe("isPandaScoreTeamLogoUrl", () => {
     )).toBe(true);
   });
 
+  it("allows the API CDN hostname currently returned for production team logos", () => {
+    expect(isPandaScoreTeamLogoUrl(
+      "https://cdn-api.pandascore.co/images/team/image/136955/fut_esportslogo_square.png",
+    )).toBe(true);
+  });
+
   it.each([
     "http://cdn.pandascore.co/images/team/image/125063/logo.png",
     "https://cdn.pandascore.co.evil.example/images/team/image/125063/logo.png",
+    "https://cdn-api.pandascore.co.evil.example/images/team/image/125063/logo.png",
     "https://images.pandascore.co/images/team/image/125063/logo.png",
     "https://cdn.pandascore.co/images/league/image/125063/logo.png",
     "https://cdn.pandascore.co/images/team/image/not-a-number/logo.png",
