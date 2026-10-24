@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 
 export const PANDA_GAMES = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"];
 export const DEFAULT_MAX_AGE_SECONDS = 15 * 60;
+export const DEFAULT_MAX_HEALTH_RESPONSE_BYTES = 256 * 1024;
 
 function escapeMarkdown(value) {
   return value.replace(/[\\`*_{}\[\]()#+.!|<>]/g, "\\$&");
@@ -124,13 +125,27 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   let payload;
   let parseError = false;
+  let oversized = false;
+  const maxResponseBytes = Number(
+    process.env.MAX_HEALTH_RESPONSE_BYTES ?? DEFAULT_MAX_HEALTH_RESPONSE_BYTES,
+  );
+  if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 1) {
+    console.error("freshness validator response size limit must be a positive integer");
+    process.exit(2);
+  }
   try {
-    payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (fs.statSync(filePath).size > maxResponseBytes) {
+      oversized = true;
+    } else {
+      payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    }
   } catch {
     parseError = true;
   }
-  const result = parseError
-    ? { ok: false, message: "health endpoint returned unreadable JSON" }
+  const result = oversized
+    ? { ok: false, message: `health endpoint response exceeds ${maxResponseBytes} bytes` }
+    : parseError
+      ? { ok: false, message: "health endpoint returned unreadable JSON" }
     : validateScheduleFreshness(
       payload,
       Number(rawHttpStatus),

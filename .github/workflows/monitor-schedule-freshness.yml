@@ -28,11 +28,13 @@ jobs:
         env:
           HEALTH_URL: https://esports-schedule-two.vercel.app/api/health/data-coverage
           MAX_SCHEDULE_AGE_SECONDS: "900"
+          MAX_HEALTH_RESPONSE_BYTES: "262144"
         run: |
           set -euo pipefail
           response_file="$RUNNER_TEMP/schedule-health.json"
           trap 'rm -f "$response_file"' EXIT
           http_status=$(curl --silent --show-error --retry 2 --retry-all-errors --retry-max-time 45 --max-time 20 \
+            --max-filesize "$MAX_HEALTH_RESPONSE_BYTES" \
             --output "$response_file" \
             --write-out "%{http_code}" \
             "$HEALTH_URL")

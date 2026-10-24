@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MAX_AGE_SECONDS,
+  DEFAULT_MAX_HEALTH_RESPONSE_BYTES,
   formatFreshnessStepSummary,
   PANDA_GAMES,
   sanitizeFreshnessMessage,
@@ -173,6 +174,36 @@ describe("schedule freshness monitor validation", () => {
       expect(result.status).toBe(1);
       expect(readFileSync(summaryPath, "utf8"))
         .toContain("### Schedule freshness: FAIL\n\nhealth endpoint returned unreadable JSON");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an oversized health response without printing its contents", () => {
+    const directory = mkdtempSync(join(tmpdir(), "schedule-freshness-oversize-"));
+    try {
+      const responsePath = join(directory, "health.json");
+      const summaryPath = join(directory, "summary.md");
+      const marker = "private-response-marker";
+      writeFileSync(responsePath, `${marker}${"x".repeat(DEFAULT_MAX_HEALTH_RESPONSE_BYTES)}`);
+      const result = spawnSync(
+        process.execPath,
+        [resolve(process.cwd(), "scripts/validate-schedule-freshness.mjs"), responsePath, "200"],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GITHUB_STEP_SUMMARY: summaryPath,
+            MAX_HEALTH_RESPONSE_BYTES: "32",
+          },
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("response exceeds 32 bytes");
+      expect(result.stdout).not.toContain(marker);
+      expect(readFileSync(summaryPath, "utf8")).toContain("### Schedule freshness: FAIL");
+      expect(readFileSync(summaryPath, "utf8")).not.toContain(marker);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
