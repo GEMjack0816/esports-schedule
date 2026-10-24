@@ -44,11 +44,14 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install locked dependencies
         run: npm ci
+
+      - name: Audit locked dependencies
+        run: npm audit
 
       - name: Apply schema to the isolated PostgreSQL service
         run: npm run db:migrate
@@ -70,3 +73,4 @@ jobs:
 
       - name: Scan client assets for server credentials
         run: npm run test:client-bundle
+
