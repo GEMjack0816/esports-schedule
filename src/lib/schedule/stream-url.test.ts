@@ -172,7 +172,7 @@ describe("public external URL sanitization", () => {
   });
 
   it("scans long ordinary paths without changing their public URL", () => {
-    const path = Array.from({ length: 300 }, (_, index) => `round-${index}`).join("/");
+    const path = Array.from({ length: 900 }, () => "r").join("/");
     const url = `https://stream.example/matches/${path}`;
 
     expect(sanitizePublicExternalUrl(url)).toBe(url);
