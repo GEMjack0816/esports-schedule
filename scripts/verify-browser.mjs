@@ -3,6 +3,7 @@ import path from "node:path";
 import { chromium } from "playwright-core";
 
 const baseUrl = process.argv[2] || "http://localhost:3000";
+const simulateLogoTimeout = process.argv.includes("--simulate-logo-timeout");
 const executableCandidates = [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -31,6 +32,39 @@ for (const profile of [
     timezoneId: "Asia/Shanghai",
   });
   const page = await context.newPage();
+  const verifyLogoTimeout = simulateLogoTimeout && profile.name === "desktop";
+  const slowLogoUrl = "https://logo-timeout.invalid/slow-team.svg";
+  let logoTimeoutFallback = null;
+  if (verifyLogoTimeout) {
+    await context.route((url) => new URL(url).pathname === "/api/matches", async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      const now = new Date().toISOString();
+      const match = {
+        id: "browser-logo-timeout-verification",
+        provider: "manual",
+        providerMatchId: "browser-logo-timeout-verification",
+        game: "lol",
+        tournament: "本地浏览器验证",
+        league: "本地浏览器验证",
+        stage: null,
+        homeTeam: { name: "慢 Logo 回退验证", acronym: "WAIT", logo: slowLogoUrl },
+        awayTeam: { name: "本地占位队伍", acronym: "LOCAL", logo: "/team-placeholder.svg" },
+        homeScore: null,
+        awayScore: null,
+        bestOf: 3,
+        status: "scheduled",
+        startTimeUtc: now,
+        streams: [],
+        lastUpdatedAt: now,
+      };
+      await route.fulfill({ response, json: { ...payload, matches: [...(payload.matches || []), match] } });
+    });
+    await context.route("https://logo-timeout.invalid/**", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 12_000));
+      await route.fulfill({ status: 503, contentType: "image/svg+xml", body: "" }).catch(() => undefined);
+    });
+  }
   const errors = [];
   const criticalRequestFailures = [];
   const optionalResourceFailures = [];
@@ -116,6 +150,25 @@ for (const profile of [
       return response.json();
     });
   }
+  if (verifyLogoTimeout) {
+    await page.getByRole("tab", { name: /全部收录/ }).click();
+    const verificationCard = page.locator(".match-card").filter({ hasText: "慢 Logo 回退验证" }).first();
+    await verificationCard.waitFor({ state: "visible", timeout: 10_000 });
+    await verificationCard.scrollIntoViewIfNeeded();
+    const verificationLogo = verificationCard.locator(".team-row").first().locator("img");
+    const waitForImageSource = async (expected, timeoutMs) => {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < timeoutMs) {
+        if ((await verificationLogo.getAttribute("src")) === expected) return true;
+        await page.waitForTimeout(100);
+      }
+      return false;
+    };
+    const externalSourceStarted = await waitForImageSource(slowLogoUrl, 5_000);
+    const switchedToPlaceholder = externalSourceStarted
+      && await waitForImageSource("/team-placeholder.svg", 10_000);
+    logoTimeoutFallback = { externalSourceStarted, switchedToPlaceholder };
+  }
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -191,6 +244,7 @@ for (const profile of [
     refreshedApiStale: apiBody.stale,
     refreshedApiDeployment: apiBody.deployment,
     apiBodyReadFallback,
+    logoTimeoutFallback,
     healthStatus: healthResult.status,
     healthMode: healthResult.body.mode,
     healthDemoMode: healthResult.body.demoMode,
@@ -247,6 +301,9 @@ for (const result of results) {
   if (!result.anonymousAdminAtLogin) failures.push(`${prefix}: anonymous admin page was not redirected to login`);
   if (result.anonymousAdminContainsPrivateData) failures.push(`${prefix}: anonymous admin page exposed private data`);
   if (result.anonymousAdminApiStatus !== 401) failures.push(`${prefix}: anonymous admin API HTTP ${result.anonymousAdminApiStatus}`);
+  if (simulateLogoTimeout && prefix === "desktop" && !result.logoTimeoutFallback?.switchedToPlaceholder) {
+    failures.push(`${prefix}: slow team logo did not fall back to the local placeholder`);
+  }
   failures.push(...result.errors.map((error) => `${prefix}: ${error}`));
   failures.push(...result.criticalRequestFailures.map((error) => `${prefix}: ${error}`));
 }
@@ -256,3 +313,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log("Browser verification passed.");
+
