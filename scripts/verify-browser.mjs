@@ -4,6 +4,7 @@ import { chromium } from "playwright-core";
 
 const baseUrl = process.argv[2] || "http://localhost:3000";
 const simulateLogoTimeout = process.argv.includes("--simulate-logo-timeout");
+const simulateLogoRetry = process.argv.includes("--simulate-logo-retry");
 const executableCandidates = [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -29,26 +30,29 @@ for (const profile of [
   const context = await browser.newContext({
     viewport: { width: profile.width, height: profile.height },
     locale: "zh-CN",
-    timezoneId: "Asia/Shanghai",
-  });
-  const page = await context.newPage();
-  const verifyLogoTimeout = simulateLogoTimeout && profile.name === "desktop";
+    t  const verifyLogoTimeout = simulateLogoTimeout && profile.name === "desktop";
+  const verifyLogoRetry = simulateLogoRetry && profile.name === "desktop";
   const slowLogoUrl = "https://logo-timeout.invalid/slow-team.svg";
+  const retryLogoUrl = "https://cdn-api.pandascore.co/team/browser-retry-verification.svg";
   let logoTimeoutFallback = null;
-  if (verifyLogoTimeout) {
+  let logoRetryFallback = null;
+  const retryRequests = [];
+  if (verifyLogoTimeout || verifyLogoRetry) {
     await context.route((url) => new URL(url).pathname === "/api/matches", async (route) => {
       const response = await route.fetch();
       const payload = await response.json();
       const now = new Date().toISOString();
       const match = {
-        id: "browser-logo-timeout-verification",
+        id: verifyLogoRetry ? "browser-logo-retry-verification" : "browser-logo-timeout-verification",
         provider: "manual",
-        providerMatchId: "browser-logo-timeout-verification",
+        providerMatchId: verifyLogoRetry ? "browser-logo-retry-verification" : "browser-logo-timeout-verification",
         game: "lol",
         tournament: "本地浏览器验证",
         league: "本地浏览器验证",
         stage: null,
-        homeTeam: { name: "慢 Logo 回退验证", acronym: "WAIT", logo: slowLogoUrl },
+        homeTeam: verifyLogoRetry
+          ? { name: "Logo 重试回退验证", acronym: "RETRY", logo: retryLogoUrl }
+          : { name: "慢 Logo 回退验证", acronym: "WAIT", logo: slowLogoUrl },
         awayTeam: { name: "本地占位队伍", acronym: "LOCAL", logo: "/team-placeholder.svg" },
         homeScore: null,
         awayScore: null,
@@ -60,9 +64,22 @@ for (const profile of [
       };
       await route.fulfill({ response, json: { ...payload, matches: [...(payload.matches || []), match] } });
     });
-    await context.route("https://logo-timeout.invalid/**", async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 12_000));
-      await route.fulfill({ status: 503, contentType: "image/svg+xml", body: "" }).catch(() => undefined);
+    if (verifyLogoTimeout) {
+      await context.route("https://logo-timeout.invalid/**", async (route) => {
+        await new Promise((resolve) => setTimeout(resolve, 12_000));
+        await route.fulfill({ status: 503, contentType: "image/svg+xml", body: "" }).catch(() => undefined);
+      });
+    }
+    if (verifyLogoRetry) {
+      await context.route((url) =>
+        url.hostname === "cdn-api.pandascore.co" && url.pathname === "/team/browser-retry-verification.svg",
+      async (route) => {
+        retryRequests.push(new URL(route.request().url()).searchParams.get("esports_logo_retry"));
+        await route.abort("failed");
+      });
+    }
+  }
+entType: "image/svg+xml", body: "" }).catch(() => undefined);
     });
   }
   const errors = [];
@@ -169,6 +186,24 @@ for (const profile of [
       && await waitForImageSource("/team-placeholder.svg", 10_000);
     logoTimeoutFallback = { externalSourceStarted, switchedToPlaceholder };
   }
+  if (verifyLogoRetry) {
+    await page.getByRole("tab", { name: /全部收录/ }).click();
+    const verificationCard = page.locator(".match-card").filter({ hasText: "Logo 重试回退验证" }).first();
+    await verificationCard.waitFor({ state: "visible", timeout: 10_000 });
+    await verificationCard.scrollIntoViewIfNeeded();
+    const verificationLogo = verificationCard.locator(".team-row").first().locator("img");
+    const switchedToPlaceholder = await page.waitForFunction(() => {
+      const card = Array.from(document.querySelectorAll(".match-card"))
+        .find((candidate) => candidate.textContent?.includes("Logo 重试回退验证"));
+      const src = card?.querySelector(".team-row img")?.getAttribute("src");
+      return !!src && new URL(src, location.href).pathname === "/team-placeholder.svg";
+    }, null, { timeout: 8_000 }).then(() => true).catch(() => false);
+    logoRetryFallback = {
+      retryRequests,
+      switchedToPlaceholder,
+      finalSource: await verificationLogo.getAttribute("src"),
+    };
+  }
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -245,6 +280,7 @@ for (const profile of [
     refreshedApiDeployment: apiBody.deployment,
     apiBodyReadFallback,
     logoTimeoutFallback,
+    logoRetryFallback,
     healthStatus: healthResult.status,
     healthMode: healthResult.body.mode,
     healthDemoMode: healthResult.body.demoMode,
@@ -303,6 +339,15 @@ for (const result of results) {
   if (result.anonymousAdminApiStatus !== 401) failures.push(`${prefix}: anonymous admin API HTTP ${result.anonymousAdminApiStatus}`);
   if (simulateLogoTimeout && prefix === "desktop" && !result.logoTimeoutFallback?.switchedToPlaceholder) {
     failures.push(`${prefix}: slow team logo did not fall back to the local placeholder`);
+  }
+  if (simulateLogoRetry && prefix === "desktop") {
+    const attempts = result.logoRetryFallback?.retryRequests || [];
+    if (attempts.length !== 2 || attempts[0] !== null || attempts[1] !== "1") {
+      failures.push(prefix + ": PandaScore logo did not make exactly one cache-busting retry");
+    }
+    if (!result.logoRetryFallback?.switchedToPlaceholder) {
+      failures.push(prefix + ": failed retried logo did not fall back to the local placeholder");
+    }
   }
   failures.push(...result.errors.map((error) => `${prefix}: ${error}`));
   failures.push(...result.criticalRequestFailures.map((error) => `${prefix}: ${error}`));
