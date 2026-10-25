@@ -319,7 +319,13 @@ a { color: inherit; text-decoration: none; }
   .stat-card > span:last-child { line-height: 1.5; }
   .filter-panel { grid-template-columns: 1fr; }
   .search-field { grid-column: auto; }
-  .range-tabs { margin-left: 0; margin-right: 0; padding: 0; }
+  .range-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    overflow: visible;
+    margin-left: 0;
+    margin-right: 0;
+    padding: 0;
+  }
   .date-divider { gap: 8px; }
   .match-meta-cell { flex-wrap: wrap; }
   .watch-link, .no-stream { width: 100%; margin-left: 0; padding-top: 4px; }
