@@ -9,6 +9,7 @@ const credentialParameterNames = new Set([
   "bearertoken", "code", "key", "keyid", "nonce", "sessionid", "sessionkey", "jsessionid", "phpsessid",
   "sid", "cfbm", "state", "ticket",
   "assertion", "clientassertion", "codeverifier", "idtokenhint", "samlresponse",
+  "csrf", "xsrf",
   // Vercel Deployment Protection also accepts its bypass secret in a query parameter.
   "xvercelprotectionbypass",
   // Cloudflare's clearance cookie proves a visitor passed a challenge.
@@ -24,6 +25,7 @@ function matchesCredentialParameter(name: string): boolean {
   // a cookie value or authentication credential.
   if (normalized === "xvercelsetbypasscookie") return false;
   return credentialParameterNames.has(normalized)
+    || /(?:csrf|xsrf)$/.test(normalized)
     // Signed cloud-storage URLs use vendor-prefixed names such as
     // X-Amz-Credential / X-Amz-Signature and X-Goog-Signature. Match the
     // credential-bearing suffix independently of its vendor prefix.

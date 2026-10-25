@@ -9,6 +9,11 @@ import {
 describe("public external URL sanitization", () => {
   it.each([
     "https://stream.example/live?access_token=private",
+    "https://stream.example/live?csrf=opaque-value",
+    "https://stream.example/live?xsrf=opaque-value",
+    "https://stream.example/live?X-CSRF=opaque-value",
+    "https://stream.example/live?X-XSRF=opaque-value",
+    "https://stream.example/live?request_csrf=opaque-value",
     "https://stream.example/live?cookie=session-value",
     "https://stream.example/live?PHPSESSID=private-session",
     "https://stream.example/live?ASP.NET_SessionId=private-session",
