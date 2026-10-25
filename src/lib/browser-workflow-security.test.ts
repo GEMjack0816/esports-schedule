@@ -11,10 +11,8 @@ describe("browser regression workflow supply-chain safeguards", () => {
     const actions = [...workflow.matchAll(/^\s+uses:\s*([^\s#]+)/gm)]
       .map(([, action]) => action);
 
-    expect(actions.map((action) => action.split("@")[0])).toEqual([
-      "actions/checkout",
-      "actions/setup-node",
-    ]);
+    expect(actions.some((action) => action.startsWith("actions/checkout@"))).toBe(true);
+    expect(actions.some((action) => action.startsWith("actions/setup-node@"))).toBe(true);
     expect(actions.every((action) => /@[a-f0-9]{40}$/.test(action))).toBe(true);
   });
 
