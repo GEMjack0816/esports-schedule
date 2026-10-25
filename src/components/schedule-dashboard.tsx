@@ -4,9 +4,10 @@ import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
+import { isMatchInScheduleRange, isMatchOnSelectedDate, scheduleDateGroupKey, type ScheduleDateRange } from "@/lib/schedule/date-range";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
-type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
+type RangeKey = ScheduleDateRange;
 type Theme = "dark" | "light";
 
 const subscribeToTimeZone = () => () => undefined;
@@ -174,10 +175,10 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     for (const match of payload.matches) {
       const key = matchDateKey(match, timeZone);
       counts.all += 1;
-      if (key === today) counts.today += 1;
-      if (key === tomorrow) counts.tomorrow += 1;
-      if (key >= today && key <= sevenDaysOut) counts.seven += 1;
-      if (key < today) counts.history += 1;
+      if (isMatchInScheduleRange(match.status, key, "today", today, tomorrow, sevenDaysOut)) counts.today += 1;
+      if (isMatchInScheduleRange(match.status, key, "tomorrow", today, tomorrow, sevenDaysOut)) counts.tomorrow += 1;
+      if (isMatchInScheduleRange(match.status, key, "seven", today, tomorrow, sevenDaysOut)) counts.seven += 1;
+      if (isMatchInScheduleRange(match.status, key, "history", today, tomorrow, sevenDaysOut)) counts.history += 1;
     }
     return counts;
   }, [payload.matches, sevenDaysOut, timeZone, today, tomorrow]);
@@ -192,16 +193,8 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     return payload.matches.filter((match) => {
       const key = matchDateKey(match, timeZone);
       const inRange = selectedDate
-        ? key === selectedDate
-        : range === "all"
-          ? true
-          : range === "today"
-            ? key === today
-            : range === "tomorrow"
-              ? key === tomorrow
-              : range === "seven"
-                ? key >= today && key <= sevenDaysOut
-                : key < today;
+        ? isMatchOnSelectedDate(match.status, key, selectedDate, today)
+        : isMatchInScheduleRange(match.status, key, range, today, tomorrow, sevenDaysOut);
       const haystack = [match.homeTeam.name, match.awayTeam.name, match.league, match.tournament || "", match.stage || ""]
         .join(" ").toLocaleLowerCase();
       return inRange
@@ -215,10 +208,12 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const grouped = useMemo(() => {
     const groups = new Map<string, EsportsMatch[]>();
     for (const match of filtered) {
-      const key = matchDateKey(match, timeZone);
+      const key = scheduleDateGroupKey(match, matchDateKey(match, timeZone));
       groups.set(key, [...(groups.get(key) ?? []), match]);
     }
     return [...groups.entries()].sort(([a], [b]) => {
+      if (a === "live" && b !== "live") return -1;
+      if (b === "live" && a !== "live") return 1;
       if (a === "unscheduled") return 1;
       if (b === "unscheduled") return -1;
       return range === "history" ? b.localeCompare(a) : a.localeCompare(b);
@@ -319,8 +314,8 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           </div>
 
           <div className="range-tabs" role="tablist" aria-label="选择时间范围">
-            {([ ["today", "今日"], ["tomorrow", "明日"], ["seven", "未来 7 天"], ["history", "历史比赛"], ["all", "全部收录"] ] as const).map(([key, label]) => (
-              <button key={key} role="tab" aria-selected={range === key} className={range === key ? "active" : ""} type="button" onClick={() => setRange(key)}>
+            {([ ["today", "今日 · 含进行中"], ["tomorrow", "明日"], ["seven", "未来 7 天"], ["history", "历史比赛"], ["all", "全部收录"] ] as const).map(([key, label]) => (
+              <button key={key} role="tab" aria-selected={range === key} className={range === key ? "active" : ""} type="button" onClick={() => { setRange(key); setSelectedDate(""); }}>
                 <span>{label}</span><em>{rangeCounts[key]}</em>
               </button>
             ))}
@@ -337,7 +332,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           <div className="match-list" aria-live="polite">
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
               <section className="date-group" key={key}>
-                <div className="date-divider"><span>{formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
+                <div className="date-divider"><span>{key === "live" ? "正在进行" : formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
                 {matches.map((match) => <MatchCard match={match} timeZone={timeZone} key={match.id} />)}
               </section>
             )) : (
@@ -355,3 +350,4 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     </div>
   );
 }
+

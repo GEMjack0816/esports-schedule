@@ -98,6 +98,32 @@ for (const profile of [
   await statusSelect.selectOption("all");
   await page.getByRole("tab", { name: /^今日/ }).click();
 
+  // Client-only fixture: exercise the missing-time live-match case without writing to any backend.
+  await page.route("**/api/matches", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    body.matches = [...body.matches, {
+      id: "browser-verification-live-without-time",
+      provider: "manual",
+      providerMatchId: "browser-verification-live-without-time",
+      game: "lol",
+      tournament: null,
+      league: "Browser verification fixture",
+      stage: null,
+      homeTeam: { name: "Codex live fixture", acronym: "CLF", logo: "/team-placeholder.svg" },
+      awayTeam: { name: "Verification opponent", acronym: "VO", logo: "/team-placeholder.svg" },
+      homeScore: null,
+      awayScore: null,
+      bestOf: null,
+      status: "running",
+      startTimeUtc: null,
+      streams: [],
+      lastUpdatedAt: new Date().toISOString(),
+    }];
+    await route.fulfill({ response, body: JSON.stringify(body) });
+  });
+
   const apiResponsePromise = page.waitForResponse(
     (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
     { timeout: 120_000 },
@@ -116,6 +142,42 @@ for (const profile of [
       return response.json();
     });
   }
+  await statusSelect.selectOption("running");
+  const todayRunningVisible = await page.locator(".match-card").count();
+  const injectedLiveFixtureVisible = await page.locator(".match-card")
+    .filter({ hasText: "Codex live fixture" }).count() === 1;
+  const dateFilter = page.locator('.date-field input[type="date"]');
+  const dateValues = await page.evaluate(() => {
+    const asInputDate = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    const today = new Date();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    return { today: asInputDate(today), tomorrow: asInputDate(tomorrow) };
+  });
+  await dateFilter.fill(dateValues.today);
+  await page.waitForFunction(
+    (expected) => document.querySelectorAll(".match-card").length === expected,
+    apiBody.matches.filter((match) => match.status === "running").length,
+  );
+  const selectedTodayRunningVisible = await page.locator(".match-card").count()
+    === apiBody.matches.filter((match) => match.status === "running").length;
+  await dateFilter.fill(dateValues.tomorrow);
+  await page.waitForFunction(() => document.querySelectorAll(".match-card").length === 0);
+  const selectedOtherDateHidesRunning = await page.locator(".match-card").count() === 0;
+  await dateFilter.fill("");
+  await statusSelect.selectOption("all");
+  await dateFilter.fill(dateValues.tomorrow);
+  await statusSelect.selectOption("running");
+  await page.getByRole("tab", { name: /^今日/ }).click();
+  await page.waitForFunction(
+    () => document.querySelector('.date-field input[type="date"]')?.value === "",
+    undefined,
+    { timeout: 2_000 },
+  ).catch(() => {});
+  const quickTodayClearsCustomDate = await dateFilter.inputValue() === ""
+    && await page.locator(".match-card").filter({ hasText: "Codex live fixture" }).count() === 1;
+  await dateFilter.fill("");
+  await statusSelect.selectOption("all");
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -184,6 +246,12 @@ for (const profile of [
     gameOptions,
     gameFilterCounts,
     statusFilterCounts,
+    todayRunningVisible,
+    expectedRunningFixturesAfterMock: apiBody.matches.filter((match) => match.status === "running").length,
+    injectedLiveFixtureVisible,
+    selectedTodayRunningVisible,
+    selectedOtherDateHidesRunning,
+    quickTodayClearsCustomDate,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -236,6 +304,11 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (result.todayRunningVisible !== result.expectedRunningFixturesAfterMock) failures.push(`${prefix}: Today range hides running matches outside today's date or without a start time`);
+  if (!result.injectedLiveFixtureVisible) failures.push(`${prefix}: browser-only no-time live fixture is not visible in Today`);
+  if (!result.selectedTodayRunningVisible) failures.push(`${prefix}: selecting Today by date hides active fixtures`);
+  if (!result.selectedOtherDateHidesRunning) failures.push(`${prefix}: selecting another date includes active fixtures`);
+  if (!result.quickTodayClearsCustomDate) failures.push(`${prefix}: selecting a quick date range leaves the previous exact date active`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
@@ -256,3 +329,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log("Browser verification passed.");
+
