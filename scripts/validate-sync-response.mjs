@@ -49,6 +49,10 @@ export function validateSyncResponse(payload, httpStatus) {
     || payload.gamesSucceeded + payload.gamesFailed !== payload.gamesAttempted) {
     return { ok: false, message: "sync game outcome counts are inconsistent" };
   }
+  if ((payload.status === "success" && payload.gamesFailed !== 0)
+    || (payload.status === "partial" && payload.gamesFailed === 0)) {
+    return { ok: false, message: "sync logical status does not match game outcome counts" };
+  }
   if (typeof payload.lastSuccessfulSyncAt !== "string" || Number.isNaN(Date.parse(payload.lastSuccessfulSyncAt))) {
     return { ok: false, message: "sync did not report a valid lastSuccessfulSyncAt" };
   }

@@ -91,6 +91,16 @@ describe("sync workflow response validation", () => {
     expect(validateSyncResponse({ ...success, ...counts }, 200).ok).toBe(false);
   });
 
+  it.each([
+    { status: "success", gamesSucceeded: 4, gamesFailed: 1, snapshotsPersisted: 4 },
+    { status: "partial", gamesSucceeded: 5, gamesFailed: 0, snapshotsPersisted: 5 },
+  ])("rejects a logical status inconsistent with the game outcomes: %o", (counts) => {
+    expect(validateSyncResponse({ ...success, ...counts }, 200)).toEqual({
+      ok: false,
+      message: "sync logical status does not match game outcome counts",
+    });
+  });
+
   it("rejects success or partial responses without a valid fencing generation", () => {
     expect(validateSyncResponse({ ...success, generation: null }, 200).ok).toBe(false);
     expect(validateSyncResponse({ ...success, status: "partial", generation: 0 }, 200).ok).toBe(false);
