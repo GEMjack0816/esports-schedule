@@ -2,11 +2,14 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
+import { isMatchInScheduleRange, scheduleDateGroupKey, type ScheduleDateRange } from "@/lib/schedule/date-range";
+import { getScheduleHeroStats } from "@/lib/schedule/hero-stats";
+import { subscribeToMinuteClock } from "@/lib/schedule/minute-clock";
 import { addDaysKey, dateInputBoundsInTimeZone, dateKeyInTimeZone } from "@/lib/schedule/time";
 
-type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
+type RangeKey = ScheduleDateRange;
 type Theme = "dark" | "light";
 
 const subscribeToTimeZone = () => () => undefined;
@@ -152,15 +155,12 @@ function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string 
 export function ScheduleDashboard({
   initialData,
   availableLeagues,
-  initialLiveCount,
-  initialUpcomingCount,
 }: {
   initialData: SchedulePayload;
   availableLeagues: string[];
-  initialLiveCount: number;
-  initialUpcomingCount: number;
 }) {
   const [payload, setPayload] = useState(initialData);
+  const [clockNow, setClockNow] = useState<number | null>(null);
   const [range, setRange] = useState<RangeKey>("today");
   const [game, setGame] = useState<GameKey | "all">("all");
   const [league, setLeague] = useState("all");
@@ -171,6 +171,11 @@ export function ScheduleDashboard({
   const [loadingCompleteSchedule, setLoadingCompleteSchedule] = useState(false);
   const [completeScheduleError, setCompleteScheduleError] = useState(false);
   const completeScheduleRequest = useRef<Promise<boolean> | null>(null);
+  useEffect(() => {
+    const updateClock = () => setClockNow(Date.now());
+    updateClock();
+    return subscribeToMinuteClock(updateClock);
+  }, []);
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
@@ -199,10 +204,12 @@ export function ScheduleDashboard({
     };
     for (const match of payload.matches) {
       const key = matchDateKey(match, timeZone);
-      if (key === today) counts.today = (counts.today ?? 0) + 1;
-      if (key === tomorrow) counts.tomorrow = (counts.tomorrow ?? 0) + 1;
-      if (key >= today && key <= sevenDaysOut) counts.seven = (counts.seven ?? 0) + 1;
-      if (completeScheduleLoaded && key < today) counts.history = (counts.history ?? 0) + 1;
+      if (isMatchInScheduleRange(match.status, key, "today", today, tomorrow, sevenDaysOut)) counts.today = (counts.today ?? 0) + 1;
+      if (isMatchInScheduleRange(match.status, key, "tomorrow", today, tomorrow, sevenDaysOut)) counts.tomorrow = (counts.tomorrow ?? 0) + 1;
+      if (isMatchInScheduleRange(match.status, key, "seven", today, tomorrow, sevenDaysOut)) counts.seven = (counts.seven ?? 0) + 1;
+      if (completeScheduleLoaded && isMatchInScheduleRange(match.status, key, "history", today, tomorrow, sevenDaysOut)) {
+        counts.history = (counts.history ?? 0) + 1;
+      }
     }
     return counts;
   }, [completeScheduleLoaded, payload.coverage.totals.finalWithManual, payload.matches, sevenDaysOut, timeZone, today, tomorrow]);
@@ -218,15 +225,7 @@ export function ScheduleDashboard({
       const key = matchDateKey(match, timeZone);
       const inRange = selectedDate
         ? key === selectedDate
-        : range === "all"
-          ? true
-          : range === "today"
-            ? key === today
-            : range === "tomorrow"
-              ? key === tomorrow
-              : range === "seven"
-                ? key >= today && key <= sevenDaysOut
-                : key < today;
+        : isMatchInScheduleRange(match.status, key, range, today, tomorrow, sevenDaysOut);
       const haystack = [match.homeTeam.name, match.awayTeam.name, match.league, match.tournament || "", match.stage || ""]
         .join(" ").toLocaleLowerCase();
       return inRange
@@ -240,7 +239,7 @@ export function ScheduleDashboard({
   const grouped = useMemo(() => {
     const groups = new Map<string, EsportsMatch[]>();
     for (const match of filtered) {
-      const key = matchDateKey(match, timeZone);
+      const key = scheduleDateGroupKey(match, matchDateKey(match, timeZone));
       groups.set(key, [...(groups.get(key) ?? []), match]);
     }
     return [...groups.entries()].sort(([a], [b]) => {
@@ -250,12 +249,7 @@ export function ScheduleDashboard({
     });
   }, [filtered, range, timeZone]);
 
-  const liveCount = completeScheduleLoaded
-    ? payload.matches.filter((match) => match.status === "running").length
-    : initialLiveCount;
-  const upcomingCount = completeScheduleLoaded
-    ? payload.matches.filter((match) => match.status === "scheduled").length
-    : initialUpcomingCount;
+  const { liveCount, upcomingCount } = getScheduleHeroStats(payload.matches, clockNow ?? 0);
 
   async function loadCompleteSchedule(force = false): Promise<boolean> {
     if (!force && completeScheduleLoaded) return true;
@@ -345,7 +339,7 @@ export function ScheduleDashboard({
           </div>
           <div className="hero-stats">
             <div className="stat-card stat-card-live"><span className="stat-label"><i /> LIVE NOW</span><strong>{String(liveCount).padStart(2, "0")}</strong><span>场比赛正在进行</span></div>
-            <div className="stat-card"><span className="stat-label">UP NEXT</span><strong>{String(upcomingCount).padStart(2, "0")}</strong><span>场比赛即将开赛</span></div>
+            <div className="stat-card"><span className="stat-label">UP NEXT · 24H</span><strong>{clockNow === null ? "—" : String(upcomingCount).padStart(2, "0")}</strong><span>场比赛将在 24 小时内开赛</span></div>
           </div>
         </section>
 
@@ -392,7 +386,7 @@ export function ScheduleDashboard({
           </div>
 
           <div className="range-tabs" role="tablist" aria-label="选择时间范围">
-            {([ ["today", "今日"], ["tomorrow", "明日"], ["seven", "未来 7 天"], ["history", "历史比赛"], ["all", "全部收录"] ] as const).map(([key, label]) => (
+            {([ ["today", "今日 · 含进行中"], ["tomorrow", "明日"], ["seven", "未来 7 天"], ["history", "历史比赛"], ["all", "全部收录"] ] as const).map(([key, label]) => (
               <button key={key} role="tab" aria-selected={range === key} className={range === key ? "active" : ""} type="button" onClick={() => { void selectRange(key); }}>
                 <span>{label}</span><em>{rangeCounts[key] ?? "—"}</em>
               </button>
@@ -414,7 +408,7 @@ export function ScheduleDashboard({
           ) : <div className="match-list" aria-live="polite">
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
               <section className="date-group" key={key}>
-                <div className="date-divider"><span>{formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
+                <div className="date-divider"><span>{key === "live" ? "正在进行" : formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
                 {matches.map((match) => <MatchCard match={match} timeZone={timeZone} key={match.id} />)}
               </section>
             )) : (

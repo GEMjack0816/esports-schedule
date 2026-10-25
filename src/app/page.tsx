@@ -31,8 +31,6 @@ export default async function Home() {
       <ScheduleDashboard
         initialData={initialData}
         availableLeagues={[...new Set(schedule.matches.map((match) => match.league))].sort()}
-        initialLiveCount={schedule.matches.filter((match) => match.status === "running").length}
-        initialUpcomingCount={schedule.matches.filter((match) => match.status === "scheduled").length}
       />
     </>
   );
