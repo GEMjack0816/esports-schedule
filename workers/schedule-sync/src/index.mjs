@@ -143,6 +143,9 @@ function validateSyncPayload(payload, httpStatus) {
     || payload.snapshotsPersisted !== payload.gamesSucceeded) {
     throw new SyncInvocationError("snapshot_persistence_mismatch", httpStatus);
   }
+  if (!Array.isArray(payload.errors)) {
+    throw new SyncInvocationError("invalid_sync_errors", httpStatus);
+  }
   const sourceFetchedAt = parseTimestampWithTimezone(payload.sourceFetchedAt);
   const lastSuccessfulSyncAt = parseTimestampWithTimezone(payload.lastSuccessfulSyncAt);
   const refreshedAt = parseTimestampWithTimezone(payload.refreshedAt);
@@ -151,8 +154,8 @@ function validateSyncPayload(payload, httpStatus) {
     || lastSuccessfulSyncAt > refreshedAt) {
     throw new SyncInvocationError("invalid_success_timestamp", httpStatus);
   }
-  if ((payload.status === "success" && payload.gamesFailed !== 0)
-    || (payload.status === "partial" && payload.gamesFailed === 0)
+  if ((payload.status === "success" && (payload.gamesFailed !== 0 || payload.errors.length !== 0))
+    || (payload.status === "partial" && payload.errors.length === 0)
     || (payload.status !== "success" && payload.status !== "partial")) {
     throw new SyncInvocationError("invalid_sync_status", httpStatus);
   }
