@@ -128,7 +128,26 @@ describe("POST /api/admin/verification-cleanup", () => {
     expect(mocks.cleanup).not.toHaveBeenCalled();
   });
 
-  it.each(["null", "[]", "{", "\"string\""]) ("rejects non-object or malformed JSON: %s", async (body) => {
+  it("accepts application/json with a charset parameter", async () => {
+    const response = await POST(request({
+      runId,
+      gitCommitSha: "sha",
+      gitCommitRef: "fix/ref",
+      deploymentId: "dpl_preview",
+    }, { "content-type": "application/json; charset=utf-8" }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.cleanup).toHaveBeenCalledWith(runId);
+  });
+
+  it.each(["not-a-number", "-1", "1.5"])("rejects invalid Content-Length %s", async (contentLength) => {
+    const response = await POST(request({ runId }, { "content-length": contentLength }));
+
+    expect(response.status).toBe(400);
+    expect(mocks.cleanup).not.toHaveBeenCalled();
+  });
+
+  it.each(["null", "[]", "{", "\"string\""])("rejects non-object or malformed JSON: %s", async (body) => {
     const response = await POST(new Request("https://preview.example/api/admin/verification-cleanup", {
       method: "POST",
       headers: { "content-type": "application/json", origin: "https://preview.example" },
@@ -139,3 +158,4 @@ describe("POST /api/admin/verification-cleanup", () => {
     expect(mocks.cleanup).not.toHaveBeenCalled();
   });
 });
+
