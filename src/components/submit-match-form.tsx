@@ -3,6 +3,10 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { FormEvent } from "react";
+import {
+  readSubmissionResult,
+  submissionErrorMessage,
+} from "@/lib/submission-response";
 
 type SubmitState = { kind: "idle" | "success" | "error"; message: string };
 
@@ -34,14 +38,13 @@ export function SubmitMatchForm() {
           website: values.get("website"),
         }),
       });
-      const result = (await response.json()) as { ok: boolean; message?: string; error?: string };
-      if (!response.ok || !result.ok) throw new Error(result.error || "提交失败");
+      const result = await readSubmissionResult(response);
       setState({ kind: "success", message: result.message || "已保存为待审核。" });
       form.reset();
     } catch (error) {
       setState({
         kind: "error",
-        message: error instanceof Error ? error.message : "提交失败，请稍后重试。",
+        message: submissionErrorMessage(error),
       });
     } finally {
       setSubmitting(false);
