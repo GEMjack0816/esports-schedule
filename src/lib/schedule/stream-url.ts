@@ -2,7 +2,7 @@ import type { Stream, Team } from "./types";
 
 const credentialParameterNames = new Set([
   "accesskey", "accesstoken", "apikey", "auth", "authorization", "clientsecret",
-  "credential", "idtoken", "jwt", "oauth", "oauthtoken", "password", "passwd", "pwd",
+  "credential", "idtoken", "jwt", "oauth", "oauthtoken", "password", "passwd", "pwd", "passphrase",
   "privatekey", "refreshtoken", "secret", "session", "signature", "sig", "token",
   "hmac",
   "authorizationcode", "authenticode", "authtoken", "awsaccesskeyid", "bearer",
@@ -27,7 +27,7 @@ function matchesCredentialParameter(name: string): boolean {
     // Signed cloud-storage URLs use vendor-prefixed names such as
     // X-Amz-Credential / X-Amz-Signature and X-Goog-Signature. Match the
     // credential-bearing suffix independently of its vendor prefix.
-    || /(?:token|secret|password|passwd|credential|authorization|auth|session|signature|hmac|jwt|sig|assertion|codeverifier|idtokenhint|samlresponse)$/.test(normalized)
+    || /(?:token|secret|password|passwd|pwd|passphrase|credential|authorization|auth|session|signature|hmac|jwt|sig|assertion|codeverifier|idtokenhint|samlresponse)$/.test(normalized)
     // Common session identifiers/keys are often named PHPSESSID,
     // ASP.NET_SessionId, X-Session-Key, or simply sid.
     || /(?:sessid|sessionid|sessionkey(?:id)?|sid)$/.test(normalized)
