@@ -185,6 +185,21 @@ describe("public external URL sanitization", () => {
     }
   });
 
+  it("rejects inline authorization headers and JWTs embedded in ordinary parameter values", () => {
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.signature";
+    expect(sanitizePublicExternalUrl(
+      `https://stream.example/watch?message=${encodeURIComponent("Authorization: Bearer opaque-private-token-value")}`,
+    )).toBeNull();
+    expect(sanitizePublicExternalUrl(
+      `https://stream.example/watch?message=${encodeURIComponent("Authorization: Token opaque-private-token-value")}`,
+    )).toBeNull();
+    expect(sanitizePublicExternalUrl(
+      `https://stream.example/watch?data=${encodeURIComponent(jwt)}`,
+    )).toBeNull();
+    expect(sanitizePublicExternalUrl("https://stream.example/watch?caption=Bearer%20Grylls"))
+      .not.toBeNull();
+  });
+
   it("keeps harmless JSON-valued URL parameters", () => {
     const payload = encodeURIComponent(JSON.stringify({ match_code: "final", region: "cn" }));
     expect(sanitizePublicExternalUrl(`https://stream.example/watch?payload=${payload}`)).not.toBeNull();

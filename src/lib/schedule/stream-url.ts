@@ -151,6 +151,12 @@ function hasCredentialParameters(search: string, nestedDepth = 0): boolean {
 
 function hasNestedCredentialParameters(value: string, nestedDepth: number): boolean {
   if (nestedDepth > MAX_NESTED_URL_DEPTH) return true;
+  // A credential may be embedded as text in an otherwise harmless parameter
+  // value (for example, `?message=Authorization%3A%20Bearer%20...`) instead
+  // of being represented as a nested URL/query key. Redact recognizable
+  // authorization header values and JWTs wherever they appear.
+  if (/(?:^|[^a-z0-9_])authorization\s*:\s*[a-z][a-z0-9+.-]*\s+\S+/i.test(value)
+    || /\beyJ[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\b/.test(value)) return true;
   let candidate = value;
   for (let encodingDepth = 0; encodingDepth < MAX_PARAMETER_ENCODING_DEPTH; encodingDepth += 1) {
     const trimmed = candidate.trimStart();
