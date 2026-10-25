@@ -166,6 +166,18 @@ for (const profile of [
   const selectedOtherDateHidesRunning = await page.locator(".match-card").count() === 0;
   await dateFilter.fill("");
   await statusSelect.selectOption("all");
+  await dateFilter.fill(dateValues.tomorrow);
+  await statusSelect.selectOption("running");
+  await page.getByRole("tab", { name: /^今日/ }).click();
+  await page.waitForFunction(
+    () => document.querySelector('.date-field input[type="date"]')?.value === "",
+    undefined,
+    { timeout: 2_000 },
+  ).catch(() => {});
+  const quickTodayClearsCustomDate = await dateFilter.inputValue() === ""
+    && await page.locator(".match-card").filter({ hasText: "Codex live fixture" }).count() === 1;
+  await dateFilter.fill("");
+  await statusSelect.selectOption("all");
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -239,6 +251,7 @@ for (const profile of [
     injectedLiveFixtureVisible,
     selectedTodayRunningVisible,
     selectedOtherDateHidesRunning,
+    quickTodayClearsCustomDate,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -295,6 +308,7 @@ for (const result of results) {
   if (!result.injectedLiveFixtureVisible) failures.push(`${prefix}: browser-only no-time live fixture is not visible in Today`);
   if (!result.selectedTodayRunningVisible) failures.push(`${prefix}: selecting Today by date hides active fixtures`);
   if (!result.selectedOtherDateHidesRunning) failures.push(`${prefix}: selecting another date includes active fixtures`);
+  if (!result.quickTodayClearsCustomDate) failures.push(`${prefix}: selecting a quick date range leaves the previous exact date active`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
@@ -315,3 +329,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log("Browser verification passed.");
+
