@@ -47,4 +47,3 @@ jobs:
             --write-out "%{http_code}" \
             "$HEALTH_URL")
           node scripts/validate-schedule-freshness.mjs "$response_file" "$http_status"
-

@@ -238,5 +238,3 @@ describe("schedule freshness monitor validation", () => {
     expect(workflow).not.toContain("secrets.");
   });
 });
-
-

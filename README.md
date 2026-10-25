@@ -122,4 +122,3 @@ npm run verify:production -- https://esports-schedule-two.vercel.app <production
 ```
 
 GitHub 定时任务可能因平台负载延迟几分钟；私有仓库还需确认账户包含足够的 Actions 分钟数。若不希望使用 Actions，应使用支持 15 分钟频率的外部调度器调用同一个受保护接口，不能把 Hobby 的每日 Vercel Cron 描述为 15 分钟刷新。
-
