@@ -381,6 +381,23 @@ describe("schedule sync Worker client", () => {
     expect(requests).toEqual(["https://esports-schedule-two.vercel.app/api/cron/sync"]);
   });
 
+  it.each([
+    ["malformed", "not-json", "invalid_json"],
+    ["oversized", "x".repeat(32 * 1024 + 1), "response_too_large"],
+  ])("does not retry a deterministic %s 503 body failure", async (_kind, body, code) => {
+    const fetchImpl = vi.fn(async () => new Response(body, {
+      status: 503,
+      headers: { "content-type": "application/json" },
+    }));
+    const waitImpl = vi.fn();
+
+    await expect(invokeScheduleSync({ secret: syncSecret, fetchImpl, waitImpl }))
+      .rejects.toMatchObject({ code, httpStatus: 503 });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(waitImpl).not.toHaveBeenCalled();
+  });
+
   it("bounds repeated response-body transport failures and sanitizes the final error", async () => {
     const waits = [];
     let syncAttempts = 0;

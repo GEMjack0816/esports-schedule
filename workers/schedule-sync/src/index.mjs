@@ -334,11 +334,13 @@ export async function invokeScheduleSync({
       try {
         payload = await readJsonBody(response);
       } catch (error) {
-        if (!(error instanceof SyncInvocationError)) {
-          if (response.ok) {
-            const recovered = await verifyFreshAfterAmbiguousSyncResponse({ fetchImpl, nowImpl, timeoutSignalImpl });
-            if (recovered) return recovered;
-          }
+        // Parser/contract failures are deterministic; retrying them would
+        // repeat a completed sync and can amplify load. Only transport errors
+        // from a lost body are eligible for the bounded retry path.
+        if (error instanceof SyncInvocationError) throw error;
+        if (response.ok) {
+          const recovered = await verifyFreshAfterAmbiguousSyncResponse({ fetchImpl, nowImpl, timeoutSignalImpl });
+          if (recovered) return recovered;
         }
         if (attempt === MAX_ATTEMPTS - 1) throw error;
         const delay = retryDelayFor(response, attempt, nowImpl());
