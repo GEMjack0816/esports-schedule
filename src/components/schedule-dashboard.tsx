@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
-import { isMatchInScheduleRange, scheduleDateGroupKey, type ScheduleDateRange } from "@/lib/schedule/date-range";
+import { isMatchInScheduleRange, isMatchOnSelectedDate, scheduleDateGroupKey, type ScheduleDateRange } from "@/lib/schedule/date-range";
 import { getScheduleHeroStats } from "@/lib/schedule/hero-stats";
 import { subscribeToMinuteClock } from "@/lib/schedule/minute-clock";
 import { addDaysKey, dateInputBoundsInTimeZone, dateKeyInTimeZone } from "@/lib/schedule/time";
@@ -224,7 +224,7 @@ export function ScheduleDashboard({
     return payload.matches.filter((match) => {
       const key = matchDateKey(match, timeZone);
       const inRange = selectedDate
-        ? key === selectedDate
+        ? isMatchOnSelectedDate(match.status, key, selectedDate, today)
         : isMatchInScheduleRange(match.status, key, range, today, tomorrow, sevenDaysOut);
       const haystack = [match.homeTeam.name, match.awayTeam.name, match.league, match.tournament || "", match.stage || ""]
         .join(" ").toLocaleLowerCase();
@@ -243,6 +243,8 @@ export function ScheduleDashboard({
       groups.set(key, [...(groups.get(key) ?? []), match]);
     }
     return [...groups.entries()].sort(([a], [b]) => {
+      if (a === "live") return -1;
+      if (b === "live") return 1;
       if (a === "unscheduled") return 1;
       if (b === "unscheduled") return -1;
       return range === "history" ? b.localeCompare(a) : a.localeCompare(b);

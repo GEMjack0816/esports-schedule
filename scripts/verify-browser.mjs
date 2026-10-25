@@ -212,6 +212,19 @@ for (const profile of [
   await statusSelect.selectOption("running");
   const todayRunningCount = await page.locator(".match-card").count();
   const liveHeadingVisible = await page.getByText("正在进行", { exact: true }).count() > 0;
+  const selectedDateInput = page.locator(".date-field input[type='date']");
+  const { localToday, tomorrow } = await page.evaluate(() => {
+    const date = new Date();
+    const key = (value) => [value.getFullYear(), String(value.getMonth() + 1).padStart(2, "0"), String(value.getDate()).padStart(2, "0")].join("-");
+    const today = key(date);
+    date.setDate(date.getDate() + 1);
+    return { localToday: today, tomorrow: key(date) };
+  });
+  await selectedDateInput.fill(localToday);
+  const selectedTodayRunningCount = await page.locator(".match-card").count();
+  await selectedDateInput.fill(tomorrow);
+  const selectedOtherDateRunningCount = await page.locator(".match-card").count();
+  await selectedDateInput.fill("");
   await statusSelect.selectOption("all");
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
@@ -229,6 +242,8 @@ for (const profile of [
       })
       .filter((element) => element.left < -1 || element.right > document.documentElement.clientWidth + 1)
       .slice(0, 12),
+    groupHeadings: Array.from(document.querySelectorAll(".date-group .date-divider span"))
+      .map((element) => element.textContent?.trim() || ""),
   }));
   const screenshot = path.join(os.tmpdir(), `esports-schedule-${profile.name}.png`);
   await page.screenshot({ path: screenshot, fullPage: true });
@@ -293,7 +308,11 @@ for (const profile of [
     expectedTodayRunningCount,
     todayTabCount,
     todayRunningCount,
+    selectedTodayRunningCount,
+    selectedOtherDateRunningCount,
     liveHeadingVisible,
+    liveGroupIsFirst: layout.groupHeadings[0] === "正在进行",
+    groupHeadings: layout.groupHeadings,
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
     refreshedApiStale: apiBody.stale,
@@ -348,7 +367,10 @@ for (const result of results) {
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.todayTabCount < result.expectedTodayRunningCount) failures.push(`${prefix}: Today tab count excludes one or more running fixtures`);
   if (result.todayRunningCount < result.expectedTodayRunningCount) failures.push(`${prefix}: Today/Running filter hides an undated or prior-local-day live match`);
+  if (result.selectedTodayRunningCount < result.expectedTodayRunningCount) failures.push(`${prefix}: selecting local Today hides an undated or prior-local-day live match`);
+  if (result.selectedOtherDateRunningCount !== 0) failures.push(`${prefix}: running matches leak into a manually selected non-today date`);
   if (!result.liveHeadingVisible) failures.push(`${prefix}: running fixtures are not grouped under the live heading`);
+  if (!result.liveGroupIsFirst) failures.push(`${prefix}: live group is not ordered before calendar date groups`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
