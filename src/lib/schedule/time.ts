@@ -16,6 +16,7 @@ export function dateInputBoundsInTimeZone(
   earliestMatchAt: string | null,
   latestMatchAt: string | null,
   timeZone: string,
+  today: string,
 ): { min?: string; max?: string } {
   const toLocalDate = (value: string | null) => {
     if (!value) return undefined;
@@ -25,9 +26,11 @@ export function dateInputBoundsInTimeZone(
       : undefined;
   };
 
+  const earliest = toLocalDate(earliestMatchAt);
+  const latest = toLocalDate(latestMatchAt);
   return {
-    min: toLocalDate(earliestMatchAt),
-    max: toLocalDate(latestMatchAt),
+    min: earliest && earliest < today ? earliest : today,
+    max: latest && latest > today ? latest : today,
   };
 }
 

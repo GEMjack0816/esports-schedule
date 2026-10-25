@@ -100,17 +100,31 @@ for (const profile of [
       }).formatToParts(date).map((part) => [part.type, part.value]));
       return `${values.year}-${values.month}-${values.day}`;
     };
+    const current = new Date();
+    const todayParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(current).map((part) => [part.type, part.value]));
+    const today = `${todayParts.year}-${todayParts.month}-${todayParts.day}`;
+    const earliest = localDate(health.range?.earliestMatchAt);
+    const latest = localDate(health.range?.latestMatchAt);
     return {
       timeZone,
       min: input?.getAttribute("min") ?? null,
-      expectedMin: localDate(health.range?.earliestMatchAt),
+      expectedMin: earliest && earliest < today ? earliest : today,
       max: input?.getAttribute("max") ?? null,
-      expectedMax: localDate(health.range?.latestMatchAt),
+      expectedMax: latest && latest > today ? latest : today,
+      today,
     };
   });
   if (dateInputBounds.min !== dateInputBounds.expectedMin
     || dateInputBounds.max !== dateInputBounds.expectedMax) {
     throw new Error(`Date input bounds do not match local timezone ${dateInputBounds.timeZone}`);
+  }
+  if (dateInputBounds.min > dateInputBounds.today || dateInputBounds.max < dateInputBounds.today) {
+    throw new Error(`Date input does not allow local Today in ${dateInputBounds.timeZone}`);
   }
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();

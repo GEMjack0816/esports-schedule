@@ -190,6 +190,7 @@ export function ScheduleDashboard({
     payload.coverage.range.earliestMatchAt,
     payload.coverage.range.latestMatchAt,
     timeZone,
+    today,
   );
 
   const completeScheduleLoaded = payload.matches.length >= payload.coverage.totals.finalWithManual;
