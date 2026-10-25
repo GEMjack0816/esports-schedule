@@ -22,10 +22,10 @@ import { POST } from "./route";
 
 const runId = "11111111-1111-4111-8111-111111111111";
 
-function request(body: unknown) {
+function request(body: unknown, headers: Record<string, string> = {}) {
   return new Request("https://preview.example/api/admin/verification-cleanup", {
     method: "POST",
-    headers: { "content-type": "application/json", origin: "https://preview.example" },
+    headers: { "content-type": "application/json", origin: "https://preview.example", ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -93,6 +93,49 @@ describe("POST /api/admin/verification-cleanup", () => {
       deploymentId: "dpl_preview",
     }));
     expect(response.status).toBe(409);
+    expect(mocks.cleanup).not.toHaveBeenCalled();
+  });
+
+  it("bounds streamed request bodies even when Content-Length is absent", async () => {
+    const response = await POST(request({
+      runId,
+      gitCommitSha: "sha",
+      gitCommitRef: "fix/ref",
+      deploymentId: "dpl_preview",
+      extra: "x".repeat(3_000),
+    }));
+
+    expect(response.status).toBe(413);
+    expect(mocks.cleanup).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized declared Content-Length without reading the body", async () => {
+    const response = await POST(request({ runId }, { "content-length": "3000" }));
+
+    expect(response.status).toBe(413);
+    expect(mocks.cleanup).not.toHaveBeenCalled();
+  });
+
+  it("accepts only application/json media types", async () => {
+    const response = await POST(request({
+      runId,
+      gitCommitSha: "sha",
+      gitCommitRef: "fix/ref",
+      deploymentId: "dpl_preview",
+    }, { "content-type": "application/jsonp" }));
+
+    expect(response.status).toBe(400);
+    expect(mocks.cleanup).not.toHaveBeenCalled();
+  });
+
+  it.each(["null", "[]", "{", "\"string\""]) ("rejects non-object or malformed JSON: %s", async (body) => {
+    const response = await POST(new Request("https://preview.example/api/admin/verification-cleanup", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "https://preview.example" },
+      body,
+    }));
+
+    expect(response.status).toBe(400);
     expect(mocks.cleanup).not.toHaveBeenCalled();
   });
 });
