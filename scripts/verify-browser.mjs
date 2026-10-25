@@ -102,7 +102,14 @@ for (const profile of [
     (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
     { timeout: 120_000 },
   );
-  await page.locator(".refresh-button").click();
+  await page.route("**/api/matches", async (route) => {
+    const upstream = await route.fetch();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await route.fulfill({ response: upstream });
+  });
+  const refreshButtonAccessible = await page.getByRole("button", { name: "刷新赛程" }).count() === 1;
+  await page.getByRole("button", { name: "刷新赛程" }).click();
+  const refreshingButtonAccessible = await page.getByRole("button", { name: "正在刷新赛程" }).count() === 1;
   const apiResponse = await apiResponsePromise;
   let apiBody;
   let apiBodyReadFallback = false;
@@ -185,6 +192,8 @@ for (const profile of [
     gameFilterCounts,
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
+    refreshButtonAccessible,
+    refreshingButtonAccessible,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
@@ -236,6 +245,8 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (!result.refreshButtonAccessible) failures.push(`${prefix}: refresh button has no accessible name`);
+  if (!result.refreshingButtonAccessible) failures.push(`${prefix}: refresh progress has no accessible name`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
