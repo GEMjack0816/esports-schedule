@@ -55,6 +55,9 @@ describe("public external URL sanitization", () => {
     "https://stream.example/live?auth_token=private",
     "https://cdn.example/image?AWSAccessKeyId=private",
     "https://stream.example/live?session_id=private",
+    "https://stream.example/live?session_key=private",
+    "https://stream.example/live?X-Session-Key=private",
+    "https://stream.example/live?session_key_id=private",
     "https://stream.example/live?client_assertion=eyJhbGciOiJSUzI1NiJ9",
     "https://stream.example/live?assertion=eyJhbGciOiJSUzI1NiJ9",
     "https://stream.example/live?code_verifier=high-entropy-value",
@@ -132,6 +135,9 @@ describe("public external URL sanitization", () => {
       "client_secret",
       "authorization",
       "session_id",
+      "session_key",
+      "x-session-key",
+      "session_key_id",
       "hmac",
     ];
     let checked = 0;
