@@ -144,11 +144,27 @@ function hasCredentialPathParameters(pathname: string): boolean {
 }
 
 function hasCredentialParameters(search: string, nestedDepth = 0): boolean {
+  // Bare credentials can occupy an entire query/fragment (or appear as a
+  // parameter name without `=`), so they are invisible to key-based checks.
+  // Inspect bounded ASCII-decoded forms before parsing the parameter pairs.
+  let candidate = search;
+  for (let depth = 0; depth < MAX_PARAMETER_ENCODING_DEPTH; depth += 1) {
+    if (hasInlineCredentialMaterial(candidate)) return true;
+    const decoded = decodeAsciiPercentEscapes(candidate);
+    if (decoded === candidate) break;
+    candidate = decoded;
+  }
+
   for (const [name, value] of new URLSearchParams(search)) {
-    if (isCredentialParameter(name)) return true;
+    if (isCredentialParameter(name) || hasInlineCredentialMaterial(name)) return true;
     if (hasNestedCredentialParameters(value, nestedDepth)) return true;
   }
   return false;
+}
+
+function hasInlineCredentialMaterial(value: string): boolean {
+  return /(?:^|[^a-z0-9_])authorization\s*:\s*[a-z][a-z0-9+.-]*\s+\S+/i.test(value)
+    || /\beyJ[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\b/.test(value);
 }
 
 function hasNestedCredentialParameters(value: string, nestedDepth: number): boolean {
@@ -157,10 +173,9 @@ function hasNestedCredentialParameters(value: string, nestedDepth: number): bool
   // value (for example, `?message=Authorization%3A%20Bearer%20...`) instead
   // of being represented as a nested URL/query key. Redact recognizable
   // authorization header values and JWTs wherever they appear.
-  if (/(?:^|[^a-z0-9_])authorization\s*:\s*[a-z][a-z0-9+.-]*\s+\S+/i.test(value)
-    || /\beyJ[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\b/.test(value)) return true;
   let candidate = value;
   for (let encodingDepth = 0; encodingDepth < MAX_PARAMETER_ENCODING_DEPTH; encodingDepth += 1) {
+    if (hasInlineCredentialMaterial(candidate)) return true;
     const trimmed = candidate.trimStart();
     if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
       // Some providers wrap credentials in a JSON-valued query parameter (for
@@ -270,3 +285,4 @@ export function sanitizePublicTeam(team: Team): Team {
     logo: localLogo ?? sanitizePublicExternalUrl(team.logo) ?? "/team-placeholder.svg",
   };
 }
+
