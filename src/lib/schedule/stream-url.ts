@@ -2,7 +2,7 @@ import type { Stream, Team } from "./types";
 
 const credentialParameterNames = new Set([
   "accesskey", "accesstoken", "apikey", "auth", "authorization", "clientsecret",
-  "credential", "idtoken", "jwt", "oauth", "oauthtoken", "password", "passwd",
+  "credential", "idtoken", "jwt", "oauth", "oauthtoken", "password", "passwd", "pwd",
   "privatekey", "refreshtoken", "secret", "session", "signature", "sig", "token",
   "hmac",
   "authorizationcode", "authenticode", "authtoken", "awsaccesskeyid", "bearer",
