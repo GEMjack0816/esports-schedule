@@ -170,6 +170,15 @@ a { color: inherit; text-decoration: none; }
 .loading-match-event { width: 78%; height: 34px; }
 .loading-match-teams { width: 92%; height: 54px; }
 .loading-match-meta { width: 80%; height: 32px; }
+.loading-admin-stats { margin: 28px 0; }
+.loading-admin-list { display: grid; gap: 10px; }
+.loading-admin-row { height: 58px; }
+.loading-submit-form { pointer-events: none; }
+.loading-submit-field { display: grid; gap: 8px; min-width: 0; }
+.loading-field-label { width: 35%; height: 11px; }
+.loading-field-control { height: 46px; }
+.loading-submit-field-wide { grid-column: 1 / -1; }
+.loading-submit-action { width: 140px; height: 44px; }
 @media (prefers-reduced-motion: reduce) {
   .loading-skeleton::after { animation: none; background: none; }
 }
@@ -382,6 +391,7 @@ a { color: inherit; text-decoration: none; }
   .brand-accent { display: none; }
   .loading-filters { grid-template-columns: 1fr; }
   .loading-filters .loading-filter:first-child { grid-column: auto; }
+  .loading-submit-field-wide { grid-column: auto; }
   .hero-stats { grid-template-columns: 1fr 1fr; }
   .stat-card > span:last-child { line-height: 1.5; }
   .filter-panel { grid-template-columns: 1fr; }
