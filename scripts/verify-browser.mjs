@@ -30,7 +30,10 @@ for (const profile of [
   const context = await browser.newContext({
     viewport: { width: profile.width, height: profile.height },
     locale: "zh-CN",
-    t  const verifyLogoTimeout = simulateLogoTimeout && profile.name === "desktop";
+    timezoneId: "Asia/Shanghai",
+  });
+  const page = await context.newPage();
+  const verifyLogoTimeout = simulateLogoTimeout && profile.name === "desktop";
   const verifyLogoRetry = simulateLogoRetry && profile.name === "desktop";
   const slowLogoUrl = "https://logo-timeout.invalid/slow-team.svg";
   const retryLogoUrl = "https://cdn-api.pandascore.co/team/browser-retry-verification.svg";
@@ -78,9 +81,6 @@ for (const profile of [
         await route.abort("failed");
       });
     }
-  }
-entType: "image/svg+xml", body: "" }).catch(() => undefined);
-    });
   }
   const errors = [];
   const criticalRequestFailures = [];
