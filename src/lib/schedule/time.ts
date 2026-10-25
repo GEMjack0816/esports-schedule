@@ -12,6 +12,25 @@ export function dateKeyInTimeZone(value: string | Date, timeZone: string): strin
   return `${values.year}-${values.month}-${values.day}`;
 }
 
+export function dateInputBoundsInTimeZone(
+  earliestMatchAt: string | null,
+  latestMatchAt: string | null,
+  timeZone: string,
+): { min?: string; max?: string } {
+  const toLocalDate = (value: string | null) => {
+    if (!value) return undefined;
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp)
+      ? dateKeyInTimeZone(new Date(timestamp), timeZone)
+      : undefined;
+  };
+
+  return {
+    min: toLocalDate(earliestMatchAt),
+    max: toLocalDate(latestMatchAt),
+  };
+}
+
 export function addDaysKey(days: number, timeZone: string, now = Date.now()): string {
   return dateKeyInTimeZone(new Date(now + days * DAY_MS), timeZone);
 }

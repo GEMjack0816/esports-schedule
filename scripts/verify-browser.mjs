@@ -75,6 +75,36 @@ for (const profile of [
   const bodyText = await page.locator("body").innerText();
   const html = await page.content();
   const homepageCommit = await page.locator("#esports-schedule-version").getAttribute("data-git-commit");
+  const dateInputBounds = await page.evaluate(async () => {
+    const input = document.querySelector('input[type="date"]');
+    const response = await fetch("/api/health/data-coverage", { cache: "no-store" });
+    if (!response.ok) throw new Error(`Date-bound health check returned HTTP ${response.status}`);
+    const health = await response.json();
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const localDate = (value) => {
+      if (!value) return null;
+      const date = new Date(value);
+      if (!Number.isFinite(date.getTime())) return null;
+      const values = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).formatToParts(date).map((part) => [part.type, part.value]));
+      return `${values.year}-${values.month}-${values.day}`;
+    };
+    return {
+      timeZone,
+      min: input?.getAttribute("min") ?? null,
+      expectedMin: localDate(health.range?.earliestMatchAt),
+      max: input?.getAttribute("max") ?? null,
+      expectedMax: localDate(health.range?.latestMatchAt),
+    };
+  });
+  if (dateInputBounds.min !== dateInputBounds.expectedMin
+    || dateInputBounds.max !== dateInputBounds.expectedMax) {
+    throw new Error(`Date input bounds do not match local timezone ${dateInputBounds.timeZone}`);
+  }
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -207,6 +237,7 @@ for (const profile of [
     initialScheduleLoadedCount: initialScheduleCounts.loaded,
     totalScheduleMatchCount: initialScheduleCounts.total,
     fullScheduleResponseStatus,
+    dateInputBounds,
     gameFilterCounts,
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
