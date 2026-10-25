@@ -8,6 +8,7 @@ import {
   eq,
   gte,
   ilike,
+  inArray,
   or,
   sql,
 } from "drizzle-orm";
@@ -593,6 +594,53 @@ export class DrizzleReviewRepository {
       rejected: summary.rejected,
       publishedManualMatches: summary.publishedManualMatches,
     };
+  }
+
+  async cleanupIsolatedVerificationRun(
+    runId: string,
+  ): Promise<{ submissions: number; manualMatches: number; auditEvents: number }> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)) {
+      throw new ReviewConflictError("验证数据与清理请求不匹配。");
+    }
+    const expectedLeague = `Codex isolated review ${runId}`;
+    try {
+      return await getDatabase().transaction(async (tx) => {
+        const submissions = await tx.select({ id: matchSubmissions.id, league: matchSubmissions.league })
+          .from(matchSubmissions)
+          .where(eq(matchSubmissions.league, expectedLeague))
+          .for("update");
+        if (submissions.length > 2 || submissions.some((row) => row.league !== expectedLeague)) {
+          throw new ReviewConflictError("验证数据与清理请求不匹配。");
+        }
+
+        const submissionIds = submissions.map((row) => row.id);
+        const manualMatches = submissionIds.length === 0 ? [] : await tx.select({ id: publishedManualMatches.id })
+          .from(publishedManualMatches)
+          .where(inArray(publishedManualMatches.sourceSubmissionId, submissionIds))
+          .for("update");
+        const entityIds = [...submissionIds, ...manualMatches.map((row) => row.id)];
+        const deletedAudit = entityIds.length > 0
+          ? await tx.delete(adminAuditEvents).where(inArray(adminAuditEvents.entityId, entityIds)).returning({ id: adminAuditEvents.id })
+          : [];
+        const deletedMatches = manualMatches.length > 0
+          ? await tx.delete(publishedManualMatches)
+            .where(inArray(publishedManualMatches.id, manualMatches.map((row) => row.id)))
+            .returning({ id: publishedManualMatches.id })
+          : [];
+        const deletedSubmissions = submissionIds.length === 0 ? [] : await tx.delete(matchSubmissions)
+          .where(inArray(matchSubmissions.id, submissionIds))
+          .returning({ id: matchSubmissions.id });
+
+        return {
+          submissions: deletedSubmissions.length,
+          manualMatches: deletedMatches.length,
+          auditEvents: deletedAudit.length,
+        };
+      });
+    } catch (error) {
+      if (error instanceof ReviewConflictError) throw error;
+      translateDatabaseError(error);
+    }
   }
 
   async listManualMatches(page = 1, pageSize = 50): Promise<ManualMatchPage> {
