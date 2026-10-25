@@ -82,18 +82,32 @@ for (const profile of [
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
 
   const gameFilterCounts = {};
+  const gameFilterMismatches = {};
   const statusFilterCounts = {};
+  const statusFilterMismatches = {};
   await page.getByRole("tab", { name: /全部收录/ }).click();
+  const allFilterValues = await page.locator(".match-card").evaluateAll((cards) => cards.map((card) => ({
+    game: card.getAttribute("data-game"),
+    status: card.getAttribute("data-status"),
+  })));
   const gameSelect = page.locator(".filter-panel select").nth(0);
   for (const game of ["lol", "valorant", "honor-of-kings", "cs2", "dota2"]) {
     await gameSelect.selectOption(game);
-    gameFilterCounts[game] = await page.locator(".match-card").count();
+    const visibleGames = await page.locator(".match-card").evaluateAll((cards) => cards.map((card) => card.getAttribute("data-game")));
+    const expectedCount = allFilterValues.filter((match) => match.game === game).length;
+    gameFilterCounts[game] = visibleGames.length;
+    gameFilterMismatches[game] = visibleGames.some((visibleGame) => visibleGame !== game)
+      || visibleGames.length !== expectedCount;
   }
   await gameSelect.selectOption("all");
   const statusSelect = page.locator(".filter-panel select").nth(2);
   for (const status of ["running", "finished", "scheduled"]) {
     await statusSelect.selectOption(status);
-    statusFilterCounts[status] = await page.locator(".match-card").count();
+    const visibleStatuses = await page.locator(".match-card").evaluateAll((cards) => cards.map((card) => card.getAttribute("data-status")));
+    const expectedCount = allFilterValues.filter((match) => match.status === status).length;
+    statusFilterCounts[status] = visibleStatuses.length;
+    statusFilterMismatches[status] = visibleStatuses.some((visibleStatus) => visibleStatus !== status)
+      || visibleStatuses.length !== expectedCount;
   }
   await statusSelect.selectOption("all");
   await page.getByRole("tab", { name: /^今日/ }).click();
@@ -183,7 +197,9 @@ for (const profile of [
     syncStatusCards,
     gameOptions,
     gameFilterCounts,
+    gameFilterMismatches,
     statusFilterCounts,
+    statusFilterMismatches,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -235,6 +251,12 @@ for (const result of results) {
   if (result.forbiddenHtmlPhrases.length > 0) failures.push(`${prefix}: demo text in HTML`);
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
+  for (const [game, mismatched] of Object.entries(result.gameFilterMismatches)) {
+    if (mismatched) failures.push(`${prefix}: game filter ${game} returned mismatched results`);
+  }
+  for (const [status, mismatched] of Object.entries(result.statusFilterMismatches)) {
+    if (mismatched) failures.push(`${prefix}: status filter ${status} returned mismatched results`);
+  }
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
