@@ -119,17 +119,18 @@ for (const profile of [
   );
   // Client-only outage fixture: validate first-snapshot empty-state copy without mutating the backend.
   let outageFixtureRequests = 0;
+  let healthFixtureRequests = 0;
   await page.route("**/api/matches", async (route) => {
     if (route.request().method() !== "GET") return route.continue();
-    if (outageFixtureRequests === 2) {
+    if (outageFixtureRequests === 3) {
       outageFixtureRequests += 1;
       return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
     }
-    if (outageFixtureRequests === 3) {
+    if (outageFixtureRequests === 4) {
       outageFixtureRequests += 1;
       return route.abort("failed");
     }
-    if (outageFixtureRequests === 4) {
+    if (outageFixtureRequests === 5) {
       outageFixtureRequests += 1;
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: null }) });
     }
@@ -142,6 +143,10 @@ for (const profile of [
       body.mode = "unavailable";
       body.stale = true;
       body.warning = "Browser verification outage fixture";
+    } else if (outageFixtureRequests === 2) {
+      body.mode = "unavailable";
+      body.stale = true;
+      body.warning = "Browser verification retry pending";
     } else {
       // Deterministically model recovery after the retry without changing API or database state.
       body.mode = "live";
@@ -150,7 +155,29 @@ for (const profile of [
     }
     body.coverage.mode = body.mode;
     body.coverage.stale = body.stale;
-    await route.fulfill({ response, body: JSON.stringify(body) });
+    const refreshScheduled = outageFixtureRequests === 2;
+    await route.fulfill({
+      response,
+      headers: { "X-Schedule-Refresh-Scheduled": String(refreshScheduled) },
+      body: JSON.stringify(body),
+    });
+  });
+  await page.route("**/api/health/data-coverage", async (route) => {
+    if (route.request().method() !== "GET" || healthFixtureRequests >= 2) return route.continue();
+    healthFixtureRequests += 1;
+    const isComplete = healthFixtureRequests === 2;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
+      body: JSON.stringify({
+        mode: isComplete ? "live" : "unavailable",
+        stale: !isComplete,
+        refreshInProgress: !isComplete,
+        lastAttemptAt: "2026-10-25T10:00:01.000Z",
+        sourceFetchedAt: isComplete ? "2026-10-25T10:00:03.000Z" : null,
+      }),
+    });
   });
   await page.locator(".refresh-button").click();
   const apiResponse = await apiResponsePromise;
@@ -173,7 +200,9 @@ for (const profile of [
   const screenshot = path.join(os.tmpdir(), `esports-schedule-${profile.name}.png`);
   await page.screenshot({ path: screenshot, fullPage: true });
   const retryResponsePromise = page.waitForResponse(
-    (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
+    (candidate) => candidate.url().includes("/api/matches")
+      && candidate.request().method() === "GET"
+      && candidate.headers()["x-schedule-refresh-scheduled"] !== "true",
     { timeout: 120_000 },
   );
   await page.getByRole("button", { name: "重新检查赛程" }).click();
@@ -181,7 +210,10 @@ for (const profile of [
   const retryBody = await retryResponse.json();
   await page.getByRole("heading", { name: "没有找到符合条件的比赛" }).waitFor({ state: "visible" });
   const retryRecoveredStateVisible = await page.getByText("Browser verification retry recovered").isVisible();
+  const retryBackgroundRefreshSettled = healthFixtureRequests === 2;
   const retryRequestCount = outageFixtureRequests;
+  await page.getByText("Browser verification retry recovered").waitFor({ state: "visible" });
+  await page.waitForFunction(() => !document.querySelector(".refresh-button")?.disabled);
   expectedRefreshError = true;
   expected503ConsoleErrors += 1;
   const failedRefreshResponsePromise = page.waitForResponse(
@@ -282,6 +314,7 @@ for (const profile of [
     unavailableOffersFilterReset,
     retryRecoveredStateVisible,
     retryRequestCount,
+    retryBackgroundRefreshSettled,
     retryResponseStatus: retryResponse.status(),
     retryMode: retryBody.mode,
     refreshFailureHandled,
@@ -341,7 +374,7 @@ for (const result of results) {
   if (!result.unavailableEmptyStateVisible || !result.unavailableRetryVisible || result.unavailableOffersFilterReset) {
     failures.push(`${prefix}: unavailable empty state is misleading or lacks retry action`);
   }
-  if (!result.retryRecoveredStateVisible || result.retryRequestCount !== 2
+  if (!result.retryRecoveredStateVisible || result.retryRequestCount !== 3
     || result.retryResponseStatus !== 200 || result.retryMode !== "live") {
     failures.push(`${prefix}: unavailable retry did not consume a recovered schedule response`);
   }

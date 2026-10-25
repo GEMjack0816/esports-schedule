@@ -162,6 +162,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [selectedDate, setSelectedDate] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshNotice, setRefreshNotice] = useState<string | null>(null);
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
@@ -235,8 +236,10 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   async function refreshSchedule() {
     setRefreshing(true);
     setRefreshError(null);
+    setRefreshNotice(null);
     try {
-      const response = await fetchScheduleRefresh();
+      const refreshResult = await fetchScheduleRefresh();
+      const response = refreshResult.response;
       if (!response.ok) {
         setRefreshError("暂时无法重新获取赛程，请稍后重试。");
         return;
@@ -247,6 +250,11 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
         return;
       }
       setPayload(refreshedPayload);
+      if (refreshResult.backgroundRefresh === "started") {
+        setRefreshNotice("已请求后台刷新；当前仍显示上次可用的赛程数据。");
+      } else if (refreshResult.backgroundRefresh === "completed" && refreshedPayload.mode === "unavailable") {
+        setRefreshNotice("后台检查已完成，但暂时仍没有可用的真实赛程；请稍后重试。");
+      }
     } catch (error) {
       // Keep the last usable payload and expose a safe, generic retry message.
       setRefreshError(getScheduleRefreshErrorMessage(error));
@@ -317,7 +325,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           </div>
 
           {payload.warning && <div className="data-notice" role="status"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" /><path d="M10 6.5v4.2M10 13.7h.01" /></svg><span>{payload.warning}</span></div>}
-          {refreshError && <div className="data-notice" role="status"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" /><path d="M10 6.5v4.2M10 13.7h.01" /></svg><span>{refreshError}</span></div>}
+          {(refreshError || refreshNotice) && <div className="data-notice" role="status"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" /><path d="M10 6.5v4.2M10 13.7h.01" /></svg><span>{refreshError || refreshNotice}</span></div>}
 
           <div className="data-summary" aria-label="数据覆盖信息">
             <span>源快照时间 <strong>{formatDateTime(payload.coverage.sourceFetchedAt, timeZone)}</strong></span>
