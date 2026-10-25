@@ -243,6 +243,9 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
         && !requestQuery.selectedDate) return;
     }
 
+    // This notice belongs only to the filter that encountered the stale cursor.
+    // Clear it when filters change so it cannot reappear when returning later.
+    setPaginationRestartedFor(null);
     loadingMoreRef.current = false;
     setLoadingMore(false);
     const serial = ++requestSerial.current;

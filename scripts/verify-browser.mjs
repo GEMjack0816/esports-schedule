@@ -422,6 +422,16 @@ for (const profile of [
     && !afterRestartText.includes("Old Snapshot Team");
   expectScheduleChanged = false;
 
+  // A restart notice belongs only to the filter that encountered the stale
+  // cursor; changing away and back must not revive stale status text. Keep
+  // the simulated fresh snapshot active while exercising the filter round trip.
+  expectScheduleChanged = true;
+  await selectFilterAndWait(page.locator(".filter-panel select").nth(2), "status", "running");
+  await selectFilterAndWait(page.locator(".filter-panel select").nth(2), "status", "all");
+  const stalePaginationNoticeResurfaced = await paginationNotice.count() > 0;
+  paginationRestartWorked = paginationRestartWorked && !stalePaginationNoticeResurfaced;
+  expectScheduleChanged = false;
+
   // A manual refresh cancels an in-flight Load More request. Verify the
   // canceled request cannot leave pagination permanently marked as busy.
   await page.waitForFunction(() => document.querySelector(".match-list")?.getAttribute("aria-busy") === "false");
