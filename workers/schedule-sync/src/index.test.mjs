@@ -247,6 +247,78 @@ describe("schedule sync Worker client", () => {
     expect(waits).toEqual([500]);
   });
 
+  it("reconciles a lost response before retrying a sync request", async () => {
+    const now = Date.parse("2026-10-25T10:00:00.000Z");
+    const sourceFetchedAt = new Date(now - 30_000).toISOString();
+    const requests = [];
+    const waits = [];
+    let syncAttempts = 0;
+
+    const result = await invokeScheduleSync({
+      secret: syncSecret,
+      nowImpl: () => now,
+      waitImpl: async (milliseconds) => waits.push(milliseconds),
+      fetchImpl: async (url) => {
+        requests.push(url);
+        if (url === healthUrl) {
+          return healthResponse({
+            sourceFetchedAt,
+            lastSuccessfulSyncAt: sourceFetchedAt,
+            snapshotAgeSeconds: 30,
+          });
+        }
+        syncAttempts += 1;
+        if (syncAttempts === 1) throw new Error("response lost after origin completed sync");
+        return response();
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: "verified_fresh_after_response_loss",
+      snapshotAgeSeconds: 30,
+    });
+    expect(syncAttempts).toBe(1);
+    expect(waits).toEqual([500]);
+    expect(requests).toEqual([
+      "https://esports-schedule-two.vercel.app/api/cron/sync",
+      healthUrl,
+    ]);
+  });
+
+  it("retries after a lost response when health cannot prove that sync completed", async () => {
+    const now = Date.parse("2026-10-25T10:00:00.000Z");
+    const staleAt = new Date(now - 20 * 60_000).toISOString();
+    const requests = [];
+    let syncAttempts = 0;
+    const result = await invokeScheduleSync({
+      secret: syncSecret,
+      nowImpl: () => now,
+      waitImpl: async () => {},
+      fetchImpl: async (url) => {
+        requests.push(url);
+        if (url === healthUrl) {
+          return healthResponse({
+            stale: true,
+            sourceFetchedAt: staleAt,
+            lastSuccessfulSyncAt: staleAt,
+            snapshotAgeSeconds: 1_200,
+          });
+        }
+        syncAttempts += 1;
+        if (syncAttempts === 1) throw new Error("response lost before headers");
+        return response();
+      },
+    });
+
+    expect(result).toMatchObject({ outcome: "success", generation: 12 });
+    expect(syncAttempts).toBe(2);
+    expect(requests).toEqual([
+      "https://esports-schedule-two.vercel.app/api/cron/sync",
+      healthUrl,
+      "https://esports-schedule-two.vercel.app/api/cron/sync",
+    ]);
+  });
+
   it("verifies freshness after an ambiguous successful response before retrying the sync", async () => {
     const now = Date.parse("2026-10-25T10:00:00.000Z");
     const requests = [];

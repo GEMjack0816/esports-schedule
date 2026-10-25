@@ -317,6 +317,12 @@ export async function invokeScheduleSync({
         const delay = RETRY_DELAYS_MS[attempt];
         if (deadline - nowImpl() <= delay) throw new SyncInvocationError("retry_budget_exhausted");
         await waitImpl(delay);
+        // A rejected fetch is ambiguous: the origin may have completed the
+        // sync before the response was lost. Reconcile after the backoff and
+        // before issuing another write-like sync request, so a completed run
+        // is not needlessly repeated.
+        const recovered = await verifyFreshAfterAmbiguousSyncResponse({ fetchImpl, nowImpl, timeoutSignalImpl });
+        if (recovered) return recovered;
         continue;
       }
       throw new SyncInvocationError("network_failure");
