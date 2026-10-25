@@ -1,5 +1,6 @@
 import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { AppErrorFallback } from "./app-error-fallback";
 import styles from "./app-error-fallback.module.css";
@@ -7,6 +8,14 @@ import styles from "./app-error-fallback.module.css";
 type TestElementProps = { className?: string; children?: ReactNode; onClick?: unknown };
 
 describe("AppErrorFallback", () => {
+  it("follows the bootstrapped saved theme instead of overriding it with the OS theme", () => {
+    const stylesheet = readFileSync(new URL("./app-error-fallback.module.css", import.meta.url), "utf8");
+
+    expect(stylesheet).not.toContain("prefers-color-scheme");
+    expect(stylesheet).toContain(':global(html[data-theme="light"]) .shell');
+    expect(stylesheet).toContain("background: #090b0f");
+  });
+
   it("renders generic recovery guidance without revealing exception details", () => {
     const html = renderToStaticMarkup(<AppErrorFallback reset={() => undefined} />);
 

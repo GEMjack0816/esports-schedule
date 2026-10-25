@@ -77,32 +77,6 @@
   outline-offset: 3px;
 }
 
-@media (prefers-color-scheme: light) {
-  .shell {
-    color: #111820;
-    background: #f4f7f9;
-  }
-
-  .card {
-    border-color: #cbd4dc;
-    background: #fff;
-    box-shadow: 0 1.5rem 5rem rgb(30 55 70 / 12%);
-  }
-
-  .eyebrow {
-    color: #087e9e;
-  }
-
-  .description {
-    color: #43505c;
-  }
-
-  .secondary {
-    color: #111820;
-    border-color: #8b98a4;
-  }
-}
-
 :global(html[data-theme="light"]) .shell {
   color: #111820;
   background: #f4f7f9;
