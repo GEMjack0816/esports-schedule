@@ -5,6 +5,7 @@ import { chromium } from "playwright-core";
 const baseUrl = process.argv[2] || "http://localhost:3000";
 const simulateLogoTimeout = process.argv.includes("--simulate-logo-timeout");
 const simulateLogoRetry = process.argv.includes("--simulate-logo-retry");
+const simulateLogoSuccess = process.argv.includes("--simulate-logo-success");
 const executableCandidates = [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -35,27 +36,40 @@ for (const profile of [
   const page = await context.newPage();
   const verifyLogoTimeout = simulateLogoTimeout && profile.name === "desktop";
   const verifyLogoRetry = simulateLogoRetry && profile.name === "desktop";
+  const verifyLogoSuccess = simulateLogoSuccess && profile.name === "desktop";
   const slowLogoUrl = "https://logo-timeout.invalid/slow-team.svg";
   const retryLogoUrl = "https://cdn-api.pandascore.co/team/browser-retry-verification.svg";
+  const successLogoUrl = "https://logo-success.invalid/loaded-team.svg";
   let logoTimeoutFallback = null;
   let logoRetryFallback = null;
+  let logoSuccessRetention = null;
   const retryRequests = [];
-  if (verifyLogoTimeout || verifyLogoRetry) {
+  if (verifyLogoTimeout || verifyLogoRetry || verifyLogoSuccess) {
     await context.route((url) => new URL(url).pathname === "/api/matches", async (route) => {
       const response = await route.fetch();
       const payload = await response.json();
       const now = new Date().toISOString();
       const match = {
-        id: verifyLogoRetry ? "browser-logo-retry-verification" : "browser-logo-timeout-verification",
+        id: verifyLogoRetry
+          ? "browser-logo-retry-verification"
+          : verifyLogoSuccess
+            ? "browser-logo-success-verification"
+            : "browser-logo-timeout-verification",
         provider: "manual",
-        providerMatchId: verifyLogoRetry ? "browser-logo-retry-verification" : "browser-logo-timeout-verification",
+        providerMatchId: verifyLogoRetry
+          ? "browser-logo-retry-verification"
+          : verifyLogoSuccess
+            ? "browser-logo-success-verification"
+            : "browser-logo-timeout-verification",
         game: "lol",
         tournament: "本地浏览器验证",
         league: "本地浏览器验证",
         stage: null,
         homeTeam: verifyLogoRetry
           ? { name: "Logo 重试回退验证", acronym: "RETRY", logo: retryLogoUrl }
-          : { name: "慢 Logo 回退验证", acronym: "WAIT", logo: slowLogoUrl },
+          : verifyLogoSuccess
+            ? { name: "Logo 成功加载验证", acronym: "LOAD", logo: successLogoUrl }
+            : { name: "慢 Logo 回退验证", acronym: "WAIT", logo: slowLogoUrl },
         awayTeam: { name: "本地占位队伍", acronym: "LOCAL", logo: "/team-placeholder.svg" },
         homeScore: null,
         awayScore: null,
@@ -79,6 +93,15 @@ for (const profile of [
       async (route) => {
         retryRequests.push(new URL(route.request().url()).searchParams.get("esports_logo_retry"));
         await route.abort("failed");
+      });
+    }
+    if (verifyLogoSuccess) {
+      await context.route("https://logo-success.invalid/**", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "image/svg+xml",
+          body: '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28"><circle cx="14" cy="14" r="12" fill="#0f8"/></svg>',
+        });
       });
     }
   }
@@ -176,7 +199,13 @@ for (const profile of [
     const waitForImageSource = async (expected, timeoutMs) => {
       const startedAt = Date.now();
       while (Date.now() - startedAt < timeoutMs) {
-        if ((await verificationLogo.getAttribute("src")) === expected) return true;
+        const actual = await verificationLogo.getAttribute("src");
+        if (actual) {
+          const actualUrl = new URL(actual, baseUrl);
+          if (expected.startsWith("/") ? actualUrl.pathname === expected : actualUrl.href === new URL(expected, baseUrl).href) {
+            return true;
+          }
+        }
         await page.waitForTimeout(100);
       }
       return false;
@@ -202,6 +231,27 @@ for (const profile of [
       retryRequests,
       switchedToPlaceholder,
       finalSource: await verificationLogo.getAttribute("src"),
+    };
+  }
+  if (verifyLogoSuccess) {
+    await page.getByRole("tab", { name: /全部收录/ }).click();
+    const verificationCard = page.locator(".match-card").filter({ hasText: "Logo 成功加载验证" }).first();
+    await verificationCard.waitFor({ state: "visible", timeout: 10_000 });
+    await verificationCard.scrollIntoViewIfNeeded();
+    const verificationLogo = verificationCard.locator(".team-row").first().locator("img");
+    const imageLoaded = await page.waitForFunction(() => {
+      const card = Array.from(document.querySelectorAll(".match-card"))
+        .find((candidate) => candidate.textContent?.includes("Logo 成功加载验证"));
+      const image = card?.querySelector(".team-row img");
+      return image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0;
+    }, null, { timeout: 5_000 }).then(() => true).catch(() => false);
+    // Wait beyond the component's 8-second deadline to catch a timer that was not
+    // cancelled by the real browser load event.
+    await page.waitForTimeout(8_500);
+    logoSuccessRetention = {
+      imageLoaded,
+      retainedExternalSource: (await verificationLogo.getAttribute("src")) === successLogoUrl,
+      naturalWidth: await verificationLogo.evaluate((image) => image.naturalWidth),
     };
   }
   const layout = await page.evaluate(() => ({
@@ -281,6 +331,7 @@ for (const profile of [
     apiBodyReadFallback,
     logoTimeoutFallback,
     logoRetryFallback,
+    logoSuccessRetention,
     healthStatus: healthResult.status,
     healthMode: healthResult.body.mode,
     healthDemoMode: healthResult.body.demoMode,
@@ -347,6 +398,11 @@ for (const result of results) {
     }
     if (!result.logoRetryFallback?.switchedToPlaceholder) {
       failures.push(prefix + ": failed retried logo did not fall back to the local placeholder");
+    }
+  }
+  if (simulateLogoSuccess && prefix === "desktop") {
+    if (!result.logoSuccessRetention?.imageLoaded || !result.logoSuccessRetention?.retainedExternalSource) {
+      failures.push(`${prefix}: successfully loaded team logo was replaced after its timeout deadline`);
     }
   }
   failures.push(...result.errors.map((error) => `${prefix}: ${error}`));
