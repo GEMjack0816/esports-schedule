@@ -72,7 +72,7 @@ Vercel Cron（每日保底） ──────┼─> /api/cron/sync
 
 每个游戏也返回同样的时间和状态字段，以及端点分页、X-Total、原始/规范化/去重/最终数量。同步尝试不会让快照变新；只有成功写入 PostgreSQL 最后成功快照才会更新源时间。Runtime Cache miss 会读取 PostgreSQL 并回填快速层；只要持久快照存在，接口不会因为缓存逐出进入 `mode=unavailable`。快照超过 15 分钟仍会准确显示 `stale=true`。
 
-`.github/workflows/monitor-schedule-freshness.yml` 每 15 分钟在同步时段之后只读查询健康接口，并要求聚合快照及五个游戏各自的 `sourceFetchedAt` / `lastSuccessfulSyncAt` 均不超过 15 分钟，且状态为 `live`、`stale=false`、游戏同步状态为 `normal`。检查失败会让 GitHub Actions run 失败，作为可追踪告警；可在仓库 Actions 通知设置中开启失败通知。此工作流没有 Secret，也不触发同步。GitHub schedule 本身是 best-effort，可能延迟或漏跑，因此该监控只能在下一次成功启动时报告陈旧状态，不能保证精确 15 分钟告警或调度 SLA；若需要有 SLA 的持续监控/调度，需采用具备相应保证的外部服务或更高等级平台并单独评估成本。
+`.github/workflows/monitor-schedule-freshness.yml` 在每次 `Sync esports fixtures` 工作流完成后，以及每 15 分钟在同步时段之后，只读查询健康接口，并要求聚合快照及五个游戏各自的 `sourceFetchedAt` / `lastSuccessfulSyncAt` 均不超过 15 分钟，且状态为 `live`、`stale=false`、游戏同步状态为 `normal`。同步完成后的检查只接受仓库内 `main` 分支运行；它不使用 Secret、不修改数据，也不触发同步。失败会让 GitHub Actions run 失败，作为可追踪告警；可在仓库 Actions 通知设置中开启失败通知。GitHub schedule 和 `workflow_run` 都依赖 GitHub 工作流实际启动，可能延迟或漏跑，因此该监控不能保证精确 15 分钟告警或调度 SLA；若需要有 SLA 的持续监控/调度，需采用具备相应保证的外部服务或更高等级平台并单独评估成本。
 
 ## 生产版本指纹
 
@@ -122,3 +122,4 @@ npm run verify:production -- https://esports-schedule-two.vercel.app <production
 ```
 
 GitHub 定时任务可能因平台负载延迟几分钟；私有仓库还需确认账户包含足够的 Actions 分钟数。若不希望使用 Actions，应使用支持 15 分钟频率的外部调度器调用同一个受保护接口，不能把 Hobby 的每日 Vercel Cron 描述为 15 分钟刷新。
+

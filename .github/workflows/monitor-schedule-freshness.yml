@@ -5,6 +5,10 @@ on:
     # Run shortly after each expected sync slot; GitHub schedule timing is best-effort.
     - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Sync esports fixtures"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -17,7 +21,11 @@ jobs:
   monitor:
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository))
     steps:
       - name: Check out freshness validator
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -39,3 +47,4 @@ jobs:
             --write-out "%{http_code}" \
             "$HEALTH_URL")
           node scripts/validate-schedule-freshness.mjs "$response_file" "$http_status"
+

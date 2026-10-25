@@ -229,6 +229,14 @@ describe("schedule freshness monitor validation", () => {
     expect(workflow).toContain("persist-credentials: false");
     expect(workflow).toContain('MAX_HEALTH_RESPONSE_BYTES: "262144"');
     expect(workflow).toContain('--max-filesize "$MAX_HEALTH_RESPONSE_BYTES"');
+    expect(workflow).toContain('workflows: ["Sync esports fixtures"]');
+    expect(workflow).toContain("types: [completed]");
+    expect(workflow).toContain("branches: [main]");
+    expect(workflow).toContain("github.event.workflow_run.head_branch == 'main'");
+    expect(workflow).toContain("github.event.workflow_run.head_repository.full_name == github.repository");
+    expect(workflow).toMatch(/permissions:\r?\n  contents: read/);
+    expect(workflow).not.toContain("secrets.");
   });
 });
+
 
