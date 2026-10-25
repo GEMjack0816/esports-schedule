@@ -4,16 +4,27 @@ import { chromium } from "playwright-core";
 
 const baseUrl = process.argv[2] || "http://localhost:3000";
 const executableCandidates = [
+  process.env.CHROME_BIN,
+  process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-];
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/google-chrome",
+].filter(Boolean);
 
 let browser;
 let launchError;
+try {
+  // Prefer Playwright's managed Chromium when installed (for example, in CI).
+  browser = await chromium.launch({ headless: true });
+} catch (error) {
+  launchError = error;
+}
 for (const executablePath of executableCandidates) {
+  if (browser) break;
   try {
     browser = await chromium.launch({ executablePath, headless: true });
-    break;
   } catch (error) {
     launchError = error;
   }
@@ -164,6 +175,42 @@ for (const profile of [
     { failOnStatusCode: false },
   );
 
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const reducedMotion = await page.evaluate(() => {
+    const readMaximumSeconds = (value) => Math.max(...value.split(",").map((part) => {
+      const match = part.trim().match(/^(.+?)(ms|s)$/);
+      if (!match) return Number.POSITIVE_INFINITY;
+      const amount = Number(match[1]);
+      if (!Number.isFinite(amount)) return Number.POSITIVE_INFINITY;
+      return match[2] === "ms" ? amount / 1_000 : amount;
+    }));
+    const probe = (className) => {
+      const element = document.createElement("div");
+      element.className = className;
+      document.body.append(element);
+      return element;
+    };
+    const spinner = probe("is-spinning");
+    const liveIndicator = probe("live-dot");
+    const matchCard = probe("match-card");
+    const spinnerStyle = getComputedStyle(spinner);
+    const liveIndicatorStyle = getComputedStyle(liveIndicator);
+    const matchCardStyle = getComputedStyle(matchCard);
+    const result = {
+      preferenceMatched: matchMedia("(prefers-reduced-motion: reduce)").matches,
+      scrollBehavior: getComputedStyle(document.documentElement).scrollBehavior,
+      spinnerDurationSeconds: readMaximumSeconds(spinnerStyle.animationDuration),
+      spinnerIterations: spinnerStyle.animationIterationCount,
+      liveIndicatorDurationSeconds: readMaximumSeconds(liveIndicatorStyle.animationDuration),
+      liveIndicatorIterations: liveIndicatorStyle.animationIterationCount,
+      matchCardTransitionSeconds: readMaximumSeconds(matchCardStyle.transitionDuration),
+    };
+    spinner.remove();
+    liveIndicator.remove();
+    matchCard.remove();
+    return result;
+  });
+
   results.push({
     profile: profile.name,
     status: response?.status() ?? null,
@@ -213,6 +260,7 @@ for (const profile of [
     anonymousAdminContainsPrivateData:
       adminBody.includes("最近操作") || adminBody.includes("待审核提交"),
     anonymousAdminApiStatus: adminLegacyResponse.status(),
+    reducedMotion,
     errors,
     screenshot,
   });
@@ -247,6 +295,17 @@ for (const result of results) {
   if (!result.anonymousAdminAtLogin) failures.push(`${prefix}: anonymous admin page was not redirected to login`);
   if (result.anonymousAdminContainsPrivateData) failures.push(`${prefix}: anonymous admin page exposed private data`);
   if (result.anonymousAdminApiStatus !== 401) failures.push(`${prefix}: anonymous admin API HTTP ${result.anonymousAdminApiStatus}`);
+  if (!result.reducedMotion.preferenceMatched) failures.push(`${prefix}: reduced-motion preference was not applied`);
+  if (result.reducedMotion.scrollBehavior !== "auto") failures.push(`${prefix}: reduced-motion did not disable smooth scrolling`);
+  if (result.reducedMotion.spinnerDurationSeconds > 0.00001 || result.reducedMotion.spinnerIterations !== "1") {
+    failures.push(`${prefix}: reduced-motion did not suppress spinner animation`);
+  }
+  if (result.reducedMotion.liveIndicatorDurationSeconds > 0.00001 || result.reducedMotion.liveIndicatorIterations !== "1") {
+    failures.push(`${prefix}: reduced-motion did not suppress live indicator animation`);
+  }
+  if (result.reducedMotion.matchCardTransitionSeconds > 0.00001) {
+    failures.push(`${prefix}: reduced-motion did not suppress match-card transitions`);
+  }
   failures.push(...result.errors.map((error) => `${prefix}: ${error}`));
   failures.push(...result.criticalRequestFailures.map((error) => `${prefix}: ${error}`));
 }
