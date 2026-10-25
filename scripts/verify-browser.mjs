@@ -154,11 +154,80 @@ for (const profile of [
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
+  const submitButtonContrast = await page.evaluate(async () => {
+    const originalTheme = document.documentElement.dataset.theme;
+    const ratios = {};
+    const luminance = (color) => {
+      const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+      if (!channels || channels.length !== 3) return null;
+      const [red, green, blue] = channels.map((channel) => {
+        const value = channel / 255;
+        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    };
+
+    for (const theme of ["dark", "light"]) {
+      document.documentElement.dataset.theme = theme;
+      await new Promise(requestAnimationFrame);
+      const button = document.querySelector('button[type="submit"]');
+      if (!button) {
+        ratios[theme] = 0;
+        continue;
+      }
+      const styles = getComputedStyle(button);
+      const foreground = luminance(styles.color);
+      const background = luminance(styles.backgroundColor);
+      ratios[theme] = foreground === null || background === null
+        ? 0
+        : (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
+    }
+
+    if (originalTheme) document.documentElement.dataset.theme = originalTheme;
+    else delete document.documentElement.dataset.theme;
+    return ratios;
+  });
   const adminResponse = await page.goto(`${baseUrl}/admin`, {
     waitUntil: "networkidle",
     timeout: 120_000,
   });
   const adminBody = await page.locator("body").innerText();
+  const adminSectionIndexContrast = await page.evaluate(async () => {
+    const originalTheme = document.documentElement.dataset.theme;
+    const ratios = {};
+    const luminance = (color) => {
+      const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+      if (!channels || channels.length !== 3) return null;
+      const [red, green, blue] = channels.map((channel) => {
+        const value = channel / 255;
+        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    };
+
+    for (const theme of ["dark", "light"]) {
+      document.documentElement.dataset.theme = theme;
+      await new Promise(requestAnimationFrame);
+      await new Promise(requestAnimationFrame);
+      const label = document.querySelector(".section-index");
+      if (!label) {
+        ratios[theme] = 0;
+        continue;
+      }
+      const styles = getComputedStyle(label);
+      const foreground = luminance(styles.color);
+      const background = luminance(styles.backgroundColor === "rgba(0, 0, 0, 0)"
+        ? getComputedStyle(document.body).backgroundColor
+        : styles.backgroundColor);
+      ratios[theme] = foreground === null || background === null
+        ? 0
+        : (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
+    }
+
+    if (originalTheme) document.documentElement.dataset.theme = originalTheme;
+    else delete document.documentElement.dataset.theme;
+    return ratios;
+  });
   const adminLegacyResponse = await context.request.post(
     `${baseUrl}/api/admin/legacy-import`,
     { failOnStatusCode: false },
@@ -208,6 +277,8 @@ for (const profile of [
     optionalResourceFailureSamples: optionalResourceFailures.slice(0, 5),
     browserResourceWarningCount: browserResourceWarnings.length,
     submitFields,
+    submitButtonContrast,
+    adminSectionIndexContrast,
     anonymousAdminStatus: adminResponse?.status() ?? null,
     anonymousAdminAtLogin: new URL(page.url()).pathname === "/admin/login",
     anonymousAdminContainsPrivateData:
@@ -243,6 +314,12 @@ for (const result of results) {
   if (!result.versionMatchesHomepage) failures.push(`${prefix}: homepage/version commit mismatch`);
   if (!result.healthVersionMatches) failures.push(`${prefix}: health/version commit mismatch`);
   if (result.submitFields < 6) failures.push(`${prefix}: submission form incomplete`);
+  for (const [theme, contrast] of Object.entries(result.submitButtonContrast)) {
+    if (contrast < 4.5) failures.push(`${prefix}: submit button ${theme} contrast ${contrast.toFixed(2)}:1`);
+  }
+  for (const [theme, contrast] of Object.entries(result.adminSectionIndexContrast)) {
+    if (contrast < 4.5) failures.push(`${prefix}: admin section label ${theme} contrast ${contrast.toFixed(2)}:1`);
+  }
   if (result.anonymousAdminStatus !== 200) failures.push(`${prefix}: admin login HTTP ${result.anonymousAdminStatus}`);
   if (!result.anonymousAdminAtLogin) failures.push(`${prefix}: anonymous admin page was not redirected to login`);
   if (result.anonymousAdminContainsPrivateData) failures.push(`${prefix}: anonymous admin page exposed private data`);
