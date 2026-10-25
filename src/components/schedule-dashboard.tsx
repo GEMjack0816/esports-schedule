@@ -264,7 +264,13 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           <button className="theme-button" type="button" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}>
             <span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
           </button>
-          <button className="refresh-button" type="button" onClick={refreshSchedule} disabled={refreshing}>
+          <button
+            className="refresh-button"
+            type="button"
+            onClick={refreshSchedule}
+            disabled={refreshing}
+            aria-label="刷新赛程"
+          >
             <svg className={refreshing ? "is-spinning" : ""} viewBox="0 0 18 18" aria-hidden="true"><path d="M14.6 6.5A6 6 0 1 0 15 10M14.6 3.5v3h-3" /></svg>
             <span>{refreshing ? "更新中" : "刷新"}</span>
           </button>
@@ -355,3 +361,4 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     </div>
   );
 }
+
