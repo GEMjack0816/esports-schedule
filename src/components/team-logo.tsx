@@ -1,14 +1,14 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   displayedTeamLogoSource,
+  recoverTeamLogo,
   startTeamLogoLoadTimeout,
+  TEAM_LOGO_PLACEHOLDER,
   type TeamLogoLoadStatus,
 } from "@/lib/schedule/logo-load-timeout";
-
-const PLACEHOLDER_LOGO = "/team-placeholder.svg";
 
 const nearViewportCallbacks = new WeakMap<Element, () => void>();
 let nearViewportObserver: IntersectionObserver | null = null;
@@ -38,11 +38,26 @@ function observeNearViewport(element: Element, callback: () => void): () => void
 }
 
 export function TeamLogo({ src }: { src: string }) {
-  const source = src.trim() || PLACEHOLDER_LOGO;
+  const source = src.trim() || TEAM_LOGO_PLACEHOLDER;
   const imageRef = useRef<HTMLImageElement>(null);
   const [nearViewport, setNearViewport] = useState(false);
   const [status, setStatus] = useState<TeamLogoLoadStatus>("loading");
-  const displayedSource = displayedTeamLogoSource(source, PLACEHOLDER_LOGO, nearViewport, status);
+  const [retrySource, setRetrySource] = useState<string | null>(null);
+  const [alreadyRetried, setAlreadyRetried] = useState(false);
+  const requestVersion = useRef(0);
+  const activeSource = retrySource ?? source;
+  const displayedSource = displayedTeamLogoSource(activeSource, TEAM_LOGO_PLACEHOLDER, nearViewport, status);
+
+  const recoverCurrentRequest = useCallback(() => {
+    requestVersion.current += 1;
+    const recovery = recoverTeamLogo(source, alreadyRetried);
+    if (recovery.kind === "retry") {
+      setAlreadyRetried(true);
+      setRetrySource(recovery.src);
+      return;
+    }
+    setStatus("failed");
+  }, [alreadyRetried, source]);
 
   useEffect(() => {
     const image = imageRef.current;
@@ -51,24 +66,34 @@ export function TeamLogo({ src }: { src: string }) {
   }, []);
 
   useEffect(() => {
-    if (!nearViewport || status !== "loading" || source === PLACEHOLDER_LOGO) return;
-    return startTeamLogoLoadTimeout(() => setStatus("failed"));
-  }, [nearViewport, source, status]);
+    if (!nearViewport || status !== "loading" || activeSource === TEAM_LOGO_PLACEHOLDER) return;
+    const version = ++requestVersion.current;
+    return startTeamLogoLoadTimeout(() => {
+      if (requestVersion.current === version) recoverCurrentRequest();
+    });
+  }, [activeSource, nearViewport, recoverCurrentRequest, status]);
 
   return (
     <Image
       ref={imageRef}
+      key={displayedSource}
       src={displayedSource}
       alt=""
       width={28}
       height={28}
       unoptimized
       onLoad={() => {
-        if (displayedSource === source) setStatus("loaded");
+        if (displayedSource === activeSource) {
+          requestVersion.current += 1;
+          setStatus("loaded");
+        }
       }}
       onError={() => {
-        if (displayedSource === source && source !== PLACEHOLDER_LOGO) setStatus("failed");
+        if (displayedSource === activeSource && activeSource !== TEAM_LOGO_PLACEHOLDER) {
+          recoverCurrentRequest();
+        }
       }}
     />
   );
 }
+
