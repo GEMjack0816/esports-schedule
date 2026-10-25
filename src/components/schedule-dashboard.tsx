@@ -4,6 +4,9 @@ import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
+import { getScheduleEmptyState } from "@/lib/schedule/empty-state";
+import { isSchedulePayload } from "@/lib/schedule/payload-guard";
+import { fetchScheduleRefresh, getScheduleRefreshErrorMessage } from "@/lib/schedule/refresh-request";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -158,6 +161,8 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [query, setQuery] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshNotice, setRefreshNotice] = useState<string | null>(null);
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
@@ -230,9 +235,29 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
 
   async function refreshSchedule() {
     setRefreshing(true);
+    setRefreshError(null);
+    setRefreshNotice(null);
     try {
-      const response = await fetch("/api/matches", { cache: "no-store" });
-      if (response.ok) setPayload((await response.json()) as SchedulePayload);
+      const refreshResult = await fetchScheduleRefresh();
+      const response = refreshResult.response;
+      if (!response.ok) {
+        setRefreshError("暂时无法重新获取赛程，请稍后重试。");
+        return;
+      }
+      const refreshedPayload: unknown = await response.json();
+      if (!isSchedulePayload(refreshedPayload)) {
+        setRefreshError("赛程响应格式无效，已保留当前赛程，请稍后重试。");
+        return;
+      }
+      setPayload(refreshedPayload);
+      if (refreshResult.backgroundRefresh === "started") {
+        setRefreshNotice("已请求后台刷新；当前仍显示上次可用的赛程数据。");
+      } else if (refreshResult.backgroundRefresh === "completed" && refreshedPayload.mode === "unavailable") {
+        setRefreshNotice("后台检查已完成，但暂时仍没有可用的真实赛程；请稍后重试。");
+      }
+    } catch (error) {
+      // Keep the last usable payload and expose a safe, generic retry message.
+      setRefreshError(getScheduleRefreshErrorMessage(error));
     } finally {
       setRefreshing(false);
     }
@@ -248,6 +273,10 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     localStorage.setItem("schedule-theme", nextTheme);
     window.dispatchEvent(new Event("schedule-theme-change"));
   }
+
+  const emptyState = grouped.length === 0
+    ? getScheduleEmptyState(payload.mode, payload.matches.length)
+    : null;
 
   return (
     <div className="site-shell">
@@ -296,6 +325,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           </div>
 
           {payload.warning && <div className="data-notice" role="status"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" /><path d="M10 6.5v4.2M10 13.7h.01" /></svg><span>{payload.warning}</span></div>}
+          {(refreshError || refreshNotice) && <div className="data-notice" role="status"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" /><path d="M10 6.5v4.2M10 13.7h.01" /></svg><span>{refreshError || refreshNotice}</span></div>}
 
           <div className="data-summary" aria-label="数据覆盖信息">
             <span>源快照时间 <strong>{formatDateTime(payload.coverage.sourceFetchedAt, timeZone)}</strong></span>
@@ -341,7 +371,14 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
                 {matches.map((match) => <MatchCard match={match} timeZone={timeZone} key={match.id} />)}
               </section>
             )) : (
-              <div className="empty-state"><span className="empty-glyph">⌁</span><h3>没有找到符合条件的比赛</h3><p>试试切换时间范围，或清除部分筛选条件。</p><button type="button" onClick={resetFilters}>清除筛选</button></div>
+              <div className="empty-state">
+                <span className="empty-glyph">⌁</span>
+                <h3>{emptyState?.title}</h3>
+                <p>{emptyState?.description}</p>
+                {emptyState?.kind === "unavailable"
+                  ? <button type="button" onClick={refreshSchedule} disabled={refreshing}>{refreshing ? "重新检查中" : "重新检查赛程"}</button>
+                  : <button type="button" onClick={resetFilters}>清除筛选</button>}
+              </div>
             )}
           </div>
         </section>
