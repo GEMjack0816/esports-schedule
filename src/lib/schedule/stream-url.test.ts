@@ -204,6 +204,9 @@ describe("public external URL sanitization", () => {
 
   it("rejects inline authorization headers and JWTs embedded in ordinary parameter values", () => {
     const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.c2lnbmF0dXJl";
+    const encodedJwt = [...jwt]
+      .map((character) => `%${character.charCodeAt(0).toString(16).padStart(2, "0")}`)
+      .join("");
     expect(sanitizePublicExternalUrl(
       `https://stream.example/watch?message=${encodeURIComponent("Authorization: Bearer opaque-private-token-value")}`,
     )).toBeNull();
@@ -215,6 +218,8 @@ describe("public external URL sanitization", () => {
     )).toBeNull();
     expect(sanitizePublicExternalUrl(`https://stream.example/watch#${jwt}`)).toBeNull();
     expect(sanitizePublicExternalUrl(`https://stream.example/watch?${jwt}`)).toBeNull();
+    expect(sanitizePublicExternalUrl(`https://stream.example/watch#${encodedJwt}`)).toBeNull();
+    expect(sanitizePublicExternalUrl(`https://stream.example/watch?${encodedJwt}`)).toBeNull();
     expect(sanitizePublicExternalUrl("https://stream.example/watch?caption=Bearer%20Grylls"))
       .not.toBeNull();
   });
