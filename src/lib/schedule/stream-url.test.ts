@@ -203,7 +203,7 @@ describe("public external URL sanitization", () => {
   });
 
   it("rejects inline authorization headers and JWTs embedded in ordinary parameter values", () => {
-    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.signature";
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.c2lnbmF0dXJl";
     expect(sanitizePublicExternalUrl(
       `https://stream.example/watch?message=${encodeURIComponent("Authorization: Bearer opaque-private-token-value")}`,
     )).toBeNull();
@@ -213,6 +213,8 @@ describe("public external URL sanitization", () => {
     expect(sanitizePublicExternalUrl(
       `https://stream.example/watch?data=${encodeURIComponent(jwt)}`,
     )).toBeNull();
+    expect(sanitizePublicExternalUrl(`https://stream.example/watch#${jwt}`)).toBeNull();
+    expect(sanitizePublicExternalUrl(`https://stream.example/watch?${jwt}`)).toBeNull();
     expect(sanitizePublicExternalUrl("https://stream.example/watch?caption=Bearer%20Grylls"))
       .not.toBeNull();
   });
@@ -275,3 +277,4 @@ describe("public external URL sanitization", () => {
       .toBe("/team-placeholder.svg");
   });
 });
+
