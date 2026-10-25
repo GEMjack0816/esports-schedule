@@ -830,6 +830,10 @@ export class DrizzleReviewRepository {
             ${`${MANUAL_MATCH_STATUS_STATEMENT_TIMEOUT_MS}ms`},
             true
           )`);
+          // Sequence reservations are visible before their transaction commits.
+          // Share the mutation lock so this watermark and pending-outbox count
+          // describe a committed mutation boundary without serializing readers.
+          await tx.execute(sql`select pg_advisory_xact_lock_shared(${MANUAL_MATCH_MUTATION_LOCK})`);
           const [row] = await tx.execute(sql`
             select
               (select case when is_called then last_value else 0 end

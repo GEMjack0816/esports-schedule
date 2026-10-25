@@ -687,6 +687,38 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect(nextStatus.revision).toBe(nextRevision);
   });
 
+  it("does not expose a sequence revision before its mutation transaction commits", async () => {
+    const input = submission(`cache-status-uncommitted-${randomUUID()}`);
+    let signalFenceReached!: () => void;
+    const fenceReached = new Promise<void>((resolve) => { signalFenceReached = resolve; });
+    let releaseFence!: () => void;
+    const fenceReleased = new Promise<void>((resolve) => { releaseFence = resolve; });
+    let reservedRevision = 0;
+    const matchWrite = repository.createManualMatch(published(input), "admin-a", async (revision) => {
+      reservedRevision = revision;
+      signalFenceReached();
+      await fenceReleased;
+    });
+
+    await fenceReached;
+    let statusSettled = false;
+    const statusRead = repository.getManualMatchCacheStatus().finally(() => { statusSettled = true; });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // The sequence value is non-transactional and already visible, but the
+      // outbox row and match are not committed. A shared advisory lock makes
+      // the status read wait for this transaction boundary.
+      expect(statusSettled).toBe(false);
+    } finally {
+      releaseFence();
+    }
+
+    const [match, status] = await Promise.all([matchWrite, statusRead]);
+    manualMatchIds.push(match.id);
+    expect(status.revision).toBe(reservedRevision);
+    expect(status.pendingRevisions).toBe(1);
+  });
+
   it("cancels a blocked cache-status statement at the PostgreSQL timeout", async () => {
     let signalLockAcquired!: () => void;
     const lockAcquired = new Promise<void>((resolve) => { signalLockAcquired = resolve; });
