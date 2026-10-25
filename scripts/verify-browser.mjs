@@ -154,6 +154,47 @@ for (const profile of [
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
+  let submissionTimeout = { status: "not-run" };
+  if (profile.name === "desktop") {
+    await page.evaluate(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = (input, init) => {
+        const requestUrl = typeof input === "string"
+          ? input
+          : input instanceof URL ? input.href : input.url;
+        if (new URL(requestUrl, window.location.href).pathname !== "/api/submissions") {
+          return originalFetch(input, init);
+        }
+
+        const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+        return new Promise((_, reject) => {
+          if (!signal) {
+            reject(new Error("submission timeout test expected an abort signal"));
+            return;
+          }
+          const rejectOnAbort = () => reject(new DOMException("request aborted", "AbortError"));
+          if (signal.aborted) rejectOnAbort();
+          else signal.addEventListener("abort", rejectOnAbort, { once: true });
+        });
+      };
+    });
+
+    await page.locator('input[name="league"]').fill("Browser timeout verification");
+    await page.locator('input[name="teamA"]').fill("Team Alpha");
+    await page.locator('input[name="teamB"]').fill("Team Beta");
+    await page.locator('input[name="scheduledAt"]').fill("2026-10-26T12:00");
+    await page.locator('input[name="sourceUrl"]').fill("https://example.com/match");
+    await page.getByRole("button", { name: "提交审核" }).click();
+    await page.locator(".submit-message.error").waitFor({ state: "visible", timeout: 20_000 });
+    const timeoutMessage = await page.locator(".submit-message.error").innerText();
+    const submitButtonReenabled = await page.locator('button[type="submit"]').isEnabled();
+    submissionTimeout = {
+      status: "completed",
+      messageIsActionable: timeoutMessage.includes("服务器可能已经收到请求")
+        && timeoutMessage.includes("重复比赛会被系统拦截"),
+      submitButtonReenabled,
+    };
+  }
   const adminResponse = await page.goto(`${baseUrl}/admin`, {
     waitUntil: "networkidle",
     timeout: 120_000,
@@ -208,6 +249,7 @@ for (const profile of [
     optionalResourceFailureSamples: optionalResourceFailures.slice(0, 5),
     browserResourceWarningCount: browserResourceWarnings.length,
     submitFields,
+    submissionTimeout,
     anonymousAdminStatus: adminResponse?.status() ?? null,
     anonymousAdminAtLogin: new URL(page.url()).pathname === "/admin/login",
     anonymousAdminContainsPrivateData:
@@ -243,6 +285,15 @@ for (const result of results) {
   if (!result.versionMatchesHomepage) failures.push(`${prefix}: homepage/version commit mismatch`);
   if (!result.healthVersionMatches) failures.push(`${prefix}: health/version commit mismatch`);
   if (result.submitFields < 6) failures.push(`${prefix}: submission form incomplete`);
+  if (prefix === "desktop" && result.submissionTimeout.status !== "completed") {
+    failures.push(`${prefix}: submission timeout was not exercised`);
+  }
+  if (prefix === "desktop" && !result.submissionTimeout.messageIsActionable) {
+    failures.push(`${prefix}: submission timeout message is missing recovery guidance`);
+  }
+  if (prefix === "desktop" && !result.submissionTimeout.submitButtonReenabled) {
+    failures.push(`${prefix}: submit button remained disabled after timeout`);
+  }
   if (result.anonymousAdminStatus !== 200) failures.push(`${prefix}: admin login HTTP ${result.anonymousAdminStatus}`);
   if (!result.anonymousAdminAtLogin) failures.push(`${prefix}: anonymous admin page was not redirected to login`);
   if (result.anonymousAdminContainsPrivateData) failures.push(`${prefix}: anonymous admin page exposed private data`);
@@ -256,3 +307,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log("Browser verification passed.");
+
