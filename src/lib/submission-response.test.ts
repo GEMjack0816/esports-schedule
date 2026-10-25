@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   readSubmissionResult,
+  postPublicSubmission,
   SUBMISSION_UNAVAILABLE_MESSAGE,
+  SUBMISSION_TIMEOUT_MESSAGE,
   submissionErrorMessage,
 } from "./submission-response";
 
@@ -51,5 +53,33 @@ describe("public submission response handling", () => {
     await expect(readSubmissionResult(response)).rejects.toThrow(SUBMISSION_UNAVAILABLE_MESSAGE);
     expect(submissionErrorMessage(new SyntaxError("Unexpected token <"))).toBe(SUBMISSION_UNAVAILABLE_MESSAGE);
     expect(submissionErrorMessage(new TypeError("fetch failed: internal host"))).toBe(SUBMISSION_UNAVAILABLE_MESSAGE);
+  });
+
+  it("aborts a submission that stalls before response headers", async () => {
+    const fetcher: typeof fetch = (_input, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener(
+        "abort",
+        () => reject(new DOMException("request aborted", "AbortError")),
+        { once: true },
+      );
+    });
+
+    await expect(postPublicSubmission({ game: "lol" }, fetcher, 10))
+      .rejects.toMatchObject({ message: SUBMISSION_TIMEOUT_MESSAGE });
+  });
+
+  it("bounds response-body parsing and explains that a timed-out submission may have arrived", async () => {
+    const fetcher: typeof fetch = async (_input, init) => new Response(new ReadableStream({
+      start(controller) {
+        init?.signal?.addEventListener(
+          "abort",
+          () => controller.error(new DOMException("response body aborted", "AbortError")),
+          { once: true },
+        );
+      },
+    }), { headers: { "content-type": "application/json" } });
+
+    await expect(postPublicSubmission({ game: "lol" }, fetcher, 10))
+      .rejects.toMatchObject({ message: SUBMISSION_TIMEOUT_MESSAGE });
   });
 });

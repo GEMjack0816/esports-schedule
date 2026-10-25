@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import type { FormEvent } from "react";
 import {
-  readSubmissionResult,
+  postPublicSubmission,
   submissionErrorMessage,
 } from "@/lib/submission-response";
 
@@ -23,22 +23,17 @@ export function SubmitMatchForm() {
 
     try {
       const localTime = String(values.get("scheduledAt") || "");
-      const response = await fetch("/api/submissions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          game: values.get("game"),
-          league: values.get("league"),
-          teamA: values.get("teamA"),
-          teamB: values.get("teamB"),
-          scheduledAt: new Date(localTime).toISOString(),
-          bestOf: values.get("bestOf") ? Number(values.get("bestOf")) : null,
-          sourceUrl: values.get("sourceUrl"),
-          notes: values.get("notes"),
-          website: values.get("website"),
-        }),
+      const result = await postPublicSubmission({
+        game: values.get("game"),
+        league: values.get("league"),
+        teamA: values.get("teamA"),
+        teamB: values.get("teamB"),
+        scheduledAt: new Date(localTime).toISOString(),
+        bestOf: values.get("bestOf") ? Number(values.get("bestOf")) : null,
+        sourceUrl: values.get("sourceUrl"),
+        notes: values.get("notes"),
+        website: values.get("website"),
       });
-      const result = await readSubmissionResult(response);
       setState({ kind: "success", message: result.message || "已保存为待审核。" });
       form.reset();
     } catch (error) {
