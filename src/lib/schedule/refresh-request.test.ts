@@ -160,4 +160,41 @@ describe("fetchScheduleRefresh", () => {
     });
     expect(fetcher).toHaveBeenCalledOnce();
   });
+
+  it("bounds first-snapshot polling by the same refresh deadline", async () => {
+    vi.useFakeTimers();
+    const initialResponse = new Response(JSON.stringify({
+      mode: "unavailable",
+      stale: true,
+      matches: [],
+      coverage: {
+        refreshInProgress: false,
+        lastAttemptAt: null,
+        sourceFetchedAt: null,
+      },
+    }), {
+      status: 200,
+      headers: { "x-schedule-refresh-scheduled": "true" },
+    });
+    const inProgressResponse = new Response(JSON.stringify({
+      mode: "unavailable",
+      stale: true,
+      refreshInProgress: true,
+      lastAttemptAt: "2026-10-25T10:00:01.000Z",
+      sourceFetchedAt: null,
+    }));
+    const fetcherMock = vi.fn(async (input: RequestInfo | URL) =>
+      String(input) === "/api/matches" ? initialResponse : inProgressResponse);
+    const fetcher = fetcherMock as unknown as typeof fetch;
+
+    const request = fetchScheduleRefresh(fetcher);
+    const rejection = expect(request).rejects.toBeInstanceOf(ScheduleRefreshTimeoutError);
+    await vi.advanceTimersByTimeAsync(SCHEDULE_REFRESH_TIMEOUT_MS);
+    await rejection;
+
+    expect(fetcherMock.mock.calls.filter(([input]) => String(input) === "/api/health/data-coverage").length)
+      .toBeGreaterThan(0);
+    expect(fetcherMock.mock.calls.filter(([input]) => String(input) === "/api/health/data-coverage").length)
+      .toBeLessThan(SCHEDULE_REFRESH_TIMEOUT_MS / 1_000);
+  });
 });
