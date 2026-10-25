@@ -16,7 +16,7 @@ export function isMatchInScheduleRange(
   if (range === "today") return dateKey === today;
   if (range === "tomorrow") return dateKey === tomorrow;
   if (range === "seven") return dateKey >= today && dateKey <= sevenDaysOut;
-  return dateKey < today;
+  return dateKey !== "unscheduled" && dateKey < today;
 }
 
 /** A manually selected Today date still includes active matches with missing or earlier local dates. */

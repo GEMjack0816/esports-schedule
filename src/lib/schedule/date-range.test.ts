@@ -18,6 +18,13 @@ describe("isMatchInScheduleRange", () => {
     expect(isMatchInScheduleRange("scheduled", "unscheduled", "today", today, tomorrow, sevenDaysOut)).toBe(false);
   });
 
+  it("does not classify undated non-running matches as historical fixtures", () => {
+    for (const status of ["scheduled", "finished", "unknown"] as const) {
+      expect(isMatchInScheduleRange(status, "unscheduled", "history", today, tomorrow, sevenDaysOut)).toBe(false);
+    }
+    expect(isMatchInScheduleRange("scheduled", "unscheduled", "all", today, tomorrow, sevenDaysOut)).toBe(true);
+  });
+
   it("does not leak live matches into tomorrow, seven-day, or history ranges", () => {
     expect(isMatchInScheduleRange("running", "unscheduled", "tomorrow", today, tomorrow, sevenDaysOut)).toBe(false);
     expect(isMatchInScheduleRange("running", "unscheduled", "seven", today, tomorrow, sevenDaysOut)).toBe(false);
