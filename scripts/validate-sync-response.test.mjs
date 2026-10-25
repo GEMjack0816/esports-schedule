@@ -17,6 +17,7 @@ const success = {
   gamesSucceeded: 5,
   gamesFailed: 0,
   snapshotsPersisted: 5,
+  errors: [],
   lastSuccessfulSyncAt: "2026-08-30T00:00:00.000Z",
 };
 
@@ -74,6 +75,15 @@ describe("sync workflow response validation", () => {
       gamesSucceeded: 4,
       gamesFailed: 1,
       snapshotsPersisted: 4,
+      errors: [{ game: "cs2", code: "UPSTREAM_ERROR" }],
+    }, 200).ok).toBe(true);
+  });
+
+  it("accepts partial status when all snapshots persisted but Runtime Cache had a delivery error", () => {
+    expect(validateSyncResponse({
+      ...success,
+      status: "partial",
+      errors: [{ game: "cs2", code: "CACHE_WRITE" }],
     }, 200).ok).toBe(true);
   });
 
@@ -93,11 +103,12 @@ describe("sync workflow response validation", () => {
 
   it.each([
     { status: "success", gamesSucceeded: 4, gamesFailed: 1, snapshotsPersisted: 4 },
-    { status: "partial", gamesSucceeded: 5, gamesFailed: 0, snapshotsPersisted: 5 },
+    { status: "success", gamesSucceeded: 5, gamesFailed: 0, snapshotsPersisted: 5, errors: [{ code: "CACHE_WRITE" }] },
+    { status: "partial", gamesSucceeded: 5, gamesFailed: 0, snapshotsPersisted: 5, errors: [] },
   ])("rejects a logical status inconsistent with the game outcomes: %o", (counts) => {
     expect(validateSyncResponse({ ...success, ...counts }, 200)).toEqual({
       ok: false,
-      message: "sync logical status does not match game outcome counts",
+      message: "sync logical status does not match outcome details",
     });
   });
 
