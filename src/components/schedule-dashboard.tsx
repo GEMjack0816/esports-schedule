@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
+import { saveThemePreference } from "@/lib/theme-preference";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -245,8 +246,9 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   function toggleTheme() {
     const nextTheme: Theme = theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = nextTheme;
-    localStorage.setItem("schedule-theme", nextTheme);
-    window.dispatchEvent(new Event("schedule-theme-change"));
+    saveThemePreference(nextTheme, () => window.localStorage, () => {
+      window.dispatchEvent(new Event("schedule-theme-change"));
+    });
   }
 
   return (
