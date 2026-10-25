@@ -80,6 +80,8 @@ for (const profile of [
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+  const refreshButton = page.getByRole('button', { name: '刷新赛程' });
+  const refreshButtonAccessibleName = await refreshButton.getAttribute('aria-label');
 
   const gameFilterCounts = {};
   const statusFilterCounts = {};
@@ -102,7 +104,7 @@ for (const profile of [
     (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
     { timeout: 120_000 },
   );
-  await page.locator(".refresh-button").click();
+  await refreshButton.click();
   const apiResponse = await apiResponsePromise;
   let apiBody;
   let apiBodyReadFallback = false;
@@ -181,6 +183,7 @@ for (const profile of [
     forbiddenHtmlPhrases: ["演示数据模式", "PandaScore Token 尚未配置", "当前展示演示赛程与王者荣耀人工数据"]
       .filter((phrase) => html.includes(phrase)),
     syncStatusCards,
+    refreshButtonAccessibleName,
     gameOptions,
     gameFilterCounts,
     statusFilterCounts,
@@ -234,6 +237,7 @@ for (const result of results) {
   if (result.forbiddenVisiblePhrases.length > 0) failures.push(`${prefix}: visible demo text`);
   if (result.forbiddenHtmlPhrases.length > 0) failures.push(`${prefix}: demo text in HTML`);
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
+  if (result.refreshButtonAccessibleName !== "刷新赛程") failures.push(`${prefix}: refresh button has no accessible name`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
@@ -256,3 +260,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log("Browser verification passed.");
+
