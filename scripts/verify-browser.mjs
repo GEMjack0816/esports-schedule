@@ -24,6 +24,7 @@ const results = [];
 for (const profile of [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile-390", width: 390, height: 844 },
+  { name: "mobile-320", width: 320, height: 740 },
 ]) {
   const context = await browser.newContext({
     viewport: { width: profile.width, height: profile.height },
@@ -75,6 +76,19 @@ for (const profile of [
   const bodyText = await page.locator("body").innerText();
   const html = await page.content();
   const homepageCommit = await page.locator("#esports-schedule-version").getAttribute("data-git-commit");
+  const rangeTabsLayout = await page.locator(".range-tabs").evaluate((container) => {
+    const bounds = container.getBoundingClientRect();
+    const tabs = Array.from(container.querySelectorAll('[role="tab"]'));
+    return {
+      count: tabs.length,
+      fullyVisible: tabs.every((tab) => {
+        const rect = tab.getBoundingClientRect();
+        return rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1;
+      }),
+      scrollWidth: container.scrollWidth,
+      clientWidth: container.clientWidth,
+    };
+  });
   const gameOptions = await page.locator('.filter-panel select').first().locator('option').count();
   const syncStatusCards = await page.locator('.sync-status-card').count();
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -181,6 +195,7 @@ for (const profile of [
     forbiddenHtmlPhrases: ["演示数据模式", "PandaScore Token 尚未配置", "当前展示演示赛程与王者荣耀人工数据"]
       .filter((phrase) => html.includes(phrase)),
     syncStatusCards,
+    rangeTabsLayout,
     gameOptions,
     gameFilterCounts,
     statusFilterCounts,
@@ -234,6 +249,9 @@ for (const result of results) {
   if (result.forbiddenVisiblePhrases.length > 0) failures.push(`${prefix}: visible demo text`);
   if (result.forbiddenHtmlPhrases.length > 0) failures.push(`${prefix}: demo text in HTML`);
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
+  if (result.rangeTabsLayout.count !== 5 || !result.rangeTabsLayout.fullyVisible) {
+    failures.push(`${prefix}: schedule range tabs are clipped or incomplete`);
+  }
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
