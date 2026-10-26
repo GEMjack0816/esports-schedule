@@ -152,6 +152,12 @@ export function validateScheduleFreshness(
       const error = timestampAgeError(`${game} ${field}`, value, now, maxAgeSeconds);
       if (error) return { ok: false, message: error };
     }
+    if (Date.parse(coverage.lastSuccessfulSyncAt) < Date.parse(coverage.sourceFetchedAt)) {
+      return {
+        ok: false,
+        message: `${game} lastSuccessfulSyncAt is earlier than sourceFetchedAt`,
+      };
+    }
   }
 
   return {

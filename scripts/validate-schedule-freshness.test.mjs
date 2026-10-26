@@ -121,6 +121,20 @@ describe("schedule freshness monitor validation", () => {
       .toContain("valorant lastSuccessfulSyncAt is 960s old");
   });
 
+  it("rejects a per-game success timestamp that predates its source snapshot", () => {
+    const games = health().games;
+    games.cs2 = {
+      ...games.cs2,
+      sourceFetchedAt: new Date(now - 2 * 60_000).toISOString(),
+      lastSuccessfulSyncAt: new Date(now - 3 * 60_000).toISOString(),
+    };
+
+    expect(validateScheduleFreshness(health({ games }), 200, now)).toEqual({
+      ok: false,
+      message: "cs2 lastSuccessfulSyncAt is earlier than sourceFetchedAt",
+    });
+  });
+
   it("rejects per-game failed or delayed sync status", () => {
     const games = health().games;
     games.cs2 = { ...games.cs2, syncStatus: "failed" };
