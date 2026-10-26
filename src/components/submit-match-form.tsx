@@ -107,7 +107,12 @@ export function SubmitMatchForm() {
         <div className="submit-actions submit-wide">
           <button type="submit" disabled={submitting}>{submitting ? "正在保存…" : "提交审核"}</button>
           {state.kind !== "idle" && (
-            <p className={`submit-message ${state.kind}`} role="status">{state.message}</p>
+            <p
+              className={`submit-message ${state.kind}`}
+              role={state.kind === "error" ? "alert" : "status"}
+            >
+              {state.message}
+            </p>
           )}
         </div>
       </form>

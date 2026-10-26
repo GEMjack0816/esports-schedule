@@ -187,11 +187,13 @@ for (const profile of [
     await page.getByRole("button", { name: "提交审核" }).click();
     await page.locator(".submit-message.error").waitFor({ state: "visible", timeout: 20_000 });
     const timeoutMessage = await page.locator(".submit-message.error").innerText();
+    const timeoutMessageRole = await page.locator(".submit-message.error").getAttribute("role");
     const submitButtonReenabled = await page.locator('button[type="submit"]').isEnabled();
     submissionTimeout = {
       status: "completed",
       messageIsActionable: timeoutMessage.includes("服务器可能已经收到请求")
         && timeoutMessage.includes("重复比赛会被系统拦截"),
+      errorIsAssertivelyAnnounced: timeoutMessageRole === "alert",
       submitButtonReenabled,
     };
   }
@@ -290,6 +292,9 @@ for (const result of results) {
   }
   if (prefix === "desktop" && !result.submissionTimeout.messageIsActionable) {
     failures.push(`${prefix}: submission timeout message is missing recovery guidance`);
+  }
+  if (prefix === "desktop" && !result.submissionTimeout.errorIsAssertivelyAnnounced) {
+    failures.push(`${prefix}: submission error is not exposed as an alert`);
   }
   if (prefix === "desktop" && !result.submissionTimeout.submitButtonReenabled) {
     failures.push(`${prefix}: submit button remained disabled after timeout`);
