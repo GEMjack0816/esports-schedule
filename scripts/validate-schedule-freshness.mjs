@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 export const PANDA_GAMES = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"];
 export const DEFAULT_MAX_AGE_SECONDS = 15 * 60;
 export const DEFAULT_MAX_HEALTH_RESPONSE_BYTES = 256 * 1024;
+export const DEFAULT_MAX_HEALTH_RESPONSE_HEADER_BYTES = 16 * 1024;
 
 function escapeMarkdown(value) {
   return value.replace(/[\\`*_{}\[\]()#+.!|<>]/g, "\\$&");
@@ -20,6 +21,47 @@ export function formatFreshnessStepSummary(result) {
   const status = result.ok ? "PASS" : "FAIL";
   const message = sanitizeFreshnessMessage(result.message);
   return `### Schedule freshness: ${status}\n\n${escapeMarkdown(message)}\n`;
+}
+
+function parseFinalResponseHeaders(headersText) {
+  if (typeof headersText !== "string") return null;
+  const blocks = [];
+  let current = null;
+  for (const line of headersText.split(/\r?\n/)) {
+    const statusMatch = line.match(/^HTTP\/\d(?:\.\d)?\s+(\d{3})(?:\s|$)/i);
+    if (statusMatch) {
+      current = { status: Number(statusMatch[1]), headers: new Map() };
+      blocks.push(current);
+      continue;
+    }
+    if (!current) continue;
+    const separator = line.indexOf(":");
+    if (separator <= 0) continue;
+    const name = line.slice(0, separator).trim().toLowerCase();
+    const value = line.slice(separator + 1).trim();
+    if (!name) continue;
+    const values = current.headers.get(name) ?? [];
+    values.push(value);
+    current.headers.set(name, values);
+  }
+  return blocks.at(-1) ?? null;
+}
+
+export function validateNoStoreHealthResponse(headersText, httpStatus) {
+  const block = parseFinalResponseHeaders(headersText);
+  if (!block || block.status !== httpStatus) {
+    return { ok: false, message: "health response headers do not match the final HTTP status" };
+  }
+  const cacheControl = block.headers.get("cache-control")?.join(", ") ?? "";
+  const directives = cacheControl.split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
+  if (!directives.includes("no-store")) {
+    return { ok: false, message: "health response is missing Cache-Control: no-store" };
+  }
+  if (directives.some((directive) =>
+    /^(?:public|max-age|s-maxage|stale-while-revalidate|stale-if-error)(?:\s*=|\s*$)/.test(directive))) {
+    return { ok: false, message: "health response has a contradictory cache policy" };
+  }
+  return { ok: true, message: "health response is explicitly no-store" };
 }
 
 function appendStepSummary(result) {
@@ -119,9 +161,9 @@ export function validateScheduleFreshness(
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const [filePath, rawHttpStatus] = process.argv.slice(2);
-  if (!filePath || !rawHttpStatus) {
-    console.error("freshness validator requires a response file and HTTP status");
+  const [filePath, rawHttpStatus, headersPath] = process.argv.slice(2);
+  if (!filePath || !rawHttpStatus || !headersPath) {
+    console.error("freshness validator requires response and header files plus HTTP status");
     process.exit(2);
   }
   let payload;
@@ -130,8 +172,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const maxResponseBytes = Number(
     process.env.MAX_HEALTH_RESPONSE_BYTES ?? DEFAULT_MAX_HEALTH_RESPONSE_BYTES,
   );
+  const maxResponseHeaderBytes = Number(
+    process.env.MAX_HEALTH_RESPONSE_HEADER_BYTES ?? DEFAULT_MAX_HEALTH_RESPONSE_HEADER_BYTES,
+  );
   if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 1) {
     console.error("freshness validator response size limit must be a positive integer");
+    process.exit(2);
+  }
+  if (!Number.isSafeInteger(maxResponseHeaderBytes) || maxResponseHeaderBytes < 1) {
+    console.error("freshness validator response header size limit must be a positive integer");
     process.exit(2);
   }
   try {
@@ -143,16 +192,35 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   } catch {
     parseError = true;
   }
-  const result = oversized
-    ? { ok: false, message: `health endpoint response exceeds ${maxResponseBytes} bytes` }
-    : parseError
-      ? { ok: false, message: "health endpoint returned unreadable JSON" }
-    : validateScheduleFreshness(
+  let responseHeaders = "";
+  let responseHeadersError = null;
+  try {
+    if (fs.statSync(headersPath).size > maxResponseHeaderBytes) {
+      responseHeadersError = `health endpoint response headers exceed ${maxResponseHeaderBytes} bytes`;
+    } else {
+      responseHeaders = fs.readFileSync(headersPath, "utf8");
+    }
+  } catch {
+    responseHeadersError = "health endpoint response headers are missing or unreadable";
+  }
+  const cachePolicy = responseHeadersError
+    ? { ok: false, message: responseHeadersError }
+    : validateNoStoreHealthResponse(responseHeaders, Number(rawHttpStatus));
+  let result;
+  if (oversized) {
+    result = { ok: false, message: `health endpoint response exceeds ${maxResponseBytes} bytes` };
+  } else if (parseError) {
+    result = { ok: false, message: "health endpoint returned unreadable JSON" };
+  } else if (!cachePolicy.ok) {
+    result = cachePolicy;
+  } else {
+    result = validateScheduleFreshness(
       payload,
       Number(rawHttpStatus),
       Date.now(),
       Number(process.env.MAX_SCHEDULE_AGE_SECONDS ?? DEFAULT_MAX_AGE_SECONDS),
     );
+  }
   console.log(sanitizeFreshnessMessage(result.message));
   appendStepSummary(result);
   if (!result.ok) process.exit(1);

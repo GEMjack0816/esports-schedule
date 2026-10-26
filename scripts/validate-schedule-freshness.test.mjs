@@ -6,9 +6,11 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MAX_AGE_SECONDS,
   DEFAULT_MAX_HEALTH_RESPONSE_BYTES,
+  DEFAULT_MAX_HEALTH_RESPONSE_HEADER_BYTES,
   formatFreshnessStepSummary,
   PANDA_GAMES,
   sanitizeFreshnessMessage,
+  validateNoStoreHealthResponse,
   validateScheduleFreshness,
 } from "./validate-schedule-freshness.mjs";
 
@@ -31,7 +33,34 @@ function health(overrides = {}) {
   };
 }
 
+function headers(status = 200, cacheControl = "no-store, no-cache, must-revalidate") {
+  return `HTTP/2 ${status}\r\ncache-control: ${cacheControl}\r\n\r\n`;
+}
+
 describe("schedule freshness monitor validation", () => {
+  it("requires a matching final response status and an explicit no-store policy", () => {
+    expect(validateNoStoreHealthResponse(headers(), 200)).toEqual({
+      ok: true,
+      message: "health response is explicitly no-store",
+    });
+    expect(validateNoStoreHealthResponse("", 200).ok).toBe(false);
+    expect(validateNoStoreHealthResponse(headers(200, "no-cache"), 200).message)
+      .toBe("health response is missing Cache-Control: no-store");
+    expect(validateNoStoreHealthResponse(headers(200, "no-store, public, max-age=60"), 200).message)
+      .toBe("health response has a contradictory cache policy");
+    expect(validateNoStoreHealthResponse(headers(200), 503).message)
+      .toBe("health response headers do not match the final HTTP status");
+  });
+
+  it("uses the last HTTP header block after interim or retried responses", () => {
+    const responseHeaders = [
+      "HTTP/1.1 100 Continue\r\n\r\n",
+      "HTTP/2 503\r\ncache-control: public, max-age=30\r\n\r\n",
+      "HTTP/2 200\r\ncache-control: no-store, no-cache\r\n\r\n",
+    ].join("");
+    expect(validateNoStoreHealthResponse(responseHeaders, 200).ok).toBe(true);
+  });
+
   it("accepts a live, non-stale schedule with fresh snapshots for all five games", () => {
     expect(validateScheduleFreshness(health(), 200, now)).toEqual({
       ok: true,
@@ -137,6 +166,7 @@ describe("schedule freshness monitor validation", () => {
     const directory = mkdtempSync(join(tmpdir(), "schedule-freshness-pass-"));
     try {
       const responsePath = join(directory, "health.json");
+      const headersPath = join(directory, "headers.txt");
       const summaryPath = join(directory, "summary.md");
       const currentTime = new Date().toISOString();
       const currentHealth = health({
@@ -149,9 +179,10 @@ describe("schedule freshness monitor validation", () => {
         }])),
       });
       writeFileSync(responsePath, JSON.stringify(currentHealth));
+      writeFileSync(headersPath, headers());
       const result = spawnSync(
         process.execPath,
-        [resolve(process.cwd(), "scripts/validate-schedule-freshness.mjs"), responsePath, "200"],
+        [resolve(process.cwd(), "scripts/validate-schedule-freshness.mjs"), responsePath, "200", headersPath],
         { encoding: "utf8", env: { ...process.env, GITHUB_STEP_SUMMARY: summaryPath } },
       );
 
@@ -166,11 +197,13 @@ describe("schedule freshness monitor validation", () => {
     const directory = mkdtempSync(join(tmpdir(), "schedule-freshness-fail-"));
     try {
       const responsePath = join(directory, "health.json");
+      const headersPath = join(directory, "headers.txt");
       const summaryPath = join(directory, "summary.md");
       writeFileSync(responsePath, "{malformed");
+      writeFileSync(headersPath, headers());
       const result = spawnSync(
         process.execPath,
-        [resolve(process.cwd(), "scripts/validate-schedule-freshness.mjs"), responsePath, "200"],
+        [resolve(process.cwd(), "scripts/validate-schedule-freshness.mjs"), responsePath, "200", headersPath],
         { encoding: "utf8", env: { ...process.env, GITHUB_STEP_SUMMARY: summaryPath } },
       );
 
@@ -186,12 +219,14 @@ describe("schedule freshness monitor validation", () => {
     const directory = mkdtempSync(join(tmpdir(), "schedule-freshness-oversize-"));
     try {
       const responsePath = join(directory, "health.json");
+      const headersPath = join(directory, "headers.txt");
       const summaryPath = join(directory, "summary.md");
       const marker = "private-response-marker";
       writeFileSync(responsePath, `${marker}${"x".repeat(DEFAULT_MAX_HEALTH_RESPONSE_BYTES)}`);
+      writeFileSync(headersPath, headers());
       const result = spawnSync(
         process.execPath,
-        [resolve(process.cwd(), "scripts/validate-schedule-freshness.mjs"), responsePath, "200"],
+        [resolve(process.cwd(), "scripts/validate-schedule-freshness.mjs"), responsePath, "200", headersPath],
         {
           encoding: "utf8",
           env: {
@@ -207,6 +242,39 @@ describe("schedule freshness monitor validation", () => {
       expect(result.stdout).not.toContain(marker);
       expect(readFileSync(summaryPath, "utf8")).toContain("### Schedule freshness: FAIL");
       expect(readFileSync(summaryPath, "utf8")).not.toContain(marker);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed for missing or oversized response headers without logging their content", () => {
+    const directory = mkdtempSync(join(tmpdir(), "schedule-freshness-headers-"));
+    try {
+      const responsePath = join(directory, "health.json");
+      const headersPath = join(directory, "headers.txt");
+      writeFileSync(responsePath, JSON.stringify(health()));
+
+      const missingHeaders = spawnSync(
+        process.execPath,
+        [resolve(process.cwd(), "scripts/validate-schedule-freshness.mjs"), responsePath, "200", headersPath],
+        { encoding: "utf8" },
+      );
+      expect(missingHeaders.status).toBe(1);
+      expect(missingHeaders.stdout).toContain("response headers are missing or unreadable");
+
+      const marker = "private-header-marker";
+      writeFileSync(headersPath, `${headers()}${marker.repeat(DEFAULT_MAX_HEALTH_RESPONSE_HEADER_BYTES)}`);
+      const oversizedHeaders = spawnSync(
+        process.execPath,
+        [resolve(process.cwd(), "scripts/validate-schedule-freshness.mjs"), responsePath, "200", headersPath],
+        {
+          encoding: "utf8",
+          env: { ...process.env, MAX_HEALTH_RESPONSE_HEADER_BYTES: "64" },
+        },
+      );
+      expect(oversizedHeaders.status).toBe(1);
+      expect(oversizedHeaders.stdout).toContain("response headers exceed 64 bytes");
+      expect(oversizedHeaders.stdout).not.toContain(marker);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -228,7 +296,10 @@ describe("schedule freshness monitor validation", () => {
     ]);
     expect(workflow).toContain("persist-credentials: false");
     expect(workflow).toContain('MAX_HEALTH_RESPONSE_BYTES: "262144"');
+    expect(workflow).toContain('MAX_HEALTH_RESPONSE_HEADER_BYTES: "16384"');
     expect(workflow).toContain('--max-filesize "$MAX_HEALTH_RESPONSE_BYTES"');
+    expect(workflow).toContain('--dump-header "$headers_file"');
+    expect(workflow).toContain('node scripts/validate-schedule-freshness.mjs "$response_file" "$http_status" "$headers_file"');
     expect(workflow).toContain('workflows: ["Sync esports fixtures"]');
     expect(workflow).toContain("types: [completed]");
     expect(workflow).toContain("branches: [main]");
