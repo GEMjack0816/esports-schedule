@@ -146,6 +146,25 @@ describe("runScheduleSync", () => {
     expect(calls).toEqual([healthUrl, syncUrl, healthUrl]);
   });
 
+  it("reconciles an unreadable 5xx only when health proves a newer fresh snapshot", async () => {
+    const calls = [];
+    const result = await runScheduleSync(makeOptions(async (url) => {
+      calls.push(url);
+      if (url === healthUrl) return calls.length === 1 ? staleHealth() : freshHealth();
+      return new Response("upstream gateway error", {
+        status: 502,
+        headers: { "content-type": "text/html" },
+      });
+    }));
+
+    expect(result).toEqual({
+      ok: true,
+      outcome: "verified_fresh_after_ambiguous_response",
+      lastSuccessfulSyncAt: "2026-10-18T09:59:30.000Z",
+    });
+    expect(calls).toEqual([healthUrl, syncUrl, healthUrl]);
+  });
+
   it("does not accept a globally fresh snapshot when one game's timestamps are stale", async () => {
     const calls = [];
     await expect(runScheduleSync(makeOptions(async (url) => {
