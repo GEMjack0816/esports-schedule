@@ -198,10 +198,27 @@ for (const profile of [
   const searchPageErrors = [];
   searchPage.on('pageerror', (error) => searchPageErrors.push(sanitizeDiagnostic(error.message)));
   await searchPage.goto(auditUrl.toString(), { waitUntil: 'networkidle', timeout: 120_000 });
-  const searchInitialLoadedCount = Number(await searchPage.locator('.schedule-section')
+  let searchInitialLoadedCount = Number(await searchPage.locator('.schedule-section')
     .getAttribute('data-schedule-loaded-count'));
-  const searchInitialTotalCount = Number(await searchPage.locator('.schedule-section')
+  let searchInitialTotalCount = Number(await searchPage.locator('.schedule-section')
     .getAttribute('data-schedule-total-count'));
+  if (searchInitialLoadedCount < searchInitialTotalCount
+    && await searchPage.locator('.team-name').count() === 0) {
+    // An empty active date range can report fewer visible rows than the full
+    // snapshot even though there is no visible team name to use as a query.
+    // Switch to the all-records view so credential-free local runs can still
+    // exercise search using static/manual matches.
+    await searchPage.getByRole('tab', { name: /全部收录/ }).click();
+    await searchPage.waitForFunction(() => {
+      const section = document.querySelector('.schedule-section');
+      return !!section
+        && Number(section.getAttribute('data-schedule-loaded-count')) > 0;
+    }, { timeout: 120_000 });
+    searchInitialLoadedCount = Number(await searchPage.locator('.schedule-section')
+      .getAttribute('data-schedule-loaded-count'));
+    searchInitialTotalCount = Number(await searchPage.locator('.schedule-section')
+      .getAttribute('data-schedule-total-count'));
+  }
   let globalSearchMode = 'empty';
   let globalSearchRequestStatus = null;
   let globalSearchResultCount = 0;
