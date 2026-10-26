@@ -6,10 +6,17 @@ export function normalizeScheduleSearchText(value: string): string {
   return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 }
 
+export function hasEffectiveScheduleSearch(query: string): boolean {
+  return normalizeScheduleSearchText(query.trim()).length > 0;
+}
+
 export function matchesScheduleSearch(query: string, fields: readonly string[]): boolean {
-  const normalizedQuery = normalizeScheduleSearchText(query.trim());
-  return !normalizedQuery
-    || fields.some((field) => normalizeScheduleSearchText(field).includes(normalizedQuery));
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery) return true;
+
+  const normalizedQuery = normalizeScheduleSearchText(trimmedQuery);
+  return normalizedQuery.length > 0
+    && fields.some((field) => normalizeScheduleSearchText(field).includes(normalizedQuery));
 }
 
 /**
@@ -22,7 +29,7 @@ export function requestCompleteScheduleForSearch(
   completeScheduleError: boolean,
   loadCompleteSchedule: () => Promise<boolean>,
 ): boolean {
-  if (completeScheduleLoaded || completeScheduleError || query.trim().length === 0) return false;
+  if (completeScheduleLoaded || completeScheduleError || !hasEffectiveScheduleSearch(query)) return false;
   void loadCompleteSchedule();
   return true;
 }
@@ -42,6 +49,6 @@ export function isMatchInSearchDateScope(
   sevenDaysOut: string,
 ): boolean {
   if (selectedDate) return isMatchOnSelectedDate(status, dateKey, selectedDate, today);
-  if (query.trim()) return true;
+  if (hasEffectiveScheduleSearch(query)) return true;
   return isMatchInScheduleRange(status, dateKey, range, today, tomorrow, sevenDaysOut);
 }
