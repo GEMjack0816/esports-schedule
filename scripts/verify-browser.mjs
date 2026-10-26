@@ -132,6 +132,68 @@ for (const profile of [
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
 
+  const searchPage = await context.newPage();
+  const searchPageErrors = [];
+  searchPage.on('pageerror', (error) => searchPageErrors.push(error.message));
+  await searchPage.goto(auditUrl.toString(), { waitUntil: 'networkidle', timeout: 120_000 });
+  const searchInitialLoadedCount = Number(await searchPage.locator('.schedule-section')
+    .getAttribute('data-schedule-loaded-count'));
+  const searchInitialTotalCount = Number(await searchPage.locator('.schedule-section')
+    .getAttribute('data-schedule-total-count'));
+  let globalSearchMode = 'empty';
+  let globalSearchRequestStatus = null;
+  let globalSearchResultCount = 0;
+  let globalSearchFoundFixture = false;
+  if (searchInitialLoadedCount < searchInitialTotalCount) {
+    globalSearchMode = 'partial';
+    await searchPage.route('**/api/matches', async (route) => {
+      if (route.request().method() !== 'GET') return route.continue();
+      const response = await route.fetch();
+      const body = await response.json();
+      const fixtureName = 'Codex global search fixture';
+      body.matches = body.matches.map((match, index) => ({
+        ...match,
+        startTimeUtc: new Date().toISOString(),
+        status: 'scheduled',
+        homeTeam: index === 0 ? { ...match.homeTeam, name: fixtureName } : match.homeTeam,
+      }));
+      body.coverage.totals.finalWithManual = body.matches.length;
+      await route.fulfill({ response, body: JSON.stringify(body) });
+    });
+    const globalSearchRequest = searchPage.waitForResponse(
+      (candidate) => new URL(candidate.url()).pathname === '/api/matches'
+        && candidate.request().method() === 'GET',
+      { timeout: 120_000 },
+    );
+    await searchPage.locator('.search-field input').fill('Codex global search fixture');
+    const searchResponse = await globalSearchRequest;
+    globalSearchRequestStatus = searchResponse.status();
+    if (!searchResponse.ok()) {
+      throw new Error(`Global search schedule request returned HTTP ${searchResponse.status()}`);
+    }
+    await searchPage.waitForFunction(() => {
+      const section = document.querySelector('.schedule-section');
+      return !!section
+        && Number(section.getAttribute('data-schedule-loaded-count'))
+          >= Number(section.getAttribute('data-schedule-total-count'));
+    }, { timeout: 120_000 });
+    globalSearchResultCount = await searchPage.locator('.match-card').count();
+    globalSearchFoundFixture = (await searchPage.locator('.match-list').innerText())
+      .includes('Codex global search fixture');
+  } else {
+    await searchPage.getByRole('tab', { name: /全部收录/ }).click();
+    const firstTeam = searchPage.locator('.team-name').first();
+    if (await firstTeam.count()) {
+      globalSearchMode = 'complete';
+      const searchTerm = (await firstTeam.innerText()).trim();
+      await searchPage.locator('.search-field input').fill(searchTerm);
+      globalSearchResultCount = await searchPage.locator('.match-card').count();
+      globalSearchFoundFixture = (await searchPage.locator('.match-list').innerText())
+        .includes(searchTerm);
+    }
+  }
+  await searchPage.close();
+
   const gameFilterCounts = {};
   const statusFilterCounts = {};
   const initialScheduleCounts = await page.locator(".schedule-section").evaluate((section) => ({
@@ -318,6 +380,15 @@ for (const profile of [
     gameFilterCounts,
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
+    globalSearchCompleteness: {
+      mode: globalSearchMode,
+      initialLoadedCount: searchInitialLoadedCount,
+      initialTotalCount: searchInitialTotalCount,
+      requestStatus: globalSearchRequestStatus,
+      resultCount: globalSearchResultCount,
+      foundFixture: globalSearchFoundFixture,
+      errors: searchPageErrors,
+    },
     refreshedApiUrl: apiResponse.url(),
     expectedTodayRunningCount,
     todayTabCount,
@@ -379,6 +450,19 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (result.globalSearchCompleteness.initialLoadedCount < result.globalSearchCompleteness.initialTotalCount
+    && result.globalSearchCompleteness.requestStatus !== 200) {
+    failures.push(`${prefix}: global search did not load the complete schedule`);
+  }
+  if (result.globalSearchCompleteness.mode === 'partial'
+    && (!result.globalSearchCompleteness.foundFixture || result.globalSearchCompleteness.resultCount !== 1)) {
+    failures.push(`${prefix}: global search did not find exactly one full-schedule fixture`);
+  }
+  if (result.globalSearchCompleteness.mode === 'complete'
+    && (!result.globalSearchCompleteness.foundFixture || result.globalSearchCompleteness.resultCount < 1)) {
+    failures.push(`${prefix}: search failed on an initially complete schedule`);
+  }
+  failures.push(...result.globalSearchCompleteness.errors.map((error) => `${prefix}: search:${error}`));
   if (result.todayTabCount < result.expectedTodayRunningCount) failures.push(`${prefix}: Today tab count excludes one or more running fixtures`);
   if (result.todayRunningCount < result.expectedTodayRunningCount) failures.push(`${prefix}: Today/Running filter hides an undated or prior-local-day live match`);
   if (result.selectedTodayRunningCount < result.expectedTodayRunningCount) failures.push(`${prefix}: selecting local Today hides an undated or prior-local-day live match`);
