@@ -253,7 +253,25 @@ function getFreshScheduleAgeSeconds(payload, now) {
   if (successfulSyncAgeSeconds < -60 || successfulSyncAgeSeconds > FRESHNESS_LIMIT_SECONDS) {
     return null;
   }
-  if (!PANDA_GAMES.every((game) => payload.games[game]?.syncStatus === "normal")) return null;
+  for (const game of PANDA_GAMES) {
+    const coverage = payload.games[game];
+    if (coverage?.syncStatus !== "normal") return null;
+
+    const gameSourceFetchedAt = parseTimestampWithTimezone(coverage.sourceFetchedAt);
+    const gameLastSuccessfulSyncAt = parseTimestampWithTimezone(coverage.lastSuccessfulSyncAt);
+    if (gameSourceFetchedAt === null || gameLastSuccessfulSyncAt === null
+      || gameLastSuccessfulSyncAt < gameSourceFetchedAt) {
+      return null;
+    }
+
+    const gameSourceAgeSeconds = (now - gameSourceFetchedAt) / 1_000;
+    const gameSuccessfulSyncAgeSeconds = (now - gameLastSuccessfulSyncAt) / 1_000;
+    if (gameSourceAgeSeconds < -60 || gameSourceAgeSeconds > FRESHNESS_LIMIT_SECONDS
+      || gameSuccessfulSyncAgeSeconds < -60
+      || gameSuccessfulSyncAgeSeconds > FRESHNESS_LIMIT_SECONDS) {
+      return null;
+    }
+  }
 
   return payload.snapshotAgeSeconds;
 }

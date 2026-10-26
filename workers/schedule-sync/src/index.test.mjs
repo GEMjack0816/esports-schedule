@@ -3,19 +3,32 @@ import { createScheduleSyncWorker, invokeScheduleSync } from "./index.mjs";
 
 const syncSecret = "test-only-secret-never-logged";
 const healthUrl = "https://esports-schedule-two.vercel.app/api/health/data-coverage";
+const syncUrl = "https://esports-schedule-two.vercel.app/api/cron/sync";
 const pandaGames = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"];
 
 function healthResponse(overrides = {}, status = 200, cacheControl = "no-store, no-cache, must-revalidate") {
+  const sourceFetchedAt = Object.hasOwn(overrides, "sourceFetchedAt")
+    ? overrides.sourceFetchedAt
+    : "2026-10-18T09:55:00.000Z";
+  const lastSuccessfulSyncAt = Object.hasOwn(overrides, "lastSuccessfulSyncAt")
+    ? overrides.lastSuccessfulSyncAt
+    : "2026-10-18T09:55:00.000Z";
+  const games = Object.fromEntries(pandaGames.map((game) => [game, {
+    syncStatus: "normal",
+    sourceFetchedAt,
+    lastSuccessfulSyncAt,
+  }]));
+
   return new Response(JSON.stringify({
     demoMode: false,
     mode: "live",
     stale: false,
     refreshInProgress: false,
     providers: { pandascore: "connected" },
-    sourceFetchedAt: "2026-10-18T09:55:00.000Z",
-    lastSuccessfulSyncAt: "2026-10-18T09:55:00.000Z",
+    sourceFetchedAt,
+    lastSuccessfulSyncAt,
     snapshotAgeSeconds: 300,
-    games: Object.fromEntries(pandaGames.map((game) => [game, { syncStatus: "normal" }])),
+    games,
     ...overrides,
   }), {
     status,
@@ -689,6 +702,55 @@ describe("schedule sync Worker client", () => {
     expect(record).toMatchObject({ code: "network_failure", httpStatus: null });
     expect(JSON.stringify(record)).not.toContain(syncSecret);
     expect(JSON.stringify(record)).not.toContain("transport");
+  });
+
+  it("syncs when any individual game's source or successful-sync timestamp is missing, stale, future, or reversed", async () => {
+    const now = Date.parse("2026-10-18T10:00:00.000Z");
+    const freshAt = new Date(now - 30_000).toISOString();
+    const invalidTimestamps = [
+      { field: "sourceFetchedAt", value: null },
+      { field: "sourceFetchedAt", value: new Date(now - 601_000).toISOString() },
+      { field: "sourceFetchedAt", value: new Date(now + 61_000).toISOString() },
+      { field: "lastSuccessfulSyncAt", value: null },
+      { field: "lastSuccessfulSyncAt", value: new Date(now - 601_000).toISOString() },
+      { field: "lastSuccessfulSyncAt", value: new Date(now + 61_000).toISOString() },
+      { field: "lastSuccessfulSyncAt", value: new Date(now - 60_000).toISOString(), sourceFetchedAt: freshAt },
+    ];
+
+    for (const invalid of invalidTimestamps) {
+      const games = Object.fromEntries(pandaGames.map((game) => [game, {
+        syncStatus: "normal",
+        sourceFetchedAt: freshAt,
+        lastSuccessfulSyncAt: freshAt,
+      }]));
+      games.cs2 = {
+        ...games.cs2,
+        [invalid.field]: invalid.value,
+        ...(invalid.sourceFetchedAt ? { sourceFetchedAt: invalid.sourceFetchedAt } : {}),
+      };
+      const requests = [];
+      const worker = createScheduleSyncWorker({
+        nowImpl: () => now,
+        fetchImpl: async (url, options) => {
+          requests.push({ url, options });
+          return url === healthUrl
+            ? healthResponse({
+              sourceFetchedAt: freshAt,
+              lastSuccessfulSyncAt: freshAt,
+              snapshotAgeSeconds: 30,
+              games,
+            })
+            : response();
+        },
+        log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      });
+
+      await expect(worker.scheduled(
+        { scheduledTime: now, noRetry: vi.fn() },
+        { CRON_SECRET: syncSecret },
+      )).resolves.toMatchObject({ outcome: "success", gamesSucceeded: 5 });
+      expect(requests.map(({ url }) => url)).toEqual([healthUrl, syncUrl]);
+    }
   });
 
   it("skips the authenticated sync when the no-store health probe confirms all games are fresh", async () => {
