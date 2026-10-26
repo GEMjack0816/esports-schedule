@@ -4,6 +4,7 @@ import {
   fetchTrustedSourceResponse,
   getTrustedVercelDeploymentOrigin,
   isolateBrowserEnvironment,
+  MAX_TRUSTED_SOURCE_REDIRECTS,
   redactTrustedSourceToken,
   VERCEL_TRUSTED_SOURCE_HEADER,
 } from "./vercel-trusted-source-headers.mjs";
@@ -113,6 +114,28 @@ describe("fetchTrustedSourceResponse", () => {
     expect(fetch.mock.calls[0][0].maxRedirects).toBe(0);
     expect(fetch.mock.calls[0][0].headers[VERCEL_TRUSTED_SOURCE_HEADER]).toBe("ephemeral-token");
   });
+
+  it("bounds same-origin redirect loops", async () => {
+    const fetch = vi.fn(async () => response(302, { location: "/loop" }));
+    const route = {
+      request: () => ({
+        url: () => "https://preview.example.vercel.app/",
+        method: () => "GET",
+        headers: () => ({ accept: "text/html" }),
+      }),
+      fetch,
+    };
+
+    const result = await fetchTrustedSourceResponse(
+      route,
+      "https://preview.example.vercel.app",
+      "ephemeral-token",
+    );
+
+    expect(result.status()).toBe(302);
+    expect(fetch).toHaveBeenCalledTimes(MAX_TRUSTED_SOURCE_REDIRECTS + 1);
+    expect(fetch.mock.calls.every(([options]) => options.maxRedirects === 0)).toBe(true);
+  });
 });
 
 describe("getTrustedVercelDeploymentOrigin", () => {
@@ -136,3 +159,4 @@ describe("getTrustedVercelDeploymentOrigin", () => {
     expect(getTrustedVercelDeploymentOrigin(value)).toBeNull();
   });
 });
+
