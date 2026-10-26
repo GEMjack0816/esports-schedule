@@ -3,6 +3,10 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { FormEvent } from "react";
+import {
+  postPublicSubmission,
+  submissionErrorMessage,
+} from "@/lib/submission-response";
 
 type SubmitState = { kind: "idle" | "success" | "error"; message: string };
 
@@ -19,29 +23,23 @@ export function SubmitMatchForm() {
 
     try {
       const localTime = String(values.get("scheduledAt") || "");
-      const response = await fetch("/api/submissions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          game: values.get("game"),
-          league: values.get("league"),
-          teamA: values.get("teamA"),
-          teamB: values.get("teamB"),
-          scheduledAt: new Date(localTime).toISOString(),
-          bestOf: values.get("bestOf") ? Number(values.get("bestOf")) : null,
-          sourceUrl: values.get("sourceUrl"),
-          notes: values.get("notes"),
-          website: values.get("website"),
-        }),
+      const result = await postPublicSubmission({
+        game: values.get("game"),
+        league: values.get("league"),
+        teamA: values.get("teamA"),
+        teamB: values.get("teamB"),
+        scheduledAt: new Date(localTime).toISOString(),
+        bestOf: values.get("bestOf") ? Number(values.get("bestOf")) : null,
+        sourceUrl: values.get("sourceUrl"),
+        notes: values.get("notes"),
+        website: values.get("website"),
       });
-      const result = (await response.json()) as { ok: boolean; message?: string; error?: string };
-      if (!response.ok || !result.ok) throw new Error(result.error || "提交失败");
       setState({ kind: "success", message: result.message || "已保存为待审核。" });
       form.reset();
     } catch (error) {
       setState({
         kind: "error",
-        message: error instanceof Error ? error.message : "提交失败，请稍后重试。",
+        message: submissionErrorMessage(error),
       });
     } finally {
       setSubmitting(false);
@@ -109,7 +107,12 @@ export function SubmitMatchForm() {
         <div className="submit-actions submit-wide">
           <button type="submit" disabled={submitting}>{submitting ? "正在保存…" : "提交审核"}</button>
           {state.kind !== "idle" && (
-            <p className={`submit-message ${state.kind}`} role="status">{state.message}</p>
+            <p
+              className={`submit-message ${state.kind}`}
+              role={state.kind === "error" ? "alert" : "status"}
+            >
+              {state.message}
+            </p>
           )}
         </div>
       </form>
