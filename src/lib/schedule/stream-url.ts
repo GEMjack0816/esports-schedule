@@ -38,6 +38,8 @@ function matchesCredentialParameter(name: string): boolean {
     // these suffixes close the common prefixed variants without rejecting
     // unrelated public fields such as `match_code`.
     || /(?:oauth|access|auth|authorization)code$/.test(normalized)
+    // Pluralized parameter names can still carry opaque credential material.
+    || /(?:credentials|secrets|passwords|tokens|cookies|sessions)$/.test(normalized)
     // Providers commonly prefix API-Key with X- or another vendor name.
     // Client/consumer keys are also credential-bearing; keep this specific so
     // harmless names such as `monkey` and public `client_id` remain allowed.
@@ -194,7 +196,7 @@ function hasNestedCredentialParameters(value: string, nestedDepth: number): bool
     }
     const looksNested = candidate.includes("?") || candidate.includes("#")
       || /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(candidate)
-      || /^[^/?#=&]+(?:=[^&]*)?(?:&[^=&]+=[^&]*)*$/.test(candidate);
+      || /^[^/?#=&]+=[^&]*(?:&[^=&]+(?:=[^&]*)?)*$/.test(candidate);
     if (looksNested) {
       // Do not recurse indefinitely through attacker-controlled URL parameters.
       // A further nested URL beyond the inspection bound fails closed.
@@ -208,7 +210,7 @@ function hasNestedCredentialParameters(value: string, nestedDepth: number): bool
       } catch {
         // A query-string value need not itself be a valid absolute URL.
       }
-      if (/^[^/?#=&]+(?:=[^&]*)?(?:&[^=&]+=[^&]*)*$/.test(candidate)
+      if (/^[^/?#=&]+=[^&]*(?:&[^=&]+(?:=[^&]*)?)*$/.test(candidate)
         && hasCredentialParameters(`?${candidate}`, nestedDepth + 1)) return true;
     }
 
