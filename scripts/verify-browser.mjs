@@ -14,7 +14,7 @@ const trustedSourceOrigin = trustedSourceToken
   : null;
 
 if (trustedSourceToken && !trustedSourceOrigin) {
-  throw new Error("VERCEL_OIDC_TOKEN can only be used with an HTTPS *.vercel.app deployment URL.");
+  throw new Error("VERCEL_OIDC_TOKEN only supports this project's HTTPS Vercel Preview deployment URL.");
 }
 
 const browserEnvironment = trustedSourceToken
