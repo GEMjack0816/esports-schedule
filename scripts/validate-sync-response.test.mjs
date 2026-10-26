@@ -46,7 +46,7 @@ describe("sync workflow response validation", () => {
     const now = Date.parse("2026-10-24T10:00:00.000Z");
     expect(validateSyncResponse({
       ...success,
-      lastSuccessfulSyncAt: "2026-10-24T09:59:00.000Z",
+      lastSuccessfulSyncAt: "2026-10-24T09:58:59.999Z",
     }, 200, now, now)).toMatchObject({
       ok: false,
       message: "sync lastSuccessfulSyncAt is stale or predates this invocation",
