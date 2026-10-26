@@ -83,4 +83,52 @@ describe("legacy Runtime Cache submission migration", () => {
     );
     expect(importLegacySubmissions).not.toHaveBeenCalled();
   });
+
+  it("counts non-string index entries as invalid instead of silently dropping them", async () => {
+    cacheState.values.clear();
+    cacheState.failures.clear();
+    const validId = "44444444-4444-4444-8444-444444444444";
+    cacheState.values.set("pending-index-v1", [validId, 17, null, validId]);
+    cacheState.values.set(`pending:${validId}`, {
+      game: "lol",
+      league: "Legacy match",
+      teamA: "Alpha",
+      teamB: "Beta",
+      scheduledAt: "2026-08-01T00:00:00.000Z",
+      bestOf: 3,
+      sourceUrl: "https://example.com/legacy",
+      notes: null,
+      submittedAt: "2026-07-01T00:00:00.000Z",
+    });
+    const importLegacySubmissions = vi.fn(async (
+      _actor: string,
+      records: LegacySubmissionRecord[],
+      counts: LegacyImportInputCounts,
+    ) => {
+      expect(records).toHaveLength(1);
+      expect(counts).toEqual({ scanned: 3, invalid: 2 });
+      return { ...counts, imported: 1, duplicate: 0 };
+    });
+    const repository = { importLegacySubmissions } as unknown as DrizzleReviewRepository;
+
+    await expect(importLegacyRuntimeSubmissions("admin-user", repository)).resolves.toEqual({
+      scanned: 3,
+      invalid: 2,
+      imported: 1,
+      duplicate: 0,
+    });
+  });
+
+  it("aborts before database mutation when the legacy index is not an array", async () => {
+    cacheState.values.clear();
+    cacheState.failures.clear();
+    cacheState.values.set("pending-index-v1", { corrupted: true });
+    const importLegacySubmissions = vi.fn();
+    const repository = { importLegacySubmissions } as unknown as DrizzleReviewRepository;
+
+    await expect(importLegacyRuntimeSubmissions("admin-user", repository)).rejects.toThrow(
+      "invalid legacy submission index",
+    );
+    expect(importLegacySubmissions).not.toHaveBeenCalled();
+  });
 });

@@ -19,17 +19,23 @@ export async function importLegacyRuntimeSubmissions(
 ): Promise<LegacyImportCounts> {
   const cache = legacyCache();
   const index = await cache.get(INDEX_KEY);
-  const ids = Array.isArray(index)
-    ? [...new Set(index.filter((value): value is string => typeof value === "string"))]
-    : [];
+  let ids: unknown[];
+  if (index == null) {
+    ids = [];
+  } else if (Array.isArray(index)) {
+    ids = [...new Set(index)];
+  } else {
+    throw new Error("invalid legacy submission index");
+  }
   const counts = { scanned: ids.length, invalid: 0 };
   const records: LegacySubmissionRecord[] = [];
 
-  for (const id of ids) {
-    if (!UUID_PATTERN.test(id)) {
+  for (const value of ids) {
+    if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
       counts.invalid += 1;
       continue;
     }
+    const id = value;
     const raw = await cache.get(`pending:${id}`);
     try {
       if (!raw || typeof raw !== "object") throw new Error("missing");
