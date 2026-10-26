@@ -18,15 +18,18 @@ const success = {
 };
 
 describe("sync workflow response validation", () => {
-  it("does not blindly retry the side-effecting sync request after ambiguous transport failure", () => {
+  it("uses the bounded sync runner without automatic request retries", () => {
     const workflow = readFileSync(new URL("../.github/workflows/sync-schedule.yml", import.meta.url), "utf8");
+    const runner = readFileSync(new URL("./run-schedule-sync.mjs", import.meta.url), "utf8");
     const runBlock = workflow.slice(workflow.indexOf("        run: |"));
 
     expect(workflow).not.toMatch(/--retry(?:\s|=)|--retry-all-errors/);
-    expect(workflow).toContain("--max-time 300");
-    expect(workflow).toContain('--header "Authorization: Bearer $CRON_SECRET"');
+    expect(workflow).toContain("CRON_SECRET: \${{ secrets.CRON_SECRET }}");
+    expect(workflow).toContain("node scripts/run-schedule-sync.mjs");
+    expect(runner).toContain("const SYNC_TIMEOUT_MS = 300_000");
+    expect(runner).toContain('authorization: \`Bearer \${secret}\`');
     expect(workflow).not.toMatch(/SYNC_URL:.*CRON_SECRET/);
-    expect(runBlock.match(/\bcurl\b/g)).toHaveLength(1);
+    expect(runBlock).not.toMatch(/\bcurl\b/);
   });
 
   it("accepts a complete successful refresh", () => {

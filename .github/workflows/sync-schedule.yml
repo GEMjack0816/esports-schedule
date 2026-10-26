@@ -23,15 +23,6 @@ jobs:
       - name: Trigger the protected production sync
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          SYNC_URL: https://esports-schedule-two.vercel.app/api/cron/sync
         run: |
           test -n "$CRON_SECRET"
-          response_file="$RUNNER_TEMP/sync-response.json"
-          # The sync endpoint is side-effecting despite using GET; do not blindly retry an ambiguous transport failure.
-          http_status=$(curl --silent --show-error \
-            --max-time 300 \
-            --output "$response_file" \
-            --write-out "%{http_code}" \
-            --header "Authorization: Bearer $CRON_SECRET" \
-            "$SYNC_URL")
-          node scripts/validate-sync-response.mjs "$response_file" "$http_status"
+          node scripts/run-schedule-sync.mjs
