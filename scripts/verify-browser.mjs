@@ -154,6 +154,36 @@ for (const profile of [
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
+  let delayedHomeRscRequest = false;
+  const delayHomeRsc = async (route) => {
+    const request = route.request();
+    const requestUrl = new URL(request.url());
+    const headers = request.headers();
+    if (
+      requestUrl.origin === auditUrl.origin
+      && requestUrl.pathname === "/"
+      && (headers.rsc === "1" || headers.accept?.includes("text/x-component"))
+    ) {
+      delayedHomeRscRequest = true;
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+    await route.continue();
+  };
+  await page.route("**/*", delayHomeRsc);
+  const homeNavigation = page.waitForURL((url) => url.origin === auditUrl.origin && url.pathname === "/", {
+    timeout: 15_000,
+  });
+  await page.getByRole("link", { name: /返回赛程/ }).click();
+  const loadingStateVisible = await page
+    .locator('main.schedule-loading[aria-busy="true"]')
+    .waitFor({ state: "visible", timeout: 2_000 })
+    .then(() => true)
+    .catch(() => false);
+  await homeNavigation;
+  await page.locator("#esports-schedule-version").waitFor({ state: "attached", timeout: 15_000 });
+  await page.unroute("**/*", delayHomeRsc);
+  const loadingStateReturnedToHome = new URL(page.url()).pathname === "/"
+    && await page.locator("#esports-schedule-version").count() === 1;
   const adminResponse = await page.goto(`${baseUrl}/admin`, {
     waitUntil: "networkidle",
     timeout: 120_000,
@@ -208,6 +238,11 @@ for (const profile of [
     optionalResourceFailureSamples: optionalResourceFailures.slice(0, 5),
     browserResourceWarningCount: browserResourceWarnings.length,
     submitFields,
+    loadingStateNavigation: {
+      delayedHomeRscRequest,
+      visibleWhileDelayed: loadingStateVisible,
+      returnedToHome: loadingStateReturnedToHome,
+    },
     anonymousAdminStatus: adminResponse?.status() ?? null,
     anonymousAdminAtLogin: new URL(page.url()).pathname === "/admin/login",
     anonymousAdminContainsPrivateData:
@@ -243,6 +278,15 @@ for (const result of results) {
   if (!result.versionMatchesHomepage) failures.push(`${prefix}: homepage/version commit mismatch`);
   if (!result.healthVersionMatches) failures.push(`${prefix}: health/version commit mismatch`);
   if (result.submitFields < 6) failures.push(`${prefix}: submission form incomplete`);
+  if (!result.loadingStateNavigation.delayedHomeRscRequest) {
+    failures.push(`${prefix}: homepage loading-state test did not delay the RSC navigation`);
+  }
+  if (!result.loadingStateNavigation.visibleWhileDelayed) {
+    failures.push(`${prefix}: homepage loading state was not visible during delayed navigation`);
+  }
+  if (!result.loadingStateNavigation.returnedToHome) {
+    failures.push(`${prefix}: loading-state navigation did not return to the homepage`);
+  }
   if (result.anonymousAdminStatus !== 200) failures.push(`${prefix}: admin login HTTP ${result.anonymousAdminStatus}`);
   if (!result.anonymousAdminAtLogin) failures.push(`${prefix}: anonymous admin page was not redirected to login`);
   if (result.anonymousAdminContainsPrivateData) failures.push(`${prefix}: anonymous admin page exposed private data`);
