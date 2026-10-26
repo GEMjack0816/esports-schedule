@@ -39,8 +39,9 @@ function matchesCredentialParameter(name: string): boolean {
     // unrelated public fields such as `match_code`.
     || /(?:oauth|access|auth|authorization)code$/.test(normalized)
     // Providers commonly prefix API-Key with X- or another vendor name.
-    // Keep this specific so harmless keys such as `monkey` remain allowed.
-    || /(?:api|auth|access)key(?:id)?$/.test(normalized)
+    // Client/consumer keys are also credential-bearing; keep this specific so
+    // harmless names such as `monkey` and public `client_id` remain allowed.
+    || /(?:api|auth|access|client|consumer)key(?:id)?$/.test(normalized)
     // Prefixes such as X-Private-Key or vendor-secret-key still carry the
     // key itself; checking only the unprefixed exact names misses these.
     || /(?:private|secret|signing)key(?:id)?$/.test(normalized)

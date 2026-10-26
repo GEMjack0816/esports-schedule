@@ -34,6 +34,10 @@ describe("public external URL sanitization", () => {
     "https://stream.example/live?API-Key=private",
     "https://stream.example/live?X-API-Key=private",
     "https://stream.example/live?X-API-Key-Id=private",
+    "https://stream.example/live?client_key=private",
+    "https://stream.example/live?X-Client-Key=private",
+    "https://stream.example/live?consumer_key=private",
+    "https://stream.example/live?X-Consumer-Key=private",
     "https://stream.example/live?X-Private-Key=private",
     "https://stream.example/live?X-Private-Key-Id=private",
     "https://stream.example/live?X-Signing-Key=private",
@@ -135,7 +139,7 @@ describe("public external URL sanitization", () => {
 
   it("keeps public OAuth metadata that does not contain authentication credentials", () => {
     expect(sanitizePublicExternalUrl(
-      "https://login.example/authorize?client_id=public-client&code_challenge=abc&code_challenge_method=S256&client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer",
+      "https://login.example/authorize?client_id=public-client&consumer_id=public-consumer&code_challenge=abc&code_challenge_method=S256&client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer",
     )).not.toBeNull();
   });
 
@@ -144,6 +148,8 @@ describe("public external URL sanitization", () => {
       "token",
       "access_token",
       "api_key",
+      "client_key",
+      "consumer_key",
       "x-access-key",
       "subscription-key",
       "client_secret",
