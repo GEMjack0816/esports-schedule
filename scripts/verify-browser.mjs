@@ -1,6 +1,25 @@
 import os from "node:os";
 import path from "node:path";
-import { chromium } from "playwright-core";
+import {
+  addTrustedSourceHeader,
+  isolateBrowserEnvironment,
+  redactTrustedSourceToken,
+} from "./vercel-trusted-source-headers.mjs";
+
+const trustedSourceToken = process.env.VERCEL_OIDC_TOKEN;
+const browserEnvironment = trustedSourceToken
+  ? isolateBrowserEnvironment(process.env)
+  : process.env;
+
+if (trustedSourceToken) {
+  for (const name of Object.keys(process.env)) delete process.env[name];
+  Object.assign(process.env, browserEnvironment);
+  // Prevent Playwright protocol diagnostics from printing authenticated headers.
+  delete process.env.DEBUG;
+  delete process.env.PWDEBUG;
+}
+
+const { chromium } = await import("playwright-core");
 
 const baseUrl = process.argv[2] || "http://localhost:3000";
 const executableCandidates = [
@@ -12,7 +31,11 @@ let browser;
 let launchError;
 for (const executablePath of executableCandidates) {
   try {
-    browser = await chromium.launch({ executablePath, headless: true });
+    browser = await chromium.launch({
+      executablePath,
+      headless: true,
+      env: browserEnvironment,
+    });
     break;
   } catch (error) {
     launchError = error;
@@ -37,17 +60,41 @@ for (const profile of [
   const browserResourceWarnings = [];
   const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage"];
   const auditUrl = new URL(baseUrl);
+  const sanitizeDiagnostic = (value) => redactTrustedSourceToken(value, trustedSourceToken);
+  const applyTrustedSourceHeader = (request) => addTrustedSourceHeader(
+    request.headers(),
+    request.url(),
+    auditUrl.origin,
+    trustedSourceToken,
+  );
+  const continueRequest = async (route) => {
+    try {
+      return await route.continue({ headers: applyTrustedSourceHeader(route.request()) });
+    } catch (error) {
+      throw new Error(sanitizeDiagnostic(error instanceof Error ? error.message : error));
+    }
+  };
+  const fetchRequest = async (route) => {
+    try {
+      return await route.fetch({ headers: applyTrustedSourceHeader(route.request()) });
+    } catch (error) {
+      throw new Error(sanitizeDiagnostic(error instanceof Error ? error.message : error));
+    }
+  };
+  // Vercel's short-lived local OIDC identity is optional. Scope it to this
+  // deployment origin only; never attach it to third-party scripts or images.
+  await context.route("**/*", continueRequest);
   auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const text = message.text();
     if (/^Failed to load resource: net::ERR_/.test(text)) {
-      browserResourceWarnings.push(text);
+      browserResourceWarnings.push(sanitizeDiagnostic(text));
       return;
     }
-    errors.push(`console:${text}`);
+    errors.push(`console:${sanitizeDiagnostic(text)}`);
   });
-  page.on("pageerror", (error) => errors.push(`page:${error.message}`));
+  page.on("pageerror", (error) => errors.push(`page:${sanitizeDiagnostic(error.message)}`));
   page.on("requestfailed", (request) => {
     const failedUrl = new URL(request.url());
     if (request.failure()?.errorText === "net::ERR_ABORTED") {
@@ -58,7 +105,7 @@ for (const profile of [
       optionalResourceFailures.push(`${request.method()} ${failedUrl.origin}${failedUrl.pathname}`);
       return;
     }
-    errors.push(`request:${request.method()} ${request.url()}`);
+    errors.push(`request:${request.method()} ${sanitizeDiagnostic(request.url())}`);
   });
   page.on("response", (candidate) => {
     const candidateUrl = new URL(candidate.url());
@@ -134,7 +181,7 @@ for (const profile of [
 
   const searchPage = await context.newPage();
   const searchPageErrors = [];
-  searchPage.on('pageerror', (error) => searchPageErrors.push(error.message));
+  searchPage.on('pageerror', (error) => searchPageErrors.push(sanitizeDiagnostic(error.message)));
   await searchPage.goto(auditUrl.toString(), { waitUntil: 'networkidle', timeout: 120_000 });
   const searchInitialLoadedCount = Number(await searchPage.locator('.schedule-section')
     .getAttribute('data-schedule-loaded-count'));
@@ -147,8 +194,8 @@ for (const profile of [
   if (searchInitialLoadedCount < searchInitialTotalCount) {
     globalSearchMode = 'partial';
     await searchPage.route('**/api/matches', async (route) => {
-      if (route.request().method() !== 'GET') return route.continue();
-      const response = await route.fetch();
+      if (route.request().method() !== 'GET') return continueRequest(route);
+      const response = await fetchRequest(route);
       const body = await response.json();
       const fixtureName = 'Codex global search fixture';
       body.matches = body.matches.map((match, index) => ({
@@ -240,8 +287,8 @@ for (const profile of [
 
   // Client-only fixtures cover running matches that are undated or cross local midnight.
   await page.route("**/api/matches", async (route) => {
-    if (route.request().method() !== "GET") return route.continue();
-    const response = await route.fetch();
+    if (route.request().method() !== "GET") return continueRequest(route);
+    const response = await fetchRequest(route);
     const body = await response.json();
     const syntheticRunning = [
       { id: "browser-verify-running-undated", date: null, name: "Codex undated live fixture" },
@@ -343,7 +390,7 @@ for (const profile of [
       ];
     });
   } catch (error) {
-    errors.push(`version-health:${error instanceof Error ? error.message : "request failed"}`);
+    errors.push(`version-health:${sanitizeDiagnostic(error instanceof Error ? error.message : "request failed")}`);
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
