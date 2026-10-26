@@ -38,7 +38,7 @@ for (const profile of [
   const verifyLogoRetry = simulateLogoRetry && profile.name === "desktop";
   const verifyLogoSuccess = simulateLogoSuccess && profile.name === "desktop";
   const slowLogoUrl = "https://logo-timeout.invalid/slow-team.svg";
-  const retryLogoUrl = "https://cdn-api.pandascore.co/team/browser-retry-verification.svg";
+  const retryLogoUrl = "https://cdn-api.pandascore.co/images/team/image/123/browser-retry-verification.webp";
   const successLogoUrl = "https://logo-success.invalid/loaded-team.svg";
   let logoTimeoutFallback = null;
   let logoRetryFallback = null;
@@ -89,7 +89,7 @@ for (const profile of [
     }
     if (verifyLogoRetry) {
       await context.route((url) =>
-        url.hostname === "cdn-api.pandascore.co" && url.pathname === "/team/browser-retry-verification.svg",
+        url.hostname === "cdn-api.pandascore.co" && url.pathname === "/images/team/image/123/browser-retry-verification.webp",
       async (route) => {
         retryRequests.push(new URL(route.request().url()).searchParams.get("esports_logo_retry"));
         await route.abort("failed");
@@ -221,13 +221,19 @@ for (const profile of [
     await verificationCard.waitFor({ state: "visible", timeout: 10_000 });
     await verificationCard.scrollIntoViewIfNeeded();
     const verificationLogo = verificationCard.locator(".team-row").first().locator("img");
-    const switchedToPlaceholder = await page.waitForFunction(() => {
+    const attemptsCompleted = await (async () => {
+      const deadline = Date.now() + 5_000;
+      while (retryRequests.length < 2 && Date.now() < deadline) await page.waitForTimeout(50);
+      return retryRequests.length === 2;
+    })();
+    const switchedToPlaceholder = attemptsCompleted && await page.waitForFunction(() => {
       const card = Array.from(document.querySelectorAll(".match-card"))
         .find((candidate) => candidate.textContent?.includes("Logo 重试回退验证"));
       const src = card?.querySelector(".team-row img")?.getAttribute("src");
       return !!src && new URL(src, location.href).pathname === "/team-placeholder.svg";
     }, null, { timeout: 8_000 }).then(() => true).catch(() => false);
     logoRetryFallback = {
+      attemptsCompleted,
       retryRequests,
       switchedToPlaceholder,
       finalSource: await verificationLogo.getAttribute("src"),
