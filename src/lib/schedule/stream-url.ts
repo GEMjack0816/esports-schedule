@@ -41,6 +41,9 @@ function matchesCredentialParameter(name: string): boolean {
     // Providers commonly prefix API-Key with X- or another vendor name.
     // Keep this specific so harmless keys such as `monkey` remain allowed.
     || /(?:api|auth|access)key(?:id)?$/.test(normalized)
+    // Prefixes such as X-Private-Key or vendor-secret-key still carry the
+    // key itself; checking only the unprefixed exact names misses these.
+    || /(?:private|secret|signing)key(?:id)?$/.test(normalized)
     // Cookie values can carry an authenticated session just like bearer tokens.
     || /cookie$/.test(normalized)
     // Azure API Management and other gateways use prefixed subscription keys.
