@@ -234,6 +234,7 @@ function getFreshScheduleAgeSeconds(payload, now) {
     || payload.snapshotAgeSeconds > FRESHNESS_LIMIT_SECONDS
     || sourceFetchedAt === null
     || lastSuccessfulSyncAt === null
+    || sourceFetchedAt > lastSuccessfulSyncAt
     || !payload.games || typeof payload.games !== "object" || Array.isArray(payload.games)) {
     return null;
   }

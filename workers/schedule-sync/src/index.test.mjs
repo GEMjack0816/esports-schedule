@@ -928,6 +928,28 @@ describe("schedule sync Worker client", () => {
     expect(requests).toEqual([healthUrl, "https://esports-schedule-two.vercel.app/api/cron/sync"]);
   });
 
+  it("does not skip when the snapshot timestamp is later than the last successful sync", async () => {
+    const requests = [];
+    const worker = createScheduleSyncWorker({
+      nowImpl: () => Date.parse("2026-10-18T10:00:00.000Z"),
+      fetchImpl: async (url) => {
+        requests.push(url);
+        return url === healthUrl
+          ? healthResponse({
+              sourceFetchedAt: "2026-10-18T09:59:50.000Z",
+              lastSuccessfulSyncAt: "2026-10-18T09:59:40.000Z",
+              snapshotAgeSeconds: 10,
+            })
+          : response();
+      },
+      log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+    await expect(worker.scheduled({ scheduledTime: 1, noRetry: vi.fn() }, { CRON_SECRET: syncSecret }))
+      .resolves.toMatchObject({ outcome: "success", generation: 12 });
+    expect(requests).toEqual([healthUrl, "https://esports-schedule-two.vercel.app/api/cron/sync"]);
+  });
+
   it("runs the authenticated sync when freshness timestamps omit a timezone", async () => {
     const requests = [];
     const worker = createScheduleSyncWorker({
