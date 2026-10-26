@@ -1,3 +1,8 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { validateSyncResponse } from "./validate-sync-response.mjs";
 
@@ -22,6 +27,32 @@ describe("sync workflow response validation", () => {
       ok: false,
       message: "sync busy: another refresh owns the lock; this run did not refresh the schedule",
     });
+  });
+
+  it("exits non-zero when the workflow CLI receives a structured busy response", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sync-response-validator-"));
+    const responsePath = join(directory, "response.json");
+    const scriptPath = fileURLToPath(new URL("./validate-sync-response.mjs", import.meta.url));
+
+    try {
+      writeFileSync(responsePath, JSON.stringify({
+        status: "busy",
+        lockAcquired: false,
+        generation: null,
+      }));
+      const result = spawnSync(process.execPath, [scriptPath, responsePath, "409"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: { ...process.env, GITHUB_STEP_SUMMARY: "" },
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("sync busy: another refresh owns the lock");
+      expect(result.stdout).toContain("this run did not refresh the schedule");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("accepts partial success with a valid fencing generation", () => {
