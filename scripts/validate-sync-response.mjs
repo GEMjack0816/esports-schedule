@@ -13,7 +13,7 @@ export function validateSyncResponse(payload, httpStatus) {
       ? { ok: false, message: "sync busy: another refresh owns the lock; this run did not refresh the schedule" }
       : { ok: false, message: `sync busy response used unexpected HTTP ${httpStatus}` };
   }
-  if (httpStatus < 200 || httpStatus >= 300) {
+  if (!Number.isInteger(httpStatus) || httpStatus < 200 || httpStatus >= 300) {
     return { ok: false, message: `sync endpoint returned HTTP ${httpStatus}` };
   }
   if (payload.lockAcquired !== true) {

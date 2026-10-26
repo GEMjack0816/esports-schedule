@@ -22,6 +22,13 @@ describe("sync workflow response validation", () => {
     expect(validateSyncResponse(success, 200).ok).toBe(true);
   });
 
+  it.each([Number.NaN, 200.5, "200"])(
+    "rejects a non-integer HTTP status (%s)",
+    (httpStatus) => {
+      expect(validateSyncResponse(success, httpStatus).ok).toBe(false);
+    },
+  );
+
   it("fails the workflow for a clearly reported busy lock without treating it as a refresh", () => {
     expect(validateSyncResponse({ status: "busy", lockAcquired: false, generation: null }, 409)).toEqual({
       ok: false,
@@ -50,6 +57,27 @@ describe("sync workflow response validation", () => {
       expect(result.status).toBe(1);
       expect(result.stdout).toContain("sync busy: another refresh owns the lock");
       expect(result.stdout).toContain("this run did not refresh the schedule");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("exits non-zero when the workflow CLI receives a malformed HTTP status", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sync-response-validator-"));
+    const responsePath = join(directory, "response.json");
+    const scriptPath = fileURLToPath(new URL("./validate-sync-response.mjs", import.meta.url));
+
+    try {
+      writeFileSync(responsePath, JSON.stringify(success));
+      const result = spawnSync(process.execPath, [scriptPath, responsePath, "not-a-status"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: { ...process.env, GITHUB_STEP_SUMMARY: "" },
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("sync endpoint returned HTTP NaN");
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
