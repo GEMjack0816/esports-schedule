@@ -7,6 +7,7 @@ import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/
 import { isMatchInScheduleRange, isMatchOnSelectedDate, scheduleDateGroupKey, type ScheduleDateRange } from "@/lib/schedule/date-range";
 import { getScheduleHeroStats } from "@/lib/schedule/hero-stats";
 import { subscribeToMinuteClock } from "@/lib/schedule/minute-clock";
+import { requestCompleteScheduleForSearch } from "@/lib/schedule/search-completeness";
 import { addDaysKey, dateInputBoundsInTimeZone, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = ScheduleDateRange;
@@ -194,6 +195,7 @@ export function ScheduleDashboard({
   );
 
   const completeScheduleLoaded = payload.matches.length >= payload.coverage.totals.finalWithManual;
+  const needsCompleteSchedule = range === "history" || range === "all" || !!selectedDate || !!query.trim();
 
   const rangeCounts = useMemo(() => {
     const counts: Record<RangeKey, number | null> = {
@@ -289,6 +291,16 @@ export function ScheduleDashboard({
     if (nextRange === "history" || nextRange === "all") {
       await loadCompleteSchedule();
     }
+  }
+
+  function updateSearchQuery(nextQuery: string) {
+    setQuery(nextQuery);
+    requestCompleteScheduleForSearch(
+      nextQuery,
+      completeScheduleLoaded,
+      completeScheduleError,
+      loadCompleteSchedule,
+    );
   }
 
   async function refreshSchedule() {
@@ -397,16 +409,16 @@ export function ScheduleDashboard({
           </div>
 
           <div className="filter-panel">
-            <label className="search-field"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索战队或赛事" /></label>
+            <label className="search-field"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => updateSearchQuery(event.target.value)} placeholder="搜索战队或赛事" /></label>
             <label><span className="sr-only">游戏</span><select value={game} onChange={(event) => setGame(event.target.value as GameKey | "all")}><option value="all">全部游戏</option>{Object.entries(games).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
             <label><span className="sr-only">赛事</span><select value={league} onChange={(event) => setLeague(event.target.value)}><option value="all">全部赛事</option>{leagues.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
             <label><span className="sr-only">状态</span><select value={status} onChange={(event) => setStatus(event.target.value as MatchStatus | "all")}><option value="all">全部状态</option>{Object.entries(statusMeta).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
             <label className="date-field"><span className="sr-only">日期</span><input type="date" min={dateBounds.min} max={dateBounds.max} value={selectedDate} onChange={(event) => { const date = event.target.value; setSelectedDate(date); if (date) void loadCompleteSchedule(); }} /></label>
           </div>
 
-          {loadingCompleteSchedule && (range === "history" || range === "all" || !!selectedDate) ? (
-            <div className="empty-state" role="status"><h3>正在加载完整赛程…</h3><p>当前日期范围以外的比赛会在需要时再加载。</p></div>
-          ) : completeScheduleError && (range === "history" || range === "all" || !!selectedDate) ? (
+          {loadingCompleteSchedule && needsCompleteSchedule ? (
+            <div className="empty-state" role="status"><h3>正在加载完整赛程…</h3><p>{query.trim() ? "正在加载全部赛事以完成搜索。" : "当前日期范围以外的比赛会在需要时再加载。"}</p></div>
+          ) : completeScheduleError && needsCompleteSchedule ? (
             <div className="empty-state" role="alert"><h3>完整赛程暂时无法加载</h3><p>现有赛程仍可查看，请重试加载完整数据。</p><button type="button" onClick={() => { void loadCompleteSchedule(true); }}>重试</button></div>
           ) : <div className="match-list" aria-live="polite">
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
