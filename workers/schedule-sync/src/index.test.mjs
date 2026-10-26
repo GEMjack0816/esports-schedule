@@ -877,6 +877,39 @@ describe("schedule sync Worker client", () => {
     expect(requests[1].options.headers.authorization).toBe(`Bearer ${syncSecret}`);
   });
 
+  it("attempts the authoritative sync when stale health reports an in-progress refresh, then reports busy", async () => {
+    const now = Date.parse("2026-10-18T10:00:00.000Z");
+    const staleAt = new Date(now - 20 * 60_000).toISOString();
+    const requests = [];
+    const log = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const worker = createScheduleSyncWorker({
+      nowImpl: () => now,
+      fetchImpl: async (url, options) => {
+        requests.push({ url, options });
+        return url === healthUrl
+          ? healthResponse({
+              stale: true,
+              refreshInProgress: true,
+              sourceFetchedAt: staleAt,
+              lastSuccessfulSyncAt: staleAt,
+              snapshotAgeSeconds: 1_200,
+            })
+          : response({ ok: false, status: "busy", lockAcquired: false, generation: null }, 409);
+      },
+      log,
+    });
+
+    await expect(worker.scheduled(
+      { scheduledTime: now, noRetry: vi.fn() },
+      { CRON_SECRET: syncSecret },
+    )).resolves.toEqual({ outcome: "skipped_busy", generation: null });
+    expect(requests.map(({ url }) => url)).toEqual([healthUrl, syncUrl]);
+    expect(requests[1].options.headers.authorization).toBe(`Bearer ${syncSecret}`);
+    expect(log.warn).toHaveBeenCalledOnce();
+    expect(log.warn.mock.calls[0][0]).toContain('"outcome":"skipped_busy"');
+    expect(log.log).not.toHaveBeenCalled();
+  });
+
   it("runs the authenticated sync when the persistent snapshot is fresh but last provider sync is stale", async () => {
     const requests = [];
     const worker = createScheduleSyncWorker({
