@@ -6,6 +6,7 @@ const baseUrl = process.argv[2] || "http://localhost:3000";
 const simulateLogoTimeout = process.argv.includes("--simulate-logo-timeout");
 const simulateLogoRetry = process.argv.includes("--simulate-logo-retry");
 const simulateLogoSuccess = process.argv.includes("--simulate-logo-success");
+const simulateLogoSourceUpdate = process.argv.includes("--simulate-logo-source-update");
 const executableCandidates = [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -37,39 +38,55 @@ for (const profile of [
   const verifyLogoTimeout = simulateLogoTimeout && profile.name === "desktop";
   const verifyLogoRetry = simulateLogoRetry && profile.name === "desktop";
   const verifyLogoSuccess = simulateLogoSuccess && profile.name === "desktop";
+  const verifyLogoSourceUpdate = simulateLogoSourceUpdate && profile.name === "desktop";
   const slowLogoUrl = "https://logo-timeout.invalid/slow-team.svg";
   const retryLogoUrl = "https://cdn-api.pandascore.co/images/team/image/123/browser-retry-verification.webp";
   const successLogoUrl = "https://logo-success.invalid/loaded-team.svg";
+  const updatedLogoUrl = "https://logo-success.invalid/updated-team.svg";
   let logoTimeoutFallback = null;
   let logoRetryFallback = null;
   let logoSuccessRetention = null;
+  let logoSourceUpdate = null;
+  let sourceUpdateApiCalls = 0;
   const retryRequests = [];
-  if (verifyLogoTimeout || verifyLogoRetry || verifyLogoSuccess) {
+  if (verifyLogoTimeout || verifyLogoRetry || verifyLogoSuccess || verifyLogoSourceUpdate) {
     await context.route((url) => new URL(url).pathname === "/api/matches", async (route) => {
       const response = await route.fetch();
       const payload = await response.json();
       const now = new Date().toISOString();
+      const sourceUpdateVersion = sourceUpdateApiCalls++;
+      const sourceUpdateId = "browser-logo-source-update-verification";
       const match = {
-        id: verifyLogoRetry
-          ? "browser-logo-retry-verification"
-          : verifyLogoSuccess
-            ? "browser-logo-success-verification"
-            : "browser-logo-timeout-verification",
+        id: verifyLogoSourceUpdate
+          ? sourceUpdateId
+          : verifyLogoRetry
+            ? "browser-logo-retry-verification"
+            : verifyLogoSuccess
+              ? "browser-logo-success-verification"
+              : "browser-logo-timeout-verification",
         provider: "manual",
-        providerMatchId: verifyLogoRetry
-          ? "browser-logo-retry-verification"
-          : verifyLogoSuccess
-            ? "browser-logo-success-verification"
-            : "browser-logo-timeout-verification",
+        providerMatchId: verifyLogoSourceUpdate
+          ? sourceUpdateId
+          : verifyLogoRetry
+            ? "browser-logo-retry-verification"
+            : verifyLogoSuccess
+              ? "browser-logo-success-verification"
+              : "browser-logo-timeout-verification",
         game: "lol",
         tournament: "本地浏览器验证",
         league: "本地浏览器验证",
         stage: null,
-        homeTeam: verifyLogoRetry
-          ? { name: "Logo 重试回退验证", acronym: "RETRY", logo: retryLogoUrl }
-          : verifyLogoSuccess
-            ? { name: "Logo 成功加载验证", acronym: "LOAD", logo: successLogoUrl }
-            : { name: "慢 Logo 回退验证", acronym: "WAIT", logo: slowLogoUrl },
+        homeTeam: verifyLogoSourceUpdate
+          ? {
+              name: "Logo URL 更新验证",
+              acronym: "UPDATE",
+              logo: sourceUpdateVersion === 0 ? retryLogoUrl : updatedLogoUrl,
+            }
+          : verifyLogoRetry
+            ? { name: "Logo 重试回退验证", acronym: "RETRY", logo: retryLogoUrl }
+            : verifyLogoSuccess
+              ? { name: "Logo 成功加载验证", acronym: "LOAD", logo: successLogoUrl }
+              : { name: "慢 Logo 回退验证", acronym: "WAIT", logo: slowLogoUrl },
         awayTeam: { name: "本地占位队伍", acronym: "LOCAL", logo: "/team-placeholder.svg" },
         homeScore: null,
         awayScore: null,
@@ -79,7 +96,8 @@ for (const profile of [
         streams: [],
         lastUpdatedAt: now,
       };
-      await route.fulfill({ response, json: { ...payload, matches: [...(payload.matches || []), match] } });
+      const matches = (payload.matches || []).filter((candidate) => candidate.id !== match.id);
+      await route.fulfill({ response, json: { ...payload, matches: [...matches, match] } });
     });
     if (verifyLogoTimeout) {
       await context.route("https://logo-timeout.invalid/**", async (route) => {
@@ -87,7 +105,7 @@ for (const profile of [
         await route.fulfill({ status: 503, contentType: "image/svg+xml", body: "" }).catch(() => undefined);
       });
     }
-    if (verifyLogoRetry) {
+    if (verifyLogoRetry || verifyLogoSourceUpdate) {
       await context.route((url) =>
         url.hostname === "cdn-api.pandascore.co" && url.pathname === "/images/team/image/123/browser-retry-verification.webp",
       async (route) => {
@@ -95,7 +113,7 @@ for (const profile of [
         await route.abort("failed");
       });
     }
-    if (verifyLogoSuccess) {
+    if (verifyLogoSuccess || verifyLogoSourceUpdate) {
       await context.route("https://logo-success.invalid/**", async (route) => {
         await route.fulfill({
           status: 200,
@@ -239,6 +257,48 @@ for (const profile of [
       finalSource: await verificationLogo.getAttribute("src"),
     };
   }
+  if (verifyLogoSourceUpdate) {
+    await page.getByRole("tab", { name: /全部收录/ }).click();
+    const verificationCard = page.locator(".match-card").filter({ hasText: "Logo URL 更新验证" }).first();
+    await verificationCard.waitFor({ state: "visible", timeout: 10_000 });
+    await verificationCard.scrollIntoViewIfNeeded();
+    const verificationLogo = verificationCard.locator(".team-row").first().locator("img");
+    const attemptsCompleted = await (async () => {
+      const deadline = Date.now() + 5_000;
+      while (retryRequests.length < 2 && Date.now() < deadline) await page.waitForTimeout(50);
+      return retryRequests.length === 2;
+    })();
+    const oldSourceFellBack = attemptsCompleted && await page.waitForFunction(() => {
+      const card = Array.from(document.querySelectorAll(".match-card"))
+        .find((candidate) => candidate.textContent?.includes("Logo URL 更新验证"));
+      const src = card?.querySelector(".team-row img")?.getAttribute("src");
+      return !!src && new URL(src, location.href).pathname === "/team-placeholder.svg";
+    }, null, { timeout: 8_000 }).then(() => true).catch(() => false);
+
+    await page.waitForFunction(() => !document.querySelector(".refresh-button")?.disabled, null, { timeout: 5_000 });
+    const updatedResponse = page.waitForResponse(
+      (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
+      { timeout: 10_000 },
+    );
+    await page.locator(".refresh-button").click();
+    await updatedResponse;
+    const updatedImageLoaded = await page.waitForFunction(() => {
+      const card = Array.from(document.querySelectorAll(".match-card"))
+        .find((candidate) => candidate.textContent?.includes("Logo URL 更新验证"));
+      const image = card?.querySelector(".team-row img");
+      return image instanceof HTMLImageElement
+        && image.getAttribute("src") === "https://logo-success.invalid/updated-team.svg"
+        && image.complete
+        && image.naturalWidth > 0;
+    }, null, { timeout: 8_000 }).then(() => true).catch(() => false);
+    logoSourceUpdate = {
+      retryRequests,
+      oldSourceFellBack,
+      updatedImageLoaded,
+      finalSource: await verificationLogo.getAttribute("src"),
+      naturalWidth: await verificationLogo.evaluate((image) => image.naturalWidth),
+    };
+  }
   if (verifyLogoSuccess) {
     await page.getByRole("tab", { name: /全部收录/ }).click();
     const verificationCard = page.locator(".match-card").filter({ hasText: "Logo 成功加载验证" }).first();
@@ -338,6 +398,7 @@ for (const profile of [
     logoTimeoutFallback,
     logoRetryFallback,
     logoSuccessRetention,
+    logoSourceUpdate,
     healthStatus: healthResult.status,
     healthMode: healthResult.body.mode,
     healthDemoMode: healthResult.body.demoMode,
@@ -409,6 +470,18 @@ for (const result of results) {
   if (simulateLogoSuccess && prefix === "desktop") {
     if (!result.logoSuccessRetention?.imageLoaded || !result.logoSuccessRetention?.retainedExternalSource) {
       failures.push(`${prefix}: successfully loaded team logo was replaced after its timeout deadline`);
+    }
+  }
+  if (simulateLogoSourceUpdate && prefix === "desktop") {
+    const attempts = result.logoSourceUpdate?.retryRequests || [];
+    if (attempts.length !== 2 || attempts[0] !== null || attempts[1] !== "1") {
+      failures.push(`${prefix}: old logo source did not fail and retry exactly once before replacement`);
+    }
+    if (!result.logoSourceUpdate?.oldSourceFellBack) {
+      failures.push(`${prefix}: old failed logo did not reach the placeholder before refresh`);
+    }
+    if (!result.logoSourceUpdate?.updatedImageLoaded) {
+      failures.push(`${prefix}: updated logo URL did not load after refreshing the same match`);
     }
   }
   failures.push(...result.errors.map((error) => `${prefix}: ${error}`));
