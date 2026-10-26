@@ -265,33 +265,57 @@ describe("schedule sync Worker client", () => {
     })).rejects.toMatchObject({ code: "snapshot_persistence_mismatch" });
   });
 
-  it("retries bounded 5xx failures and accepts only a validated subsequent result", async () => {
-    const waits = [];
-    let attempts = 0;
+  it("reconciles an ambiguous 5xx through health instead of replaying the sync", async () => {
+    const requests = [];
+    const baseline = Date.parse("2026-10-18T09:50:00.000Z");
     const result = await invokeScheduleSync({
       secret: syncSecret,
-      waitImpl: async (milliseconds) => waits.push(milliseconds),
-      fetchImpl: async () => {
-        attempts += 1;
-        return attempts < 3 ? response({}, 503) : response();
+      baselineLastSuccessfulSyncAt: baseline,
+      nowImpl: () => Date.parse("2026-10-18T10:00:00.000Z"),
+      fetchImpl: async (url) => {
+        requests.push(url);
+        return url === healthUrl
+          ? healthResponse({ lastSuccessfulSyncAt: "2026-10-18T09:59:30.000Z", sourceFetchedAt: "2026-10-18T09:59:30.000Z", snapshotAgeSeconds: 30 })
+          : response({}, 503);
       },
     });
 
-    expect(result.outcome).toBe("success");
-    expect(attempts).toBe(3);
-    expect(waits).toEqual([500, 1_000]);
+    expect(result).toMatchObject({ outcome: "verified_fresh_after_ambiguous_response", snapshotAgeSeconds: 30 });
+    expect(requests).toEqual([syncUrl, healthUrl]);
   });
 
-  it("retries a response-body transport failure after the response headers arrive", async () => {
+  it("fails closed after an ambiguous 5xx when health does not prove a newer successful sync", async () => {
+    const requests = [];
     const waits = [];
+    const baseline = Date.parse("2026-10-18T09:55:00.000Z");
+    await expect(invokeScheduleSync({
+      secret: syncSecret,
+      baselineLastSuccessfulSyncAt: baseline,
+      nowImpl: () => Date.parse("2026-10-18T10:00:00.000Z"),
+      waitImpl: async (milliseconds) => waits.push(milliseconds),
+      fetchImpl: async (url) => {
+        requests.push(url);
+        return url === healthUrl ? healthResponse() : response({}, 503);
+      },
+    })).rejects.toMatchObject({ code: "ambiguous_sync_failure", httpStatus: 503 });
+    expect(requests).toEqual([syncUrl, healthUrl]);
+    expect(waits).toEqual([]);
+  });
+
+  it("accepts a lost 2xx body only when health proves the sync advanced", async () => {
+    const now = Date.parse("2026-10-18T10:00:00.000Z");
+    const baseline = Date.parse("2026-10-18T09:50:00.000Z");
+    const sourceFetchedAt = new Date(now - 30_000).toISOString();
+    const requests = [];
     let syncAttempts = 0;
     const result = await invokeScheduleSync({
       secret: syncSecret,
-      waitImpl: async (milliseconds) => waits.push(milliseconds),
+      baselineLastSuccessfulSyncAt: baseline,
+      nowImpl: () => now,
       fetchImpl: async (url) => {
-        if (url === healthUrl) return healthResponse();
+        requests.push(url);
+        if (url === healthUrl) return healthResponse({ sourceFetchedAt, lastSuccessfulSyncAt: sourceFetchedAt, snapshotAgeSeconds: 30 });
         syncAttempts += 1;
-        if (syncAttempts > 1) return response();
         const body = new ReadableStream({
           start(controller) {
             controller.error(new Error(`private stream detail ${syncSecret}`));
@@ -304,22 +328,22 @@ describe("schedule sync Worker client", () => {
       },
     });
 
-    expect(result).toMatchObject({ outcome: "success", generation: 12 });
-    expect(syncAttempts).toBe(2);
-    expect(waits).toEqual([500]);
+    expect(result).toMatchObject({ outcome: "verified_fresh_after_ambiguous_response", snapshotAgeSeconds: 30 });
+    expect(syncAttempts).toBe(1);
+    expect(requests).toEqual([syncUrl, healthUrl]);
   });
 
-  it("reconciles a lost response before retrying a sync request", async () => {
+  it("reconciles a lost response only when lastSuccessfulSyncAt advanced", async () => {
     const now = Date.parse("2026-10-25T10:00:00.000Z");
+    const baseline = now - 10 * 60_000;
     const sourceFetchedAt = new Date(now - 30_000).toISOString();
     const requests = [];
-    const waits = [];
     let syncAttempts = 0;
 
     const result = await invokeScheduleSync({
       secret: syncSecret,
+      baselineLastSuccessfulSyncAt: baseline,
       nowImpl: () => now,
-      waitImpl: async (milliseconds) => waits.push(milliseconds),
       fetchImpl: async (url) => {
         requests.push(url);
         if (url === healthUrl) {
@@ -336,26 +360,25 @@ describe("schedule sync Worker client", () => {
     });
 
     expect(result).toEqual({
-      outcome: "verified_fresh_after_response_loss",
+      outcome: "verified_fresh_after_ambiguous_response",
       snapshotAgeSeconds: 30,
     });
     expect(syncAttempts).toBe(1);
-    expect(waits).toEqual([500]);
     expect(requests).toEqual([
-      "https://esports-schedule-two.vercel.app/api/cron/sync",
+      syncUrl,
       healthUrl,
     ]);
   });
 
-  it("retries after a lost response when health cannot prove that sync completed", async () => {
+  it("fails closed without replay when health cannot prove a lost sync completed", async () => {
     const now = Date.parse("2026-10-25T10:00:00.000Z");
+    const baseline = now - 5 * 60_000;
     const staleAt = new Date(now - 20 * 60_000).toISOString();
     const requests = [];
-    let syncAttempts = 0;
-    const result = await invokeScheduleSync({
+    await expect(invokeScheduleSync({
       secret: syncSecret,
+      baselineLastSuccessfulSyncAt: baseline,
       nowImpl: () => now,
-      waitImpl: async () => {},
       fetchImpl: async (url) => {
         requests.push(url);
         if (url === healthUrl) {
@@ -366,35 +389,32 @@ describe("schedule sync Worker client", () => {
             snapshotAgeSeconds: 1_200,
           });
         }
-        syncAttempts += 1;
-        if (syncAttempts === 1) throw new Error("response lost before headers");
-        return response();
+        throw new Error("response lost before headers");
       },
-    });
+    })).rejects.toMatchObject({ code: "ambiguous_sync_failure" });
 
-    expect(result).toMatchObject({ outcome: "success", generation: 12 });
-    expect(syncAttempts).toBe(2);
     expect(requests).toEqual([
-      "https://esports-schedule-two.vercel.app/api/cron/sync",
+      syncUrl,
       healthUrl,
-      "https://esports-schedule-two.vercel.app/api/cron/sync",
     ]);
   });
 
-  it("verifies freshness after an ambiguous successful response before retrying the sync", async () => {
+  it("does not treat a fresh but unchanged snapshot as success after a lost 2xx body", async () => {
     const now = Date.parse("2026-10-25T10:00:00.000Z");
+    const baseline = now - 10_000;
     const requests = [];
-    const sourceFetchedAt = new Date(now - 30_000).toISOString();
+    const oldFreshAt = new Date(now - 30_000).toISOString();
     let syncAttempts = 0;
-    const result = await invokeScheduleSync({
+    await expect(invokeScheduleSync({
       secret: syncSecret,
+      baselineLastSuccessfulSyncAt: baseline,
       nowImpl: () => now,
       fetchImpl: async (url) => {
         requests.push(url);
         if (url === healthUrl) {
           return healthResponse({
-            sourceFetchedAt,
-            lastSuccessfulSyncAt: sourceFetchedAt,
+            sourceFetchedAt: oldFreshAt,
+            lastSuccessfulSyncAt: oldFreshAt,
             snapshotAgeSeconds: 30,
           });
         }
@@ -409,17 +429,10 @@ describe("schedule sync Worker client", () => {
           headers: { "content-type": "application/json" },
         });
       },
-    });
+    })).rejects.toMatchObject({ code: "ambiguous_sync_failure", httpStatus: 200 });
 
-    expect(result).toEqual({
-      outcome: "verified_fresh_after_response_loss",
-      snapshotAgeSeconds: 30,
-    });
     expect(syncAttempts).toBe(1);
-    expect(requests).toEqual([
-      "https://esports-schedule-two.vercel.app/api/cron/sync",
-      healthUrl,
-    ]);
+    expect(requests).toEqual([syncUrl, healthUrl]);
   });
 
   it("does not let a fresh cached snapshot hide an authorization failure with a broken body", async () => {
@@ -460,14 +473,16 @@ describe("schedule sync Worker client", () => {
     expect(waitImpl).not.toHaveBeenCalled();
   });
 
-  it("bounds repeated response-body transport failures and sanitizes the final error", async () => {
-    const waits = [];
+  it("fails closed after a lost response body when freshness cannot advance", async () => {
+    const baseline = Date.parse("2026-10-18T09:56:00.000Z");
+    const now = Date.parse("2026-10-18T10:00:00.000Z");
     let syncAttempts = 0;
     await expect(invokeScheduleSync({
       secret: syncSecret,
-      waitImpl: async (milliseconds) => waits.push(milliseconds),
+      baselineLastSuccessfulSyncAt: baseline,
+      nowImpl: () => now,
       fetchImpl: async (url) => {
-        if (url === healthUrl) return healthResponse();
+        if (url === healthUrl) return healthResponse({ lastSuccessfulSyncAt: "2026-10-18T09:55:00.000Z" });
         syncAttempts += 1;
         const body = new ReadableStream({
           start(controller) {
@@ -479,22 +494,28 @@ describe("schedule sync Worker client", () => {
           headers: { "content-type": "application/json" },
         });
       },
-    })).rejects.toMatchObject({ code: "response_read_failure", httpStatus: 200 });
+    })).rejects.toMatchObject({ code: "ambiguous_sync_failure", httpStatus: 200 });
 
-    expect(syncAttempts).toBe(3);
-    expect(waits).toEqual([500, 1_000]);
+    expect(syncAttempts).toBe(1);
   });
 
-  it("retries a transient non-JSON response when body cancellation never settles", async () => {
+  it("reconciles a non-JSON 5xx without waiting for body cancellation", async () => {
     const cancel = vi.fn(() => new Promise(() => {}));
-    let attempts = 0;
+    const now = Date.parse("2026-10-18T10:00:00.000Z");
+    const sourceFetchedAt = "2026-10-18T09:59:30.000Z";
+    const baseline = Date.parse("2026-10-18T09:50:00.000Z");
+    const requests = [];
+    let syncAttempts = 0;
     const result = await Promise.race([
       invokeScheduleSync({
         secret: syncSecret,
+        baselineLastSuccessfulSyncAt: baseline,
+        nowImpl: () => now,
         waitImpl: async () => {},
-        fetchImpl: async () => {
-          attempts += 1;
-          if (attempts > 1) return response();
+        fetchImpl: async (url) => {
+          requests.push(url);
+          if (url === healthUrl) return healthResponse({ sourceFetchedAt, lastSuccessfulSyncAt: sourceFetchedAt, snapshotAgeSeconds: 30 });
+          syncAttempts += 1;
           return {
             status: 503,
             headers: new Headers({ "content-type": "text/plain" }),
@@ -506,45 +527,42 @@ describe("schedule sync Worker client", () => {
     ]);
 
     expect(result.kind).toBe("result");
-    expect(result.value).toMatchObject({ outcome: "success", generation: 12 });
-    expect(attempts).toBe(2);
+    expect(result.value).toMatchObject({ outcome: "verified_fresh_after_ambiguous_response", snapshotAgeSeconds: 30 });
+    expect(syncAttempts).toBe(1);
     expect(cancel).toHaveBeenCalledTimes(1);
+    expect(requests).toEqual([syncUrl, healthUrl]);
   });
 
-  it("honors Retry-After seconds and HTTP dates for 429 and transient 503 responses", async () => {
-    for (const status of [429, 503]) {
-      for (const retryAfter of ["12", new Date(12_000).toUTCString()]) {
-        const waits = [];
-        let attempts = 0;
-        await expect(invokeScheduleSync({
-          secret: syncSecret,
-          nowImpl: () => 0,
-          waitImpl: async (milliseconds) => waits.push(milliseconds),
-          fetchImpl: async () => {
-            attempts += 1;
-            return attempts === 1 ? response({}, status, { "retry-after": retryAfter }) : response();
-          },
-        })).resolves.toMatchObject({ outcome: "success" });
+  it("honors Retry-After seconds and HTTP dates for explicit 429 rejections", async () => {
+    for (const retryAfter of ["12", new Date(12_000).toUTCString()]) {
+      const waits = [];
+      let attempts = 0;
+      await expect(invokeScheduleSync({
+        secret: syncSecret,
+        nowImpl: () => 0,
+        waitImpl: async (milliseconds) => waits.push(milliseconds),
+        fetchImpl: async () => {
+          attempts += 1;
+          return attempts === 1 ? response({}, 429, { "retry-after": retryAfter }) : response();
+        },
+      })).resolves.toMatchObject({ outcome: "success" });
 
-        expect(attempts).toBe(2);
-        expect(waits).toEqual([12_000]);
-      }
+      expect(attempts).toBe(2);
+      expect(waits).toEqual([12_000]);
     }
   });
 
   it("does not retry before an upstream Retry-After that exceeds the total budget", async () => {
-    for (const status of [429, 503]) {
-      const fetchImpl = vi.fn(async () => response({}, status, { "retry-after": "900" }));
-      const waitImpl = vi.fn();
-      await expect(invokeScheduleSync({ secret: syncSecret, fetchImpl, waitImpl })).rejects.toMatchObject({
-        code: "retry_budget_exhausted",
-      });
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
-      expect(waitImpl).not.toHaveBeenCalled();
-    }
+    const fetchImpl = vi.fn(async () => response({}, 429, { "retry-after": "900" }));
+    const waitImpl = vi.fn();
+    await expect(invokeScheduleSync({ secret: syncSecret, fetchImpl, waitImpl })).rejects.toMatchObject({
+      code: "retry_budget_exhausted",
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(waitImpl).not.toHaveBeenCalled();
   });
 
-  it("caps all retries to a total budget below the Cron invocation wall-time limit", async () => {
+  it("caps explicit 429 retries to a total budget below the Cron invocation wall-time limit", async () => {
     let now = 0;
     let attempts = 0;
     const timeoutBudgets = [];
@@ -561,7 +579,7 @@ describe("schedule sync Worker client", () => {
       },
       fetchImpl: async () => {
         attempts += 1;
-        return attempts < 3 ? response({}, 503) : response();
+        return attempts < 3 ? response({}, 429) : response();
       },
     });
 
@@ -571,7 +589,7 @@ describe("schedule sync Worker client", () => {
     expect(timeoutBudgets.reduce((total, timeout) => total + timeout, 0)).toBeLessThan(14 * 60_000);
   });
 
-  it("stops after three network failures without exposing transport details", async () => {
+  it("fails closed after an ambiguous network failure without exposing transport details", async () => {
     const log = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const worker = createScheduleSyncWorker({
       fetchImpl: async () => { throw new Error(`private transport detail ${syncSecret}`); },
@@ -745,7 +763,7 @@ describe("schedule sync Worker client", () => {
       .rejects.toThrow("schedule sync invocation failed");
 
     const record = JSON.parse(log.error.mock.calls[0][0]);
-    expect(record).toMatchObject({ code: "network_failure", httpStatus: null });
+    expect(record).toMatchObject({ code: "ambiguous_sync_failure", httpStatus: null });
     expect(JSON.stringify(record)).not.toContain(syncSecret);
     expect(JSON.stringify(record)).not.toContain("transport");
   });
@@ -820,6 +838,15 @@ describe("schedule sync Worker client", () => {
     expect(requests[0].options.headers).not.toHaveProperty("authorization");
     expect(log.log).toHaveBeenCalledTimes(1);
     expect(log.log.mock.calls[0][0]).toContain('"outcome":"skipped_fresh"');
+  });
+
+  it("requires CRON_SECRET before skipping an authenticated sync for fresh health", async () => {
+    const fetchImpl = vi.fn(async () => healthResponse());
+    const worker = createScheduleSyncWorker({ fetchImpl, nowImpl: () => Date.parse("2026-10-18T10:00:00.000Z") });
+
+    await expect(worker.scheduled({ scheduledTime: 1, noRetry: vi.fn() }, {}))
+      .rejects.toThrow("schedule sync invocation failed");
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("skips at the backup freshness threshold but syncs above it before the next 15-minute slot", async () => {

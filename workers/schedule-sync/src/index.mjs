@@ -48,9 +48,9 @@ function cancelResponseBodyWithoutBlocking(response) {
 }
 
 function retryDelayFor(response, attempt, now) {
-  // 429 rate limits and 503 service-unavailable responses may both ask the
-  // client to wait; respect that signal before applying the bounded fallback.
-  if (response.status !== 429 && response.status !== 503) return RETRY_DELAYS_MS[attempt];
+  // Only an explicit 429 is safe to retry: unlike a 5xx or lost response, it
+  // proves the write-like sync request was rejected before it could complete.
+  if (response.status !== 429) return RETRY_DELAYS_MS[attempt];
 
   const retryAfter = response.headers.get("retry-after")?.trim();
   if (!retryAfter) return RETRY_DELAYS_MS[attempt];
@@ -277,7 +277,7 @@ function getFreshScheduleAgeSeconds(payload, now) {
   return payload.snapshotAgeSeconds;
 }
 
-async function getFreshScheduleAge({ fetchImpl, nowImpl, timeoutSignalImpl }) {
+async function getScheduleHealth({ fetchImpl, timeoutSignalImpl }) {
   try {
     const response = await fetchImpl(HEALTH_URL, {
       method: "GET",
@@ -289,8 +289,7 @@ async function getFreshScheduleAge({ fetchImpl, nowImpl, timeoutSignalImpl }) {
       cancelResponseBodyWithoutBlocking(response);
       return null;
     }
-    const payload = await readJsonBody(response);
-    return getFreshScheduleAgeSeconds(payload, nowImpl());
+    return await readJsonBody(response);
   } catch {
     // This is best-effort optimization only: if health cannot be trusted,
     // proceed with the bounded authenticated sync instead of skipping it.
@@ -298,11 +297,32 @@ async function getFreshScheduleAge({ fetchImpl, nowImpl, timeoutSignalImpl }) {
   }
 }
 
-async function verifyFreshAfterAmbiguousSyncResponse({ fetchImpl, nowImpl, timeoutSignalImpl }) {
-  const snapshotAgeSeconds = await getFreshScheduleAge({ fetchImpl, nowImpl, timeoutSignalImpl });
-  return snapshotAgeSeconds === null
-    ? null
-    : { outcome: "verified_fresh_after_response_loss", snapshotAgeSeconds };
+async function getFreshScheduleAge({ fetchImpl, nowImpl, timeoutSignalImpl }) {
+  const payload = await getScheduleHealth({ fetchImpl, timeoutSignalImpl });
+  return payload ? getFreshScheduleAgeSeconds(payload, nowImpl()) : null;
+}
+
+async function verifyFreshAfterAmbiguousSyncResponse({
+  fetchImpl,
+  nowImpl,
+  timeoutSignalImpl,
+  baselineLastSuccessfulSyncAt,
+}) {
+  if (!Number.isFinite(baselineLastSuccessfulSyncAt)) return null;
+  const payload = await getScheduleHealth({ fetchImpl, timeoutSignalImpl });
+  const latestSuccessfulSyncAt = parseTimestampWithTimezone(payload?.lastSuccessfulSyncAt);
+  const snapshotAgeSeconds = payload
+    ? getFreshScheduleAgeSeconds(payload, nowImpl())
+    : null;
+  if (snapshotAgeSeconds === null
+    || latestSuccessfulSyncAt === null
+    || latestSuccessfulSyncAt <= baselineLastSuccessfulSyncAt) {
+    return null;
+  }
+  return {
+    outcome: "verified_fresh_after_ambiguous_response",
+    snapshotAgeSeconds,
+  };
 }
 
 async function verifyFreshAfterConcurrentSync({ fetchImpl, nowImpl, timeoutSignalImpl }) {
@@ -318,8 +338,9 @@ export async function invokeScheduleSync({
   waitImpl = pause,
   nowImpl = Date.now,
   timeoutSignalImpl = (milliseconds) => AbortSignal.timeout(milliseconds),
+  baselineLastSuccessfulSyncAt = null,
 }) {
-  if (typeof secret !== "string" || secret.length === 0) {
+  if (typeof secret !== "string" || secret.trim().length === 0) {
     throw new SyncInvocationError("missing_configuration");
   }
 
@@ -342,19 +363,14 @@ export async function invokeScheduleSync({
         signal: timeoutSignalImpl(Math.min(REQUEST_TIMEOUT_MS, remainingBudget)),
       });
     } catch {
-      if (attempt < RETRY_DELAYS_MS.length) {
-        const delay = RETRY_DELAYS_MS[attempt];
-        if (deadline - nowImpl() <= delay) throw new SyncInvocationError("retry_budget_exhausted");
-        await waitImpl(delay);
-        // A rejected fetch is ambiguous: the origin may have completed the
-        // sync before the response was lost. Reconcile after the backoff and
-        // before issuing another write-like sync request, so a completed run
-        // is not needlessly repeated.
-        const recovered = await verifyFreshAfterAmbiguousSyncResponse({ fetchImpl, nowImpl, timeoutSignalImpl });
-        if (recovered) return recovered;
-        continue;
-      }
-      throw new SyncInvocationError("network_failure");
+      const recovered = await verifyFreshAfterAmbiguousSyncResponse({
+        fetchImpl,
+        nowImpl,
+        timeoutSignalImpl,
+        baselineLastSuccessfulSyncAt,
+      });
+      if (recovered) return recovered;
+      throw new SyncInvocationError("ambiguous_sync_failure");
     }
 
     if (response.status === 503
@@ -363,19 +379,15 @@ export async function invokeScheduleSync({
       try {
         payload = await readJsonBody(response);
       } catch (error) {
-        // Parser/contract failures are deterministic; retrying them would
-        // repeat a completed sync and can amplify load. Only transport errors
-        // from a lost body are eligible for the bounded retry path.
         if (error instanceof SyncInvocationError) throw error;
-        if (response.ok) {
-          const recovered = await verifyFreshAfterAmbiguousSyncResponse({ fetchImpl, nowImpl, timeoutSignalImpl });
-          if (recovered) return recovered;
-        }
-        if (attempt === MAX_ATTEMPTS - 1) throw error;
-        const delay = retryDelayFor(response, attempt, nowImpl());
-        if (deadline - nowImpl() <= delay) throw new SyncInvocationError("retry_budget_exhausted");
-        await waitImpl(delay);
-        continue;
+        const recovered = await verifyFreshAfterAmbiguousSyncResponse({
+          fetchImpl,
+          nowImpl,
+          timeoutSignalImpl,
+          baselineLastSuccessfulSyncAt,
+        });
+        if (recovered) return recovered;
+        throw new SyncInvocationError("ambiguous_sync_failure", response.status);
       }
 
       // The sync endpoint uses structured 503 responses for a completed
@@ -386,20 +398,34 @@ export async function invokeScheduleSync({
         throw new SyncInvocationError("sync_failed", response.status);
       }
 
-      if (attempt === MAX_ATTEMPTS - 1) return validateSyncPayload(payload, response.status);
+      const recovered = await verifyFreshAfterAmbiguousSyncResponse({
+        fetchImpl,
+        nowImpl,
+        timeoutSignalImpl,
+        baselineLastSuccessfulSyncAt,
+      });
+      if (recovered) return recovered;
+      throw new SyncInvocationError("ambiguous_sync_failure", response.status);
+    }
+
+    if (response.status === 429 && attempt < RETRY_DELAYS_MS.length) {
+      cancelResponseBodyWithoutBlocking(response);
       const delay = retryDelayFor(response, attempt, nowImpl());
       if (deadline - nowImpl() <= delay) throw new SyncInvocationError("retry_budget_exhausted");
       await waitImpl(delay);
       continue;
     }
 
-    if ((response.status >= 500 || response.status === 429)
-      && attempt < RETRY_DELAYS_MS.length) {
+    if (response.status >= 500) {
       cancelResponseBodyWithoutBlocking(response);
-      const delay = retryDelayFor(response, attempt, nowImpl());
-      if (deadline - nowImpl() <= delay) throw new SyncInvocationError("retry_budget_exhausted");
-      await waitImpl(delay);
-      continue;
+      const recovered = await verifyFreshAfterAmbiguousSyncResponse({
+        fetchImpl,
+        nowImpl,
+        timeoutSignalImpl,
+        baselineLastSuccessfulSyncAt,
+      });
+      if (recovered) return recovered;
+      throw new SyncInvocationError("ambiguous_sync_failure", response.status);
     }
 
     let payload;
@@ -413,18 +439,18 @@ export async function invokeScheduleSync({
       if (error instanceof SyncInvocationError) throw error;
       cancelResponseBodyWithoutBlocking(response);
       if (response.ok) {
-        const recovered = await verifyFreshAfterAmbiguousSyncResponse({ fetchImpl, nowImpl, timeoutSignalImpl });
+        const recovered = await verifyFreshAfterAmbiguousSyncResponse({
+          fetchImpl,
+          nowImpl,
+          timeoutSignalImpl,
+          baselineLastSuccessfulSyncAt,
+        });
         if (recovered) return recovered;
-      } else if (response.status < 500 && response.status !== 429) {
-        throw new SyncInvocationError("response_read_failure", response.status);
       }
-      if (attempt === MAX_ATTEMPTS - 1) {
-        throw new SyncInvocationError("response_read_failure", response.status);
-      }
-      const delay = retryDelayFor(response, attempt, nowImpl());
-      if (deadline - nowImpl() <= delay) throw new SyncInvocationError("retry_budget_exhausted");
-      await waitImpl(delay);
-      continue;
+      throw new SyncInvocationError(
+        response.ok ? "ambiguous_sync_failure" : "response_read_failure",
+        response.status,
+      );
     }
     const result = validateSyncPayload(payload, response.status);
     if (result.outcome === "skipped_busy") {
@@ -462,9 +488,23 @@ export function createScheduleSyncWorker({
         : null;
 
       try {
-        const freshAgeSeconds = await getFreshScheduleAge({ fetchImpl, nowImpl, timeoutSignalImpl });
+        if (typeof env?.CRON_SECRET !== "string" || env.CRON_SECRET.trim().length === 0) {
+          throw new SyncInvocationError("missing_configuration");
+        }
+        const health = await getScheduleHealth({ fetchImpl, timeoutSignalImpl });
+        const baselineLastSuccessfulSyncAt = parseTimestampWithTimezone(health?.lastSuccessfulSyncAt);
+        const freshAgeSeconds = health
+          ? getFreshScheduleAgeSeconds(health, nowImpl())
+          : null;
         const result = freshAgeSeconds === null
-          ? await invokeScheduleSync({ fetchImpl, secret: env.CRON_SECRET, waitImpl, nowImpl, timeoutSignalImpl })
+          ? await invokeScheduleSync({
+              fetchImpl,
+              secret: env.CRON_SECRET,
+              waitImpl,
+              nowImpl,
+              timeoutSignalImpl,
+              baselineLastSuccessfulSyncAt,
+            })
           : { outcome: "skipped_fresh", snapshotAgeSeconds: freshAgeSeconds };
         const summary = { event: "schedule_sync", scheduledTime, ...result };
         if (result.outcome === "partial") {
