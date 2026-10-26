@@ -108,7 +108,7 @@ npm run verify:production -- http://localhost:3000 <expected-git-sha>
 cmd /d /c "vercel env run -- node scripts/verify-browser.mjs https://your-preview-deployment.vercel.app"
 ```
 
-浏览器验证器只把短期 `VERCEL_OIDC_TOKEN` 发给命令行传入 URL 的同源站点；不会发给第三方资源，也不会把该令牌传入浏览器子进程或诊断输出。不要启用 Playwright 协议调试或打印请求头。
+请将 URL 换成当前项目的实际 Preview Deployment URL（主机名匹配 `esports-schedule-*-jack-zhu-s-projects.vercel.app`）。验证器只会把短期 `VERCEL_OIDC_TOKEN` 发给该 Preview 的同源请求；非 HTTPS 或不属于此项目/团队的目标会在发出请求前被拒绝。令牌不会发给第三方资源、浏览器子进程或诊断输出。不要启用 Playwright 协议调试或打印请求头。
 
 ## Vercel 部署后验证
 
