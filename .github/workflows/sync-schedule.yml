@@ -14,23 +14,18 @@ concurrency:
 
 jobs:
   refresh:
+    # workflow_dispatch can target a non-default ref; only main may use the production sync credential.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
       - name: Check out response validator
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Trigger the protected production sync
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          SYNC_URL: https://esports-schedule-two.vercel.app/api/cron/sync
         run: |
-          test -n "$CRON_SECRET"
-          response_file="$RUNNER_TEMP/sync-response.json"
-          http_status=$(curl --silent --show-error \
-            --retry 2 --retry-all-errors --max-time 300 \
-            --output "$response_file" \
-            --write-out "%{http_code}" \
-            --header "Authorization: Bearer $CRON_SECRET" \
-            "$SYNC_URL")
-          node scripts/validate-sync-response.mjs "$response_file" "$http_status"
+          node scripts/trigger-sync.mjs
