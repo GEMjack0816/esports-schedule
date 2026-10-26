@@ -27,13 +27,15 @@ describe("production sync request boundary", () => {
   it("sends one fixed-target request with the secret only in the authorization header", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ status: "busy" }, { status: 409 }));
     const timeoutSignal = new AbortController().signal;
+    const requestStartedAt = Date.parse("2026-10-24T10:00:00.000Z");
     const timeoutSignalImpl = vi.fn(() => timeoutSignal);
 
     await expect(requestSync({
       env: { CRON_SECRET: secret },
       fetchImpl,
       timeoutSignalImpl,
-    })).resolves.toMatchObject({ httpStatus: 409, payload: { status: "busy" } });
+      nowImpl: () => requestStartedAt,
+    })).resolves.toMatchObject({ httpStatus: 409, payload: { status: "busy" }, requestStartedAt });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl).toHaveBeenCalledWith(

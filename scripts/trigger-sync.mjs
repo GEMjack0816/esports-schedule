@@ -79,12 +79,14 @@ export async function requestSync({
   env = process.env,
   fetchImpl = fetch,
   timeoutSignalImpl = AbortSignal.timeout,
+  nowImpl = Date.now,
 } = {}) {
   const secret = env.CRON_SECRET;
   if (typeof secret !== "string" || secret.length === 0) {
     throw new SyncRequestError("missing_configuration");
   }
 
+  const requestStartedAt = nowImpl();
   let response;
   try {
     response = await fetchImpl(SYNC_URL, {
@@ -104,13 +106,14 @@ export async function requestSync({
   return {
     httpStatus: response.status,
     payload: await readJsonBody(response),
+    requestStartedAt,
   };
 }
 
 async function main() {
   try {
-    const { httpStatus, payload } = await requestSync();
-    const result = validateSyncResponse(payload, httpStatus);
+    const { httpStatus, payload, requestStartedAt } = await requestSync();
+    const result = validateSyncResponse(payload, httpStatus, Date.now(), requestStartedAt);
     console.log(result.message);
     if (!result.ok) process.exitCode = 1;
   } catch (error) {

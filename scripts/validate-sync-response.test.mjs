@@ -15,11 +15,53 @@ const success = {
   gamesSucceeded: 5,
   gamesFailed: 0,
   snapshotsPersisted: 5,
-  lastSuccessfulSyncAt: "2026-08-30T00:00:00.000Z",
+  lastSuccessfulSyncAt: new Date(Date.now() - 1_000).toISOString(),
   errors: [],
 };
 
 describe("sync workflow response validation", () => {
+  it("rejects a canonical but stale sync timestamp", () => {
+    const now = Date.parse("2026-10-24T10:00:00.000Z");
+    expect(validateSyncResponse({
+      ...success,
+      lastSuccessfulSyncAt: "2026-10-24T09:44:59.999Z",
+    }, 200, now, now - 10_000)).toMatchObject({
+      ok: false,
+      message: "sync lastSuccessfulSyncAt is stale or predates this invocation",
+    });
+  });
+
+  it("rejects a sync timestamp too far in the future", () => {
+    const now = Date.parse("2026-10-24T10:00:00.000Z");
+    expect(validateSyncResponse({
+      ...success,
+      lastSuccessfulSyncAt: "2026-10-24T10:01:00.001Z",
+    }, 200, now, now - 10_000)).toMatchObject({
+      ok: false,
+      message: "sync lastSuccessfulSyncAt is stale or predates this invocation",
+    });
+  });
+
+  it("rejects an old successful timestamp even when it is under the age limit but predates the request", () => {
+    const now = Date.parse("2026-10-24T10:00:00.000Z");
+    expect(validateSyncResponse({
+      ...success,
+      lastSuccessfulSyncAt: "2026-10-24T09:59:00.000Z",
+    }, 200, now, now)).toMatchObject({
+      ok: false,
+      message: "sync lastSuccessfulSyncAt is stale or predates this invocation",
+    });
+  });
+
+  it("accepts successful sync time within clock-skew tolerance of the invocation", () => {
+    const now = Date.parse("2026-10-24T10:00:00.000Z");
+    const startedAt = now - 10_000;
+    expect(validateSyncResponse({
+      ...success,
+      lastSuccessfulSyncAt: new Date(startedAt - 30_000).toISOString(),
+    }, 200, now, startedAt).ok).toBe(true);
+  });
+
   it("accepts a complete successful refresh", () => {
     expect(validateSyncResponse(success, 200).ok).toBe(true);
   });

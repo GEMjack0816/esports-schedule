@@ -3,6 +3,8 @@ import { pathToFileURL } from "node:url";
 
 // Keep aligned with pandaGameKeys in src/lib/schedule/types.ts; this workflow must cover all games.
 const EXPECTED_SYNC_GAME_COUNT = 5;
+const MAX_SUCCESS_AGE_MS = 15 * 60 * 1_000;
+const CLOCK_SKEW_TOLERANCE_MS = 60 * 1_000;
 
 function isCanonicalUtcTimestamp(value) {
   if (typeof value !== "string") return false;
@@ -10,7 +12,7 @@ function isCanonicalUtcTimestamp(value) {
   return Number.isFinite(parsed.valueOf()) && parsed.toISOString() === value;
 }
 
-export function validateSyncResponse(payload, httpStatus) {
+export function validateSyncResponse(payload, httpStatus, now = Date.now(), requestStartedAt = now) {
   if (!payload || typeof payload !== "object") {
     return { ok: false, message: "sync endpoint returned invalid JSON" };
   }
@@ -58,6 +60,16 @@ export function validateSyncResponse(payload, httpStatus) {
   }
   if (!isCanonicalUtcTimestamp(payload.lastSuccessfulSyncAt)) {
     return { ok: false, message: "sync did not report a canonical UTC lastSuccessfulSyncAt" };
+  }
+  if (!Number.isSafeInteger(now) || !Number.isSafeInteger(requestStartedAt)
+    || requestStartedAt > now + CLOCK_SKEW_TOLERANCE_MS) {
+    return { ok: false, message: "sync timestamp validation received an invalid clock window" };
+  }
+  const successfulSyncTime = Date.parse(payload.lastSuccessfulSyncAt);
+  if (successfulSyncTime < now - MAX_SUCCESS_AGE_MS
+    || successfulSyncTime > now + CLOCK_SKEW_TOLERANCE_MS
+    || successfulSyncTime < requestStartedAt - CLOCK_SKEW_TOLERANCE_MS) {
+    return { ok: false, message: "sync lastSuccessfulSyncAt is stale or predates this invocation" };
   }
   if (!Array.isArray(payload.errors)) {
     return { ok: false, message: "sync did not report a valid error summary" };
