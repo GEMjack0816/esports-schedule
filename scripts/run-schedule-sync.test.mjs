@@ -119,6 +119,72 @@ describe("runScheduleSync", () => {
     expect(calls).toEqual([healthUrl, syncUrl, healthUrl]);
   });
 
+  it("reconciles a 5xx only when health proves a newer fresh five-game snapshot", async () => {
+    const calls = [];
+    const result = await runScheduleSync(makeOptions(async (url) => {
+      calls.push(url);
+      if (url === healthUrl) return calls.length === 1 ? staleHealth() : freshHealth();
+      return Response.json({ error: "upstream response lost after sync" }, { status: 503 });
+    }));
+
+    expect(result).toEqual({
+      ok: true,
+      outcome: "verified_fresh_after_ambiguous_response",
+      lastSuccessfulSyncAt: "2026-10-18T09:59:30.000Z",
+    });
+    expect(calls).toEqual([healthUrl, syncUrl, healthUrl]);
+  });
+
+  it("fails a 5xx when the post-request health snapshot is not fresh and advanced", async () => {
+    const calls = [];
+    await expect(runScheduleSync(makeOptions(async (url) => {
+      calls.push(url);
+      if (url === healthUrl) return staleHealth();
+      return Response.json({ error: "sync failed" }, { status: 503 });
+    }))).rejects.toMatchObject({ code: "sync_http_failure_without_verified_refresh" });
+
+    expect(calls).toEqual([healthUrl, syncUrl, healthUrl]);
+  });
+
+  it("does not accept a globally fresh snapshot when one game's timestamps are stale", async () => {
+    const calls = [];
+    await expect(runScheduleSync(makeOptions(async (url) => {
+      calls.push(url);
+      if (url === healthUrl && calls.length === 1) return staleHealth();
+      if (url === syncUrl) return Response.json({ error: "ambiguous" }, { status: 503 });
+      const payload = await freshHealth().json();
+      payload.games.cs2.sourceFetchedAt = "2026-10-18T09:30:00.000Z";
+      return Response.json(payload, {
+        headers: { "cache-control": "no-store, no-cache, must-revalidate" },
+      });
+    }))).rejects.toMatchObject({ code: "sync_http_failure_without_verified_refresh" });
+
+    expect(calls).toEqual([healthUrl, syncUrl, healthUrl]);
+  });
+
+  it("caps response parsing work even when a body emits endless empty chunks", async () => {
+    const calls = [];
+    let pulls = 0;
+    const emptyChunkStream = new ReadableStream({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(new Uint8Array());
+      },
+    });
+
+    await expect(runScheduleSync(makeOptions(async (url) => {
+      calls.push(url);
+      if (url === healthUrl) return staleHealth();
+      return new Response(emptyChunkStream, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }))).rejects.toMatchObject({ code: "sync_response_unreadable" });
+
+    expect(pulls).toBeLessThanOrEqual(1_026);
+    expect(calls).toEqual([healthUrl, syncUrl, healthUrl]);
+  });
+
   it("fails an ambiguous response when the health snapshot did not advance", async () => {
     const calls = [];
     await expect(runScheduleSync(makeOptions(async (url) => {

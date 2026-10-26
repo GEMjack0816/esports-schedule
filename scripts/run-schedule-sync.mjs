@@ -4,6 +4,7 @@ import { validateSyncResponse } from "./validate-sync-response.mjs";
 const SYNC_URL = "https://esports-schedule-two.vercel.app/api/cron/sync";
 const HEALTH_URL = "https://esports-schedule-two.vercel.app/api/health/data-coverage";
 const MAX_BODY_BYTES = 32 * 1024;
+const MAX_BODY_CHUNKS = 1_024;
 const SYNC_TIMEOUT_MS = 300_000;
 const HEALTH_TIMEOUT_MS = 10_000;
 const FRESHNESS_LIMIT_SECONDS = 15 * 60;
@@ -45,10 +46,20 @@ async function readJsonBody(response) {
   const reader = response.body.getReader();
   const chunks = [];
   let size = 0;
+  let chunkCount = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      chunkCount += 1;
+      if (chunkCount > MAX_BODY_CHUNKS) {
+        try {
+          void reader.cancel().catch(() => {});
+        } catch {
+          // Cancellation is best-effort; keep the parser work strictly bounded.
+        }
+        throw new ScheduleSyncRunError("response_too_many_chunks");
+      }
       size += value.byteLength;
       if (size > MAX_BODY_BYTES) {
         try {
@@ -127,7 +138,8 @@ function isFreshFiveGameSnapshot(payload, now) {
       && gameLastSuccessfulSyncAt !== null
       && gameSourceFetchedAt <= gameLastSuccessfulSyncAt
       && gameLastSuccessfulSyncAt <= now
-      && (now - gameSourceFetchedAt) / 1_000 <= FRESHNESS_LIMIT_SECONDS;
+      && (now - gameSourceFetchedAt) / 1_000 <= FRESHNESS_LIMIT_SECONDS
+      && (now - gameLastSuccessfulSyncAt) / 1_000 <= FRESHNESS_LIMIT_SECONDS;
   });
 }
 
@@ -169,7 +181,7 @@ export async function runScheduleSync({
   nowImpl = Date.now,
   timeoutSignalImpl = (milliseconds) => AbortSignal.timeout(milliseconds),
 }) {
-  if (typeof secret !== "string" || secret.length === 0) {
+  if (typeof secret !== "string" || secret.trim().length === 0) {
     throw new ScheduleSyncRunError("missing_configuration");
   }
 
@@ -196,12 +208,18 @@ export async function runScheduleSync({
   let payload;
   try {
     payload = await readJsonBody(response);
-  } catch (error) {
-    if (response.ok && !(error instanceof ScheduleSyncRunError)) {
+  } catch {
+    if (response.ok || response.status >= 500) {
       const recovered = await verifyFreshnessAdvanced({ fetchImpl, timeoutSignalImpl, nowImpl, baseline });
       if (recovered) return recovered;
     }
     throw new ScheduleSyncRunError("sync_response_unreadable");
+  }
+
+  if (response.status >= 500) {
+    const recovered = await verifyFreshnessAdvanced({ fetchImpl, timeoutSignalImpl, nowImpl, baseline });
+    if (recovered) return recovered;
+    throw new ScheduleSyncRunError("sync_http_failure_without_verified_refresh");
   }
 
   if (response.status === 409 && payload?.status === "busy" && payload.lockAcquired === false) {
