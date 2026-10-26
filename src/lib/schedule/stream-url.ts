@@ -38,6 +38,9 @@ function matchesCredentialParameter(name: string): boolean {
     // these suffixes close the common prefixed variants without rejecting
     // unrelated public fields such as `match_code`.
     || /(?:oauth|access|auth|authorization)code$/.test(normalized)
+    // OAuth verification and device/one-time codes can complete an auth flow.
+    || /oauthverifier$/.test(normalized)
+    || /(?:device|user|verification|onetime)code$/.test(normalized)
     // Pluralized parameter names can still carry opaque credential material.
     || /(?:credentials|secrets|passwords|tokens|cookies|sessions)$/.test(normalized)
     // Providers commonly prefix API-Key with X- or another vendor name.
