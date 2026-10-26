@@ -4,10 +4,10 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
-import { isMatchInScheduleRange, isMatchOnSelectedDate, scheduleDateGroupKey, type ScheduleDateRange } from "@/lib/schedule/date-range";
+import { isMatchInScheduleRange, scheduleDateGroupKey, type ScheduleDateRange } from "@/lib/schedule/date-range";
 import { getScheduleHeroStats } from "@/lib/schedule/hero-stats";
 import { subscribeToMinuteClock } from "@/lib/schedule/minute-clock";
-import { requestCompleteScheduleForSearch } from "@/lib/schedule/search-completeness";
+import { isMatchInSearchDateScope, requestCompleteScheduleForSearch } from "@/lib/schedule/search-completeness";
 import { addDaysKey, dateInputBoundsInTimeZone, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = ScheduleDateRange;
@@ -226,9 +226,16 @@ export function ScheduleDashboard({
     const normalizedQuery = query.trim().toLocaleLowerCase();
     return payload.matches.filter((match) => {
       const key = matchDateKey(match, timeZone);
-      const inRange = selectedDate
-        ? isMatchOnSelectedDate(match.status, key, selectedDate, today)
-        : isMatchInScheduleRange(match.status, key, range, today, tomorrow, sevenDaysOut);
+      const inRange = isMatchInSearchDateScope(
+        normalizedQuery,
+        selectedDate,
+        match.status,
+        key,
+        range,
+        today,
+        tomorrow,
+        sevenDaysOut,
+      );
       const haystack = [match.homeTeam.name, match.awayTeam.name, match.league, match.tournament || "", match.stage || ""]
         .join(" ").toLocaleLowerCase();
       return inRange
@@ -415,6 +422,10 @@ export function ScheduleDashboard({
             <label><span className="sr-only">状态</span><select value={status} onChange={(event) => setStatus(event.target.value as MatchStatus | "all")}><option value="all">全部状态</option>{Object.entries(statusMeta).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
             <label className="date-field"><span className="sr-only">日期</span><input type="date" min={dateBounds.min} max={dateBounds.max} value={selectedDate} onChange={(event) => { const date = event.target.value; setSelectedDate(date); if (date) void loadCompleteSchedule(); }} /></label>
           </div>
+
+          {query.trim() && !selectedDate && (
+            <p className="search-scope-note" role="status">正在全部已收录赛程中搜索；选择日期可缩小范围。</p>
+          )}
 
           {loadingCompleteSchedule && needsCompleteSchedule ? (
             <div className="empty-state" role="status"><h3>正在加载完整赛程…</h3><p>{query.trim() ? "正在加载全部赛事以完成搜索。" : "当前日期范围以外的比赛会在需要时再加载。"}</p></div>

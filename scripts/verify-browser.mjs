@@ -207,9 +207,10 @@ for (const profile of [
       const response = await fetchRequest(route);
       const body = await response.json();
       const fixtureName = 'Codex global search fixture';
+      const outsideToday = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
       body.matches = body.matches.map((match, index) => ({
         ...match,
-        startTimeUtc: new Date().toISOString(),
+        startTimeUtc: outsideToday,
         status: 'scheduled',
         homeTeam: index === 0 ? { ...match.homeTeam, name: fixtureName } : match.homeTeam,
       }));
@@ -236,6 +237,9 @@ for (const profile of [
     globalSearchResultCount = await searchPage.locator('.match-card').count();
     globalSearchFoundFixture = (await searchPage.locator('.match-list').innerText())
       .includes('Codex global search fixture');
+    if (!(await searchPage.getByText("正在全部已收录赛程中搜索；选择日期可缩小范围。", { exact: true }).count())) {
+      throw new Error("Global search scope hint is missing");
+    }
   } else {
     await searchPage.getByRole('tab', { name: /全部收录/ }).click();
     if (searchInitialTotalCount > 0) {
