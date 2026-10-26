@@ -2,11 +2,21 @@ import os from "node:os";
 import path from "node:path";
 import {
   addTrustedSourceHeader,
+  getTrustedVercelDeploymentOrigin,
   isolateBrowserEnvironment,
   redactTrustedSourceToken,
 } from "./vercel-trusted-source-headers.mjs";
 
+const baseUrl = process.argv[2] || "http://localhost:3000";
 const trustedSourceToken = process.env.VERCEL_OIDC_TOKEN;
+const trustedSourceOrigin = trustedSourceToken
+  ? getTrustedVercelDeploymentOrigin(baseUrl)
+  : null;
+
+if (trustedSourceToken && !trustedSourceOrigin) {
+  throw new Error("VERCEL_OIDC_TOKEN can only be used with an HTTPS *.vercel.app deployment URL.");
+}
+
 const browserEnvironment = trustedSourceToken
   ? isolateBrowserEnvironment(process.env)
   : process.env;
@@ -21,7 +31,6 @@ if (trustedSourceToken) {
 
 const { chromium } = await import("playwright-core");
 
-const baseUrl = process.argv[2] || "http://localhost:3000";
 const executableCandidates = [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -64,7 +73,7 @@ for (const profile of [
   const applyTrustedSourceHeader = (request) => addTrustedSourceHeader(
     request.headers(),
     request.url(),
-    auditUrl.origin,
+    trustedSourceOrigin || auditUrl.origin,
     trustedSourceToken,
   );
   const continueRequest = async (route) => {

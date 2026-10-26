@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   addTrustedSourceHeader,
+  getTrustedVercelDeploymentOrigin,
   isolateBrowserEnvironment,
   redactTrustedSourceToken,
   VERCEL_TRUSTED_SOURCE_HEADER,
@@ -52,5 +53,27 @@ describe("addTrustedSourceHeader", () => {
       PANDASCORE_TOKEN: "provider-secret",
       DATABASE_URL: "db-credential",
     })).toEqual({ PATH: "safe-path", SYSTEMROOT: "windows-root" });
+  });
+});
+
+describe("getTrustedVercelDeploymentOrigin", () => {
+  it("accepts HTTPS Vercel deployment hostnames and returns only the origin", () => {
+    expect(getTrustedVercelDeploymentOrigin(
+      "https://esports-schedule-git-fix-deferred-sc-cafd17-jack-zhu-s-projects.vercel.app/api/version",
+    )).toBe("https://esports-schedule-git-fix-deferred-sc-cafd17-jack-zhu-s-projects.vercel.app");
+  });
+
+  it.each([
+    "https://attacker.example/path",
+    "https://vercel.app/",
+    "https://other-app-git-main-jack-zhu-s-projects.vercel.app/",
+    "https://esports-schedule-git-branch-other-team.vercel.app/",
+    "http://preview.vercel.app/",
+    "https://preview.vercel.app.attacker.example/",
+    "https://user:password@preview.vercel.app/",
+    "https://preview.vercel.app:8443/",
+    "not a URL",
+  ])("rejects non-deployment or unsafe target %s", (value) => {
+    expect(getTrustedVercelDeploymentOrigin(value)).toBeNull();
   });
 });

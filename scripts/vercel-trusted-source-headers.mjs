@@ -32,6 +32,33 @@ export function isolateBrowserEnvironment(environment) {
 }
 
 /**
+ * A short-lived Vercel identity must never be sent to an arbitrary URL passed
+ * on the command line. Protected verification is limited to this project's
+ * HTTPS Vercel deployment hostnames; callers still scope the header to this
+ * exact origin below.
+ */
+export function getTrustedVercelDeploymentOrigin(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+
+  if (
+    url.protocol !== "https:"
+    || url.username
+    || url.password
+    || url.port
+    || !/^esports-schedule-[a-z0-9-]+-jack-zhu-s-projects\.vercel\.app$/.test(url.hostname)
+  ) {
+    return null;
+  }
+
+  return url.origin;
+}
+
+/**
  * Add the short-lived Vercel development identity only to requests for the
  * exact deployment origin under test. Never forward it to third-party assets.
  */
