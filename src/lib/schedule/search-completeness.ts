@@ -1,6 +1,17 @@
 import { isMatchInScheduleRange, isMatchOnSelectedDate, type ScheduleDateRange } from "./date-range";
 import type { MatchStatus } from "./types";
 
+/** Make search tolerant of accents while preserving non-Latin characters. */
+export function normalizeScheduleSearchText(value: string): string {
+  return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
+export function matchesScheduleSearch(query: string, fields: readonly string[]): boolean {
+  const normalizedQuery = normalizeScheduleSearchText(query.trim());
+  return !normalizedQuery
+    || fields.some((field) => normalizeScheduleSearchText(field).includes(normalizedQuery));
+}
+
 /**
  * A non-empty search is global, so it must not silently search only the
  * initial SSR window. Fetch the full schedule once before presenting results.

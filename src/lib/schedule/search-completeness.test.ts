@@ -1,5 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
-import { isMatchInSearchDateScope, requestCompleteScheduleForSearch } from "./search-completeness";
+import {
+  isMatchInSearchDateScope,
+  matchesScheduleSearch,
+  normalizeScheduleSearchText,
+  requestCompleteScheduleForSearch,
+} from "./search-completeness";
+
+describe("schedule search text", () => {
+  it("matches accented and unaccented Latin names regardless of case or Unicode composition", () => {
+    expect(matchesScheduleSearch("Sao", ["São Paulo"])).toBe(true);
+    expect(matchesScheduleSearch("cafe", ["Cafe\u0301 Esports"])).toBe(true);
+    expect(matchesScheduleSearch("OREBRO", ["Örebro"])).toBe(true);
+  });
+
+  it("keeps non-Latin text searchable and treats an empty query as a match", () => {
+    expect(matchesScheduleSearch("王者", ["王者荣耀"])).toBe(true);
+    expect(matchesScheduleSearch("  ", ["any match"])).toBe(true);
+    expect(normalizeScheduleSearchText("王者荣耀")).toBe("王者荣耀");
+  });
+
+  it("still requires a real substring match", () => {
+    expect(matchesScheduleSearch("sao", ["São Paulo"])).toBe(true);
+    expect(matchesScheduleSearch("são paulox", ["São Paulo"])).toBe(false);
+  });
+});
 
 describe("requestCompleteScheduleForSearch", () => {
   it("requests the full schedule for a non-empty query over a partial initial payload", () => {

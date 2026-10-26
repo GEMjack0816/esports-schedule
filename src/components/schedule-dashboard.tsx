@@ -8,7 +8,11 @@ import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/
 import { isMatchInScheduleRange, scheduleDateGroupKey, type ScheduleDateRange } from "@/lib/schedule/date-range";
 import { getScheduleHeroStats } from "@/lib/schedule/hero-stats";
 import { subscribeToMinuteClock } from "@/lib/schedule/minute-clock";
-import { isMatchInSearchDateScope, requestCompleteScheduleForSearch } from "@/lib/schedule/search-completeness";
+import {
+  isMatchInSearchDateScope,
+  matchesScheduleSearch,
+  requestCompleteScheduleForSearch,
+} from "@/lib/schedule/search-completeness";
 import { addDaysKey, dateInputBoundsInTimeZone, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = ScheduleDateRange;
@@ -224,11 +228,10 @@ export function ScheduleDashboard({
   );
 
   const filtered = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase();
     return payload.matches.filter((match) => {
       const key = matchDateKey(match, timeZone);
       const inRange = isMatchInSearchDateScope(
-        normalizedQuery,
+        query,
         selectedDate,
         match.status,
         key,
@@ -237,13 +240,17 @@ export function ScheduleDashboard({
         tomorrow,
         sevenDaysOut,
       );
-      const haystack = [match.homeTeam.name, match.awayTeam.name, match.league, match.tournament || "", match.stage || ""]
-        .join(" ").toLocaleLowerCase();
       return inRange
         && (game === "all" || match.game === game)
         && (league === "all" || match.league === league)
         && (status === "all" || match.status === status)
-        && (!normalizedQuery || haystack.includes(normalizedQuery));
+        && matchesScheduleSearch(query, [
+          match.homeTeam.name,
+          match.awayTeam.name,
+          match.league,
+          match.tournament || "",
+          match.stage || "",
+        ]);
     });
   }, [game, league, payload.matches, query, range, selectedDate, sevenDaysOut, status, timeZone, today, tomorrow]);
 
