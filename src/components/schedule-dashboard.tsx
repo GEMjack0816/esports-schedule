@@ -9,6 +9,7 @@ import { isMatchInScheduleRange, scheduleDateGroupKey, type ScheduleDateRange } 
 import { getScheduleHeroStats } from "@/lib/schedule/hero-stats";
 import { subscribeToMinuteClock } from "@/lib/schedule/minute-clock";
 import {
+  hasEffectiveScheduleSearch,
   isMatchInSearchDateScope,
   matchesScheduleSearch,
   requestCompleteScheduleForSearch,
@@ -200,7 +201,8 @@ export function ScheduleDashboard({
   );
 
   const completeScheduleLoaded = payload.matches.length >= payload.coverage.totals.finalWithManual;
-  const needsCompleteSchedule = range === "history" || range === "all" || !!selectedDate || !!query.trim();
+  const needsCompleteSchedule = range === "history" || range === "all" || !!selectedDate
+    || hasEffectiveScheduleSearch(query);
 
   const rangeCounts = useMemo(() => {
     const counts: Record<RangeKey, number | null> = {
@@ -427,7 +429,7 @@ export function ScheduleDashboard({
             <label className="date-field"><span className="sr-only">日期</span><input type="date" min={dateBounds.min} max={dateBounds.max} value={selectedDate} onChange={(event) => { const date = event.target.value; setSelectedDate(date); if (date) void loadCompleteSchedule(); }} /></label>
           </div>
 
-          {query.trim() && !selectedDate && (
+          {hasEffectiveScheduleSearch(query) && !selectedDate && (
             <p className="search-scope-note" role="status">正在全部已收录赛程中搜索；选择日期可缩小范围。</p>
           )}
 

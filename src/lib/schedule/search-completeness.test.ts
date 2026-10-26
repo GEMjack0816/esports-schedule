@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  hasEffectiveScheduleSearch,
   isMatchInSearchDateScope,
   matchesScheduleSearch,
   normalizeScheduleSearchText,
@@ -22,6 +23,9 @@ describe("schedule search text", () => {
   it("does not let a query made only of combining marks match every field", () => {
     expect(matchesScheduleSearch("\u0301", ["São Paulo"])).toBe(false);
     expect(matchesScheduleSearch("  \u0301  ", ["any match"])).toBe(false);
+    expect(hasEffectiveScheduleSearch("\u0301")).toBe(false);
+    expect(hasEffectiveScheduleSearch("  ")).toBe(false);
+    expect(hasEffectiveScheduleSearch("Sao")).toBe(true);
   });
 
   it("still requires a real substring match", () => {
