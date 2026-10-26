@@ -182,11 +182,16 @@ for (const profile of [
       .includes('Codex global search fixture');
   } else {
     await searchPage.getByRole('tab', { name: /全部收录/ }).click();
+    if (searchInitialTotalCount > 0) {
+      await searchPage.locator('.match-card').first().waitFor({ timeout: 120_000 });
+    }
     const firstTeam = searchPage.locator('.team-name').first();
     if (await firstTeam.count()) {
       globalSearchMode = 'complete';
       const searchTerm = (await firstTeam.innerText()).trim();
       await searchPage.locator('.search-field input').fill(searchTerm);
+      await searchPage.locator('.match-card').filter({ hasText: searchTerm }).first()
+        .waitFor({ timeout: 120_000 });
       globalSearchResultCount = await searchPage.locator('.match-card').count();
       globalSearchFoundFixture = (await searchPage.locator('.match-list').innerText())
         .includes(searchTerm);
