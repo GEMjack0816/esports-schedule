@@ -206,10 +206,25 @@ for (const profile of [
   let globalSearchRequestStatus = null;
   let globalSearchResultCount = 0;
   let globalSearchFoundFixture = false;
+  let globalSearchLoadingRetainsResults = false;
+  let globalSearchErrorRetainsResults = false;
   if (searchInitialLoadedCount < searchInitialTotalCount) {
     globalSearchMode = 'partial';
+    const partialSearchTerm = (await searchPage.locator('.team-name').first().innerText()).trim();
+    let fullScheduleRequestCount = 0;
     await searchPage.route('**/api/matches', async (route) => {
       if (route.request().method() !== 'GET') return continueRequest(route);
+      fullScheduleRequestCount += 1;
+      if (fullScheduleRequestCount === 1) {
+        // Keep the request pending long enough to assert that current results
+        // stay visible, then fail it to verify the retry state is non-blocking.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        return route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'temporarily_unavailable' }),
+        });
+      }
       const response = await fetchRequest(route);
       const body = await response.json();
       const fixtureName = 'Codex global search fixture';
@@ -223,12 +238,31 @@ for (const profile of [
       body.coverage.totals.finalWithManual = body.matches.length;
       await route.fulfill({ response, body: JSON.stringify(body) });
     });
+    const failedSearchRequest = searchPage.waitForResponse(
+      (candidate) => new URL(candidate.url()).pathname === '/api/matches'
+        && candidate.request().method() === 'GET',
+      { timeout: 120_000 },
+    );
+    await searchPage.locator('.search-field input').fill(partialSearchTerm);
+    await searchPage.getByText('正在加载完整赛程；先显示当前已加载的比赛。', { exact: true })
+      .waitFor({ timeout: 120_000 });
+    globalSearchLoadingRetainsResults = await searchPage.locator('.match-card')
+      .filter({ hasText: partialSearchTerm }).count() > 0;
+    const failedSearchResponse = await failedSearchRequest;
+    if (failedSearchResponse.status() !== 503) {
+      throw new Error(`Expected the first full schedule request to fail with HTTP 503, got ${failedSearchResponse.status()}`);
+    }
+    await searchPage.getByText('完整赛程暂时无法加载；当前已加载的比赛仍可查看。', { exact: false })
+      .waitFor({ timeout: 120_000 });
+    globalSearchErrorRetainsResults = await searchPage.locator('.match-card')
+      .filter({ hasText: partialSearchTerm }).count() > 0;
+
     const globalSearchRequest = searchPage.waitForResponse(
       (candidate) => new URL(candidate.url()).pathname === '/api/matches'
         && candidate.request().method() === 'GET',
       { timeout: 120_000 },
     );
-    await searchPage.locator('.search-field input').fill('Codex global search fixture');
+    await searchPage.getByRole('button', { name: '重试', exact: true }).click();
     const searchResponse = await globalSearchRequest;
     globalSearchRequestStatus = searchResponse.status();
     if (!searchResponse.ok()) {
@@ -458,6 +492,8 @@ for (const profile of [
       requestStatus: globalSearchRequestStatus,
       resultCount: globalSearchResultCount,
       foundFixture: globalSearchFoundFixture,
+      loadingRetainsResults: globalSearchLoadingRetainsResults,
+      errorRetainsResults: globalSearchErrorRetainsResults,
       errors: searchPageErrors,
     },
     refreshedApiUrl: apiResponse.url(),
@@ -528,6 +564,14 @@ for (const result of results) {
   if (result.globalSearchCompleteness.mode === 'partial'
     && (!result.globalSearchCompleteness.foundFixture || result.globalSearchCompleteness.resultCount !== 1)) {
     failures.push(`${prefix}: global search did not find exactly one full-schedule fixture`);
+  }
+  if (result.globalSearchCompleteness.mode === 'partial'
+    && !result.globalSearchCompleteness.loadingRetainsResults) {
+    failures.push(`${prefix}: partial search results disappeared while the full schedule was loading`);
+  }
+  if (result.globalSearchCompleteness.mode === 'partial'
+    && !result.globalSearchCompleteness.errorRetainsResults) {
+    failures.push(`${prefix}: partial search results disappeared after the full schedule request failed`);
   }
   if (result.globalSearchCompleteness.mode === 'complete'
     && (!result.globalSearchCompleteness.foundFixture || result.globalSearchCompleteness.resultCount < 1)) {

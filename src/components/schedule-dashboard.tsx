@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { ScheduleResultsPanel } from "@/components/schedule-results-panel";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { isMatchInScheduleRange, scheduleDateGroupKey, type ScheduleDateRange } from "@/lib/schedule/date-range";
 import { getScheduleHeroStats } from "@/lib/schedule/hero-stats";
@@ -382,10 +383,6 @@ export function ScheduleDashboard({
           </div>
 
           {payload.warning && <div className="data-notice" role="status"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" /><path d="M10 6.5v4.2M10 13.7h.01" /></svg><span>{payload.warning}</span></div>}
-          {completeScheduleError && range !== "history" && range !== "all" && !selectedDate && (
-            <div className="data-notice" role="alert"><span>完整赛程更新失败，当前已加载的比赛仍可查看。</span></div>
-          )}
-
           <div className="data-summary" aria-label="数据覆盖信息">
             <span>源快照时间 <strong>{formatDateTime(payload.coverage.sourceFetchedAt, timeZone)}</strong></span>
             <span>最近同步尝试 <strong>{formatDateTime(payload.coverage.lastAttemptAt, timeZone)}</strong></span>
@@ -427,20 +424,30 @@ export function ScheduleDashboard({
             <p className="search-scope-note" role="status">正在全部已收录赛程中搜索；选择日期可缩小范围。</p>
           )}
 
-          {loadingCompleteSchedule && needsCompleteSchedule ? (
-            <div className="empty-state" role="status"><h3>正在加载完整赛程…</h3><p>{query.trim() ? "正在加载全部赛事以完成搜索。" : "当前日期范围以外的比赛会在需要时再加载。"}</p></div>
-          ) : completeScheduleError && needsCompleteSchedule ? (
-            <div className="empty-state" role="alert"><h3>完整赛程暂时无法加载</h3><p>现有赛程仍可查看，请重试加载完整数据。</p><button type="button" onClick={() => { void loadCompleteSchedule(true); }}>重试</button></div>
-          ) : <div className="match-list" aria-live="polite">
+          <ScheduleResultsPanel
+            completeScheduleError={completeScheduleError}
+            loadingCompleteSchedule={loadingCompleteSchedule}
+            needsCompleteSchedule={needsCompleteSchedule}
+            onRetry={() => { void loadCompleteSchedule(true); }}
+          >
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
               <section className="date-group" key={key}>
                 <div className="date-divider"><span>{key === "live" ? "正在进行" : formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
                 {matches.map((match) => <MatchCard match={match} timeZone={timeZone} key={match.id} />)}
               </section>
             )) : (
-              <div className="empty-state"><span className="empty-glyph">⌁</span><h3>没有找到符合条件的比赛</h3><p>试试切换时间范围，或清除部分筛选条件。</p><button type="button" onClick={resetFilters}>清除筛选</button></div>
+              <div className="empty-state" role={loadingCompleteSchedule && needsCompleteSchedule ? "status" : undefined}>
+                <span className="empty-glyph">⌁</span>
+                <h3>{loadingCompleteSchedule && needsCompleteSchedule ? "正在检查完整赛程…" : "没有找到符合条件的比赛"}</h3>
+                <p>{loadingCompleteSchedule && needsCompleteSchedule
+                  ? "当前已加载的部分中暂无匹配项，完整搜索仍在进行。"
+                  : completeScheduleError && needsCompleteSchedule
+                    ? "已加载的赛程中暂无匹配项；可调整筛选或重试完整赛程。"
+                    : "试试切换时间范围，或清除部分筛选条件。"}</p>
+                <button type="button" onClick={resetFilters}>清除筛选</button>
+              </div>
             )}
-          </div>}
+          </ScheduleResultsPanel>
         </section>
       </main>
 
