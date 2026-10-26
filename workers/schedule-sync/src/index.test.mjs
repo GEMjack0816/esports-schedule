@@ -459,18 +459,60 @@ describe("schedule sync Worker client", () => {
   it.each([
     ["malformed", "not-json", "invalid_json"],
     ["oversized", "x".repeat(32 * 1024 + 1), "response_too_large"],
-  ])("does not retry a deterministic %s 503 body failure", async (_kind, body, code) => {
-    const fetchImpl = vi.fn(async () => new Response(body, {
-      status: 503,
-      headers: { "content-type": "application/json" },
-    }));
+  ])("reconciles an unreadable %s 503 body once without replaying sync", async (_kind, body) => {
+    const now = Date.parse("2026-10-18T10:00:00.000Z");
+    const baseline = Date.parse("2026-10-18T09:50:00.000Z");
+    const requests = [];
+    const fetchImpl = vi.fn(async (url) => {
+      requests.push(url);
+      if (url === healthUrl) {
+        return healthResponse({
+          lastSuccessfulSyncAt: "2026-10-18T09:59:30.000Z",
+          sourceFetchedAt: "2026-10-18T09:59:30.000Z",
+          snapshotAgeSeconds: 30,
+        });
+      }
+      return new Response(body, {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      });
+    });
     const waitImpl = vi.fn();
 
-    await expect(invokeScheduleSync({ secret: syncSecret, fetchImpl, waitImpl }))
-      .rejects.toMatchObject({ code, httpStatus: 503 });
+    await expect(invokeScheduleSync({
+      secret: syncSecret,
+      baselineLastSuccessfulSyncAt: baseline,
+      nowImpl: () => now,
+      fetchImpl,
+      waitImpl,
+    })).resolves.toMatchObject({ outcome: "verified_fresh_after_ambiguous_response" });
 
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(requests).toEqual([syncUrl, healthUrl]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(waitImpl).not.toHaveBeenCalled();
+  });
+
+  it("fails closed after an unreadable 503 body when health does not prove advancement", async () => {
+    const requests = [];
+    const fetchImpl = vi.fn(async (url) => {
+      requests.push(url);
+      return url === healthUrl
+        ? healthResponse({ lastSuccessfulSyncAt: "2026-10-18T09:55:00.000Z" })
+        : new Response("not-json", {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+    });
+
+    await expect(invokeScheduleSync({
+      secret: syncSecret,
+      baselineLastSuccessfulSyncAt: Date.parse("2026-10-18T09:56:00.000Z"),
+      nowImpl: () => Date.parse("2026-10-18T10:00:00.000Z"),
+      fetchImpl,
+    })).rejects.toMatchObject({ code: "ambiguous_sync_failure", httpStatus: 503 });
+
+    expect(requests).toEqual([syncUrl, healthUrl]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("fails closed after a lost response body when freshness cannot advance", async () => {

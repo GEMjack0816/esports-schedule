@@ -378,8 +378,12 @@ export async function invokeScheduleSync({
       let payload;
       try {
         payload = await readJsonBody(response);
-      } catch (error) {
-        if (error instanceof SyncInvocationError) throw error;
+      } catch {
+        // A 503 with an unreadable body is ambiguous: the request may have
+        // reached the sync handler and completed before a proxy truncated or
+        // corrupted its response. Never replay the sync here; reconcile once
+        // against the no-store health endpoint, then fail closed if it did not
+        // advance.
         const recovered = await verifyFreshAfterAmbiguousSyncResponse({
           fetchImpl,
           nowImpl,
