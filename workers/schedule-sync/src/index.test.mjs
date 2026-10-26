@@ -199,16 +199,21 @@ describe("schedule sync Worker client", () => {
     }
   });
 
-  it("treats a valid lock conflict as a distinct skipped outcome", async () => {
+  it("rejects a busy lock when the post-contention health check cannot confirm freshness", async () => {
+    const requests = [];
     await expect(invokeScheduleSync({
       secret: syncSecret,
-      fetchImpl: async () => response({
-        ok: false,
-        status: "busy",
-        lockAcquired: false,
-        generation: null,
-      }, 409),
-    })).resolves.toEqual({ outcome: "skipped_busy", generation: null });
+      fetchImpl: async (url) => {
+        requests.push(url);
+        return response({
+          ok: false,
+          status: "busy",
+          lockAcquired: false,
+          generation: null,
+        }, 409);
+      },
+    })).rejects.toMatchObject({ code: "sync_busy", httpStatus: 409 });
+    expect(requests).toEqual([syncUrl, healthUrl]);
   });
 
   it("does not immediately repeat a completed all-provider-failure sync", async () => {
@@ -651,17 +656,58 @@ describe("schedule sync Worker client", () => {
     expect(log.log).toHaveBeenCalledTimes(1);
   });
 
-  it("records busy outcomes as warnings without claiming a refresh", async () => {
+  it("fails the invocation when a busy lock is not followed by a fresh snapshot", async () => {
     const log = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const requests = [];
     const worker = createScheduleSyncWorker({
-      fetchImpl: async () => response({ ok: false, status: "busy", lockAcquired: false, generation: null }, 409),
+      fetchImpl: async (url) => {
+        requests.push(url);
+        return url === healthUrl
+          ? healthResponse({ stale: true, snapshotAgeSeconds: 901 })
+          : response({ ok: false, status: "busy", lockAcquired: false, generation: null }, 409);
+      },
       log,
     });
-    const result = await worker.scheduled({ scheduledTime: 1, noRetry: vi.fn() }, { CRON_SECRET: syncSecret });
+    await expect(worker.scheduled({ scheduledTime: 1, noRetry: vi.fn() }, { CRON_SECRET: syncSecret }))
+      .rejects.toThrow("schedule sync invocation failed");
 
-    expect(result).toEqual({ outcome: "skipped_busy", generation: null });
-    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(requests).toEqual([healthUrl, syncUrl, healthUrl]);
+    expect(log.error).toHaveBeenCalledTimes(1);
+    expect(log.error.mock.calls[0][0]).toContain('"code":"sync_busy"');
     expect(log.log).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("accepts a busy lock only when a concurrent sync has made all games fresh", async () => {
+    const log = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const requests = [];
+    let healthReads = 0;
+    const worker = createScheduleSyncWorker({
+      nowImpl: () => Date.parse("2026-10-18T10:00:00.000Z"),
+      fetchImpl: async (url) => {
+        requests.push(url);
+        if (url === healthUrl) {
+          healthReads += 1;
+          return healthReads === 1
+            ? healthResponse({ stale: true, snapshotAgeSeconds: 901 })
+            : healthResponse({
+                sourceFetchedAt: "2026-10-18T09:59:55.000Z",
+                lastSuccessfulSyncAt: "2026-10-18T09:59:58.000Z",
+                snapshotAgeSeconds: 5,
+              });
+        }
+        return response({ ok: false, status: "busy", lockAcquired: false, generation: null }, 409);
+      },
+      log,
+    });
+
+    await expect(worker.scheduled({ scheduledTime: 1, noRetry: vi.fn() }, { CRON_SECRET: syncSecret }))
+      .resolves.toEqual({ outcome: "verified_fresh_after_concurrent_sync", snapshotAgeSeconds: 5 });
+
+    expect(requests).toEqual([healthUrl, syncUrl, healthUrl]);
+    expect(log.log).toHaveBeenCalledTimes(1);
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.error).not.toHaveBeenCalled();
   });
 
   it("records partial sync outcomes as warnings with a safe summary", async () => {
@@ -877,7 +923,7 @@ describe("schedule sync Worker client", () => {
     expect(requests[1].options.headers.authorization).toBe(`Bearer ${syncSecret}`);
   });
 
-  it("attempts the authoritative sync when stale health reports an in-progress refresh, then reports busy", async () => {
+  it("fails a stale schedule invocation when the contending refresh has not made the snapshot fresh", async () => {
     const now = Date.parse("2026-10-18T10:00:00.000Z");
     const staleAt = new Date(now - 20 * 60_000).toISOString();
     const requests = [];
@@ -902,12 +948,13 @@ describe("schedule sync Worker client", () => {
     await expect(worker.scheduled(
       { scheduledTime: now, noRetry: vi.fn() },
       { CRON_SECRET: syncSecret },
-    )).resolves.toEqual({ outcome: "skipped_busy", generation: null });
-    expect(requests.map(({ url }) => url)).toEqual([healthUrl, syncUrl]);
+    )).rejects.toThrow("schedule sync invocation failed");
+    expect(requests.map(({ url }) => url)).toEqual([healthUrl, syncUrl, healthUrl]);
     expect(requests[1].options.headers.authorization).toBe(`Bearer ${syncSecret}`);
-    expect(log.warn).toHaveBeenCalledOnce();
-    expect(log.warn.mock.calls[0][0]).toContain('"outcome":"skipped_busy"');
+    expect(log.error).toHaveBeenCalledOnce();
+    expect(log.error.mock.calls[0][0]).toContain('"code":"sync_busy"');
     expect(log.log).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("runs the authenticated sync when the persistent snapshot is fresh but last provider sync is stale", async () => {

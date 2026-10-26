@@ -305,6 +305,13 @@ async function verifyFreshAfterAmbiguousSyncResponse({ fetchImpl, nowImpl, timeo
     : { outcome: "verified_fresh_after_response_loss", snapshotAgeSeconds };
 }
 
+async function verifyFreshAfterConcurrentSync({ fetchImpl, nowImpl, timeoutSignalImpl }) {
+  const snapshotAgeSeconds = await getFreshScheduleAge({ fetchImpl, nowImpl, timeoutSignalImpl });
+  return snapshotAgeSeconds === null
+    ? null
+    : { outcome: "verified_fresh_after_concurrent_sync", snapshotAgeSeconds };
+}
+
 export async function invokeScheduleSync({
   fetchImpl = fetch,
   secret,
@@ -419,7 +426,16 @@ export async function invokeScheduleSync({
       await waitImpl(delay);
       continue;
     }
-    return validateSyncPayload(payload, response.status);
+    const result = validateSyncPayload(payload, response.status);
+    if (result.outcome === "skipped_busy") {
+      // A busy lock may belong to a concurrent sync that is about to finish.
+      // Report success only if the public health contract now proves freshness;
+      // otherwise a green Cron invocation would hide a missed refresh.
+      const recovered = await verifyFreshAfterConcurrentSync({ fetchImpl, nowImpl, timeoutSignalImpl });
+      if (recovered) return recovered;
+      throw new SyncInvocationError("sync_busy", response.status);
+    }
+    return result;
   }
 
   throw new SyncInvocationError("retry_budget_exhausted");
@@ -451,7 +467,7 @@ export function createScheduleSyncWorker({
           ? await invokeScheduleSync({ fetchImpl, secret: env.CRON_SECRET, waitImpl, nowImpl, timeoutSignalImpl })
           : { outcome: "skipped_fresh", snapshotAgeSeconds: freshAgeSeconds };
         const summary = { event: "schedule_sync", scheduledTime, ...result };
-        if (result.outcome === "skipped_busy" || result.outcome === "partial") {
+        if (result.outcome === "partial") {
           log.warn(JSON.stringify(summary));
         } else {
           log.log(JSON.stringify(summary));
