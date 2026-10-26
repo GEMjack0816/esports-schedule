@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -18,6 +18,17 @@ const success = {
 };
 
 describe("sync workflow response validation", () => {
+  it("does not blindly retry the side-effecting sync request after ambiguous transport failure", () => {
+    const workflow = readFileSync(new URL("../.github/workflows/sync-schedule.yml", import.meta.url), "utf8");
+    const runBlock = workflow.slice(workflow.indexOf("        run: |"));
+
+    expect(workflow).not.toMatch(/--retry(?:\s|=)|--retry-all-errors/);
+    expect(workflow).toContain("--max-time 300");
+    expect(workflow).toContain('--header "Authorization: Bearer $CRON_SECRET"');
+    expect(workflow).not.toMatch(/SYNC_URL:.*CRON_SECRET/);
+    expect(runBlock.match(/\bcurl\b/g)).toHaveLength(1);
+  });
+
   it("accepts a complete successful refresh", () => {
     expect(validateSyncResponse(success, 200).ok).toBe(true);
   });
