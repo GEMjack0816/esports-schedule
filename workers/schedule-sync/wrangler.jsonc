@@ -1,0 +1,14 @@
+{
+  "$schema": "https://unpkg.com/wrangler@4/config-schema.json",
+  "name": "esports-schedule-sync-scheduler",
+  "main": "src/index.mjs",
+  "compatibility_date": "2026-10-18",
+  "workers_dev": false,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "triggers": {
+    "crons": ["5,20,35,50 * * * *"]
+  }
+}

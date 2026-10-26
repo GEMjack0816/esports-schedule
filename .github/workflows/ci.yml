@@ -14,6 +14,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  worker-dry-run:
+    name: Validate Cloudflare Worker bundle (no deploy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22
+
+      - name: Validate Worker config and bundle without deploying
+        run: npx --yes wrangler@4.149.0 deploy --dry-run --config workers/schedule-sync/wrangler.jsonc
+
   verify:
     name: TypeScript, lint, tests, and build
     runs-on: ubuntu-latest
