@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   addTrustedSourceHeader,
+  fetchTrustedSourceResponse,
   getTrustedVercelDeploymentOrigin,
   isolateBrowserEnvironment,
   redactTrustedSourceToken,
@@ -70,22 +71,27 @@ for (const profile of [
   const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage"];
   const auditUrl = new URL(baseUrl);
   const sanitizeDiagnostic = (value) => redactTrustedSourceToken(value, trustedSourceToken);
-  const applyTrustedSourceHeader = (request) => addTrustedSourceHeader(
-    request.headers(),
-    request.url(),
-    trustedSourceOrigin || auditUrl.origin,
-    trustedSourceToken,
-  );
   const continueRequest = async (route) => {
     try {
-      return await route.continue({ headers: applyTrustedSourceHeader(route.request()) });
+      const request = route.request();
+      if (!trustedSourceToken) return await route.continue();
+
+      if (new URL(request.url()).origin !== trustedSourceOrigin) {
+        return await route.continue({
+          headers: addTrustedSourceHeader(request.headers(), request.url(), trustedSourceOrigin, undefined),
+        });
+      }
+
+      const response = await fetchTrustedSourceResponse(route, trustedSourceOrigin, trustedSourceToken);
+      return await route.fulfill({ response });
     } catch (error) {
       throw new Error(sanitizeDiagnostic(error instanceof Error ? error.message : error));
     }
   };
   const fetchRequest = async (route) => {
     try {
-      return await route.fetch({ headers: applyTrustedSourceHeader(route.request()) });
+      if (!trustedSourceToken) return await route.fetch();
+      return await fetchTrustedSourceResponse(route, trustedSourceOrigin, trustedSourceToken);
     } catch (error) {
       throw new Error(sanitizeDiagnostic(error instanceof Error ? error.message : error));
     }

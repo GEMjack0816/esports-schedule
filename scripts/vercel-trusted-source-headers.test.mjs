@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   addTrustedSourceHeader,
+  fetchTrustedSourceResponse,
   getTrustedVercelDeploymentOrigin,
   isolateBrowserEnvironment,
   redactTrustedSourceToken,
@@ -21,13 +22,13 @@ describe("addTrustedSourceHeader", () => {
   });
 
   it("does not send the token to another origin", () => {
-    const headers = { accept: "image/avif" };
+    const headers = { accept: "image/avif", [VERCEL_TRUSTED_SOURCE_HEADER]: "inherited-token" };
     expect(addTrustedSourceHeader(
       headers,
       "https://images.example-cdn.com/logo.png",
       "https://preview.example.vercel.app",
       "ephemeral-token",
-    )).toBe(headers);
+    )).toEqual({ accept: "image/avif" });
   });
 
   it("leaves requests unchanged when no token is provided", () => {
@@ -37,7 +38,7 @@ describe("addTrustedSourceHeader", () => {
       "https://preview.example.vercel.app/api/health",
       "https://preview.example.vercel.app",
       undefined,
-    )).toBe(headers);
+    )).toEqual(headers);
   });
 
   it("redacts every token occurrence from diagnostic text", () => {
@@ -53,6 +54,64 @@ describe("addTrustedSourceHeader", () => {
       PANDASCORE_TOKEN: "provider-secret",
       DATABASE_URL: "db-credential",
     })).toEqual({ PATH: "safe-path", SYSTEMROOT: "windows-root" });
+  });
+});
+
+describe("fetchTrustedSourceResponse", () => {
+  const response = (status, headers = {}) => ({ status: () => status, headers: () => headers });
+
+  it("manually authenticates each same-origin redirect hop without automatic redirect following", async () => {
+    const responses = [response(302, { location: "/api/version" }), response(200)];
+    const fetch = vi.fn(async () => responses.shift());
+    const route = {
+      request: () => ({
+        url: () => "https://preview.example.vercel.app/",
+        method: () => "GET",
+        headers: () => ({ accept: "text/html" }),
+      }),
+      fetch,
+    };
+
+    const result = await fetchTrustedSourceResponse(
+      route,
+      "https://preview.example.vercel.app",
+      "ephemeral-token",
+    );
+
+    expect(result.status()).toBe(200);
+    expect(fetch).toHaveBeenNthCalledWith(1, {
+      headers: { accept: "text/html", [VERCEL_TRUSTED_SOURCE_HEADER]: "ephemeral-token" },
+      maxRedirects: 0,
+    });
+    expect(fetch).toHaveBeenNthCalledWith(2, {
+      url: "https://preview.example.vercel.app/api/version",
+      headers: { accept: "text/html", [VERCEL_TRUSTED_SOURCE_HEADER]: "ephemeral-token" },
+      maxRedirects: 0,
+    });
+  });
+
+  it("stops at a cross-origin redirect without fetching the destination", async () => {
+    const redirect = response(302, { location: "https://attacker.example/collect" });
+    const fetch = vi.fn(async () => redirect);
+    const route = {
+      request: () => ({
+        url: () => "https://preview.example.vercel.app/",
+        method: () => "GET",
+        headers: () => ({ accept: "text/html" }),
+      }),
+      fetch,
+    };
+
+    const result = await fetchTrustedSourceResponse(
+      route,
+      "https://preview.example.vercel.app",
+      "ephemeral-token",
+    );
+
+    expect(result).toBe(redirect);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0].maxRedirects).toBe(0);
+    expect(fetch.mock.calls[0][0].headers[VERCEL_TRUSTED_SOURCE_HEADER]).toBe("ephemeral-token");
   });
 });
 
