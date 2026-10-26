@@ -6,9 +6,11 @@ export type TeamLogoRecovery =
   | { kind: "retry"; src: string }
   | { kind: "fallback"; src: typeof TEAM_LOGO_PLACEHOLDER };
 
-const RETRYABLE_LOGO_HOSTS = new Set(["cdn-api.pandascore.co"]);
+const RETRYABLE_LOGO_HOSTS = new Set(["cdn.pandascore.co", "cdn-api.pandascore.co"]);
+const PANDASCORE_TEAM_LOGO_PATH =
+  /^\/images\/team\/image\/\d+\/[A-Za-z0-9][A-Za-z0-9._-]*\.(?:avif|jpe?g|png|webp)$/i;
 
-/** Retry only unsigned HTTPS PandaScore images; preserve arbitrary and signed URLs. */
+/** Retry only canonical unsigned HTTPS PandaScore team images; preserve arbitrary and signed URLs. */
 export function recoverTeamLogo(source: string, alreadyRetried: boolean): TeamLogoRecovery {
   if (!alreadyRetried) {
     try {
@@ -16,6 +18,7 @@ export function recoverTeamLogo(source: string, alreadyRetried: boolean): TeamLo
       if (
         url.protocol === "https:"
         && RETRYABLE_LOGO_HOSTS.has(url.hostname.toLowerCase())
+        && PANDASCORE_TEAM_LOGO_PATH.test(url.pathname)
         && (!url.port || url.port === "443")
         && !url.username
         && !url.password

@@ -42,25 +42,35 @@ describe("team logo load timeout", () => {
       .toBe("https://cdn.example/team.png");
   });
 
-  it("retries an unsigned PandaScore CDN image once with a cache-busting query", () => {
-    const recovery = recoverTeamLogo("https://cdn-api.pandascore.co/team/image.png", false);
-    expect(recovery.kind).toBe("retry");
-    if (recovery.kind === "retry") {
-      const url = new URL(recovery.src);
-      expect(url.origin).toBe("https://cdn-api.pandascore.co");
-      expect(url.searchParams.get("esports_logo_retry")).toBe("1");
-    }
+  it.each(["cdn.pandascore.co", "cdn-api.pandascore.co"])(
+    "retries a canonical unsigned team image from %s once with a cache-busting query",
+    (host) => {
+      const recovery = recoverTeamLogo(`https://${host}/images/team/image/123/logo.webp`, false);
+      expect(recovery.kind).toBe("retry");
+      if (recovery.kind === "retry") {
+        const url = new URL(recovery.src);
+        expect(url.origin).toBe(`https://${host}`);
+        expect(url.searchParams.get("esports_logo_retry")).toBe("1");
+      }
+    },
+  );
+
+  it("does not retry a PandaScore URL outside the canonical team-logo path", () => {
+    expect(recoverTeamLogo("https://cdn.pandascore.co/images/player/image/123/logo.png", false)).toEqual({
+      kind: "fallback",
+      src: TEAM_LOGO_PLACEHOLDER,
+    });
   });
 
   it("falls back after a retry or for non-PandaScore, signed, and non-HTTPS URLs", () => {
-    expect(recoverTeamLogo("https://cdn-api.pandascore.co/team/image.png", true)).toEqual({
+    expect(recoverTeamLogo("https://cdn-api.pandascore.co/images/team/image/123/logo.png", true)).toEqual({
       kind: "fallback",
       src: TEAM_LOGO_PLACEHOLDER,
     });
     for (const source of [
       "https://images.example.test/team.png",
-      "http://cdn-api.pandascore.co/team/image.png",
-      "https://cdn-api.pandascore.co/team/image.png?signature=opaque",
+      "http://cdn-api.pandascore.co/images/team/image/123/logo.png",
+      "https://cdn-api.pandascore.co/images/team/image/123/logo.png?signature=opaque",
     ]) {
       expect(recoverTeamLogo(source, false)).toEqual({
         kind: "fallback",
@@ -71,11 +81,11 @@ describe("team logo load timeout", () => {
 
   it("does not retry lookalike hosts, credentials, non-default ports, fragments, or existing queries", () => {
     for (const source of [
-      "https://cdn-api.pandascore.co.attacker.test/team.png",
-      "https://user:pass@cdn-api.pandascore.co/team.png",
-      "https://cdn-api.pandascore.co:8443/team.png",
-      "https://cdn-api.pandascore.co/team.png#fragment",
-      "https://cdn-api.pandascore.co/team.png?version=2",
+      "https://cdn-api.pandascore.co.attacker.test/images/team/image/123/logo.png",
+      "https://user:pass@cdn-api.pandascore.co/images/team/image/123/logo.png",
+      "https://cdn-api.pandascore.co:8443/images/team/image/123/logo.png",
+      "https://cdn-api.pandascore.co/images/team/image/123/logo.png#fragment",
+      "https://cdn-api.pandascore.co/images/team/image/123/logo.png?version=2",
     ]) {
       expect(recoverTeamLogo(source, false), source).toEqual({
         kind: "fallback",
