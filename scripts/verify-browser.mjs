@@ -189,6 +189,8 @@ for (const profile of [
   const scheduleFilterFocus = await tabToAndReadFocusIndicator(page, ".search-field input");
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+  const themeButtonFocus = await tabToAndReadFocusIndicator(page, ".theme-button");
+  const rangeTabFocus = await tabToAndReadFocusIndicator(page, '.range-tabs [role="tab"]:first-of-type');
 
   const gameFilterCounts = {};
   const statusFilterCounts = {};
@@ -298,6 +300,8 @@ for (const profile of [
     skipLinkFirstTab,
     skipNavigation,
     scheduleFilterFocus,
+    themeButtonFocus,
+    rangeTabFocus,
     submitInputFocus,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -374,6 +378,8 @@ for (const result of results) {
   }
   for (const [control, focus] of Object.entries({
     scheduleFilter: result.scheduleFilterFocus,
+    themeToggle: result.themeButtonFocus,
+    scheduleRangeTab: result.rangeTabFocus,
     submissionInput: result.submitInputFocus,
   })) {
     if (
