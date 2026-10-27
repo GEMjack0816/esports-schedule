@@ -13,7 +13,11 @@ export function getGameSyncPresentation(input: {
   refreshInProgress: boolean;
 }): GameSyncPresentation {
   const { syncStatus, refreshInProgress } = input;
-  if (refreshInProgress) return { label: "同步中", visualStatus: "delayed" };
+  if (refreshInProgress) {
+    return syncStatus === "failed"
+      ? { label: "重试中（上次失败）", visualStatus: "failed" }
+      : { label: "同步中", visualStatus: "delayed" };
+  }
   if (syncStatus === "normal") return { label: "正常", visualStatus: "normal" };
   if (syncStatus === "delayed") return { label: "延迟", visualStatus: "delayed" };
   if (syncStatus === "stale") return { label: "快照过期", visualStatus: "delayed" };
@@ -39,10 +43,19 @@ export function getScheduleSourceLabel({
 }: ScheduleSourceLabelInput): string {
   if (mode === "unavailable") return "PandaScore 聚合数据（服务暂不可用）";
   if (!stale) return "PandaScore 聚合数据";
-  if (refreshInProgress) return "PandaScore 聚合数据（正在更新，当前显示上次成功快照）";
 
   const failedGames = gameStates.filter((game) => game.syncStatus === "failed").length;
   const unavailableGames = gameStates.filter((game) => game.syncStatus === "unavailable").length;
+  if (refreshInProgress) {
+    if (failedGames === gameStates.length && failedGames > 0) {
+      return "PandaScore 聚合数据（全部游戏上次同步失败，正在重试；当前显示上次成功快照）";
+    }
+    if (failedGames > 0) {
+      return "PandaScore 聚合数据（部分游戏上次同步失败，正在更新；当前显示上次成功快照）";
+    }
+    return "PandaScore 聚合数据（正在更新，当前显示上次成功快照）";
+  }
+
   if (failedGames === gameStates.length && failedGames > 0) {
     return "PandaScore 聚合数据（同步失败，当前显示上次成功快照）";
   }

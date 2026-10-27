@@ -27,9 +27,9 @@ describe("getGameSyncPresentation", () => {
       .toEqual({ label: "同步失败", visualStatus: "failed" });
   });
 
-  it("shows an updating state before the previous status", () => {
+  it("shows a retry state when a refresh is active after a failed sync", () => {
     expect(getGameSyncPresentation({ syncStatus: "failed", lastError: error, refreshInProgress: true }))
-      .toEqual({ label: "同步中", visualStatus: "delayed" });
+      .toEqual({ label: "重试中（上次失败）", visualStatus: "failed" });
   });
 
   it("avoids claiming failure when coverage is absent", () => {
@@ -73,6 +73,30 @@ describe("getScheduleSourceLabel", () => {
       refreshInProgress: true,
       gameStates: noErrorStates,
     })).toBe("PandaScore 聚合数据（正在更新，当前显示上次成功快照）");
+  });
+
+  it("keeps the prior all-games failure visible while a retry is active", () => {
+    expect(getScheduleSourceLabel({
+      mode: "live",
+      stale: true,
+      refreshInProgress: true,
+      gameStates: Array.from({ length: 5 }, () => ({ syncStatus: "failed" as const, lastError: error })),
+    })).toBe("PandaScore 聚合数据（全部游戏上次同步失败，正在重试；当前显示上次成功快照）");
+  });
+
+  it("keeps partial failures visible while a retry is active", () => {
+    expect(getScheduleSourceLabel({
+      mode: "live",
+      stale: true,
+      refreshInProgress: true,
+      gameStates: [
+        { syncStatus: "failed", lastError: error },
+        { syncStatus: "normal", lastError: null },
+        { syncStatus: "normal", lastError: null },
+        { syncStatus: "normal", lastError: null },
+        { syncStatus: "normal", lastError: null },
+      ],
+    })).toBe("PandaScore 聚合数据（部分游戏上次同步失败，正在更新；当前显示上次成功快照）");
   });
 
   it("reports partial game failures accurately", () => {
