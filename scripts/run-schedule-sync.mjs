@@ -180,6 +180,7 @@ export async function runScheduleSync({
   fetchImpl = fetch,
   nowImpl = Date.now,
   timeoutSignalImpl = (milliseconds) => AbortSignal.timeout(milliseconds),
+  force = false,
 }) {
   if (typeof secret !== "string" || secret.trim().length === 0) {
     throw new ScheduleSyncRunError("missing_configuration");
@@ -187,7 +188,7 @@ export async function runScheduleSync({
 
   const before = await readHealth({ fetchImpl, timeoutSignalImpl });
   const baseline = getSuccessfulSyncTimestamp(before);
-  if (isFreshFiveGameSnapshot(before, nowImpl())) {
+  if (!force && isFreshFiveGameSnapshot(before, nowImpl())) {
     return {
       ok: true,
       outcome: "already_fresh",
@@ -245,7 +246,11 @@ export async function runScheduleSync({
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const result = await runScheduleSync({ secret: process.env.CRON_SECRET });
+    const result = await runScheduleSync({
+      secret: process.env.CRON_SECRET,
+      // Keep workflow_dispatch an explicit way to force a sync; only scheduled runs skip fresh snapshots.
+      force: process.env.GITHUB_EVENT_NAME === "workflow_dispatch",
+    });
     if (result.outcome === "verified_fresh_after_ambiguous_response") {
       console.log("sync response was ambiguous; health confirms a newer fresh five-game snapshot");
     } else if (result.outcome === "verified_fresh_after_concurrent_sync") {
