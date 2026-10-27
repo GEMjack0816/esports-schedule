@@ -32,8 +32,45 @@ async function tabToAndReadFocusIndicator(page, selector) {
   for (let index = 0; index < 80; index += 1) {
     await page.keyboard.press("Tab");
     if (await target.evaluate((element) => document.activeElement === element)) {
+      await target.evaluate((element) => element.scrollIntoView({
+        block: "center",
+        inline: "nearest",
+        behavior: "instant",
+      }));
       return target.evaluate((element) => {
         const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        const outlineWidth = Number.parseFloat(style.outlineWidth) || 0;
+        const outlineOffset = Number.parseFloat(style.outlineOffset) || 0;
+        const outwardOutline = Math.max(0, outlineWidth + outlineOffset);
+        const inwardOutline = Math.max(0, -outlineOffset);
+        const outlineBounds = {
+          left: rect.left - outwardOutline + inwardOutline,
+          right: rect.right + outwardOutline - inwardOutline,
+          top: rect.top - outwardOutline + inwardOutline,
+          bottom: rect.bottom + outwardOutline - inwardOutline,
+        };
+        const clippingAncestors = [];
+        for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+          const ancestorStyle = getComputedStyle(ancestor);
+          const ancestorRect = ancestor.getBoundingClientRect();
+          const clipLeft = ancestorRect.left + ancestor.clientLeft;
+          const clipTop = ancestorRect.top + ancestor.clientTop;
+          const clipRight = clipLeft + ancestor.clientWidth;
+          const clipBottom = clipTop + ancestor.clientHeight;
+          const clipsX = ["auto", "scroll", "hidden", "clip"].includes(ancestorStyle.overflowX);
+          const clipsY = ["auto", "scroll", "hidden", "clip"].includes(ancestorStyle.overflowY);
+          if (
+            (clipsX && (outlineBounds.left < clipLeft - 0.5 || outlineBounds.right > clipRight + 0.5)) ||
+            (clipsY && (outlineBounds.top < clipTop - 0.5 || outlineBounds.bottom > clipBottom + 0.5))
+          ) {
+            clippingAncestors.push(ancestor.className?.toString() || ancestor.tagName.toLowerCase());
+          }
+        }
+        const outlineFullyVisible = clippingAncestors.length === 0 &&
+          outlineBounds.left >= -0.5 && outlineBounds.top >= -0.5 &&
+          outlineBounds.right <= window.innerWidth + 0.5 &&
+          outlineBounds.bottom <= window.innerHeight + 0.5;
         const backgroundColor = getComputedStyle(document.body).backgroundColor;
         const colorChannels = (color) => {
           const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
@@ -57,7 +94,11 @@ async function tabToAndReadFocusIndicator(page, selector) {
           focusVisible: element.matches(":focus-visible"),
           outlineStyle: style.outlineStyle,
           outlineWidth: style.outlineWidth,
+          outlineOffset: style.outlineOffset,
           outlineColor: style.outlineColor,
+          outlineFullyVisible,
+          clippingAncestors,
+          outlineBounds,
           backgroundColor,
           luminanceContrast,
         };
@@ -195,6 +236,7 @@ for (const profile of [
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   const themeButtonFocus = await tabToAndReadFocusIndicator(page, ".theme-button");
   const rangeTabFocus = await tabToAndReadFocusIndicator(page, '.range-tabs [role="tab"]:first-of-type');
+  const rangeLastTabFocus = await tabToAndReadFocusIndicator(page, '.range-tabs [role="tab"]:last-of-type');
   const focusThemeCoverage = {};
   for (const theme of ["light", "dark"]) {
     await page.evaluate((nextTheme) => {
@@ -326,6 +368,7 @@ for (const profile of [
     dateFilterFocus,
     themeButtonFocus,
     rangeTabFocus,
+    rangeLastTabFocus,
     focusThemeCoverage,
     submitInputFocus,
     submitButtonFocus,
@@ -410,6 +453,7 @@ for (const result of results) {
     dateFilter: result.dateFilterFocus,
     themeToggle: result.themeButtonFocus,
     scheduleRangeTab: result.rangeTabFocus,
+    scheduleRangeLastTab: result.rangeLastTabFocus,
     submissionInput: result.submitInputFocus,
     submissionButton: result.submitButtonFocus,
   })) {
@@ -419,7 +463,8 @@ for (const result of results) {
       focus.outlineStyle !== "solid" ||
       Number.parseFloat(focus.outlineWidth) < 2 ||
       focus.luminanceContrast === null ||
-      focus.luminanceContrast < 3
+      focus.luminanceContrast < 3 ||
+      focus.outlineFullyVisible !== true
     ) {
       failures.push(`${prefix}: ${control} has no visible keyboard focus indicator`);
     }
@@ -432,7 +477,8 @@ for (const result of results) {
         focus.outlineStyle !== "solid" ||
         Number.parseFloat(focus.outlineWidth) < 2 ||
         focus.luminanceContrast === null ||
-        focus.luminanceContrast < 3
+        focus.luminanceContrast < 3 ||
+        focus.outlineFullyVisible !== true
       ) {
         failures.push(`${prefix}: ${control} has no contrast-compliant keyboard focus indicator in ${theme} theme`);
       }
