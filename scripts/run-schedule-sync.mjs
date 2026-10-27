@@ -7,7 +7,10 @@ const MAX_BODY_BYTES = 32 * 1024;
 const MAX_BODY_CHUNKS = 1_024;
 const SYNC_TIMEOUT_MS = 300_000;
 const HEALTH_TIMEOUT_MS = 10_000;
-const FRESHNESS_LIMIT_SECONDS = 15 * 60;
+// Leave a five-minute guard band below the 15-minute scheduled cadence. If a
+// run starts just before the app's stale boundary, it must refresh now rather
+// than skip and leave the schedule stale until the following trigger.
+const FRESHNESS_LIMIT_SECONDS = 10 * 60;
 const GAMES = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"];
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 

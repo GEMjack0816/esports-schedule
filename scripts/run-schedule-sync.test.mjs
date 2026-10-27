@@ -44,6 +44,16 @@ function freshHealth() {
   });
 }
 
+function freshHealthAtAge(ageSeconds) {
+  const timestamp = new Date(now - ageSeconds * 1_000).toISOString();
+  return healthResponse({
+    lastSuccessfulSyncAt: timestamp,
+    sourceFetchedAt: timestamp,
+    stale: false,
+    ageSeconds,
+  });
+}
+
 function syncSuccess() {
   return Response.json({
     ok: true,
@@ -265,6 +275,28 @@ describe("runScheduleSync", () => {
       lastSuccessfulSyncAt: "2026-10-18T09:59:30.000Z",
     });
     expect(calls).toEqual([healthUrl]);
+  });
+
+  it("skips at the 10-minute guard-band boundary", async () => {
+    const calls = [];
+    const result = await runScheduleSync(makeOptions(async (url) => {
+      calls.push(url);
+      return freshHealthAtAge(10 * 60);
+    }));
+
+    expect(result).toMatchObject({ ok: true, outcome: "already_fresh" });
+    expect(calls).toEqual([healthUrl]);
+  });
+
+  it("refreshes once the snapshot enters the five-minute pre-expiry guard band", async () => {
+    const calls = [];
+    const result = await runScheduleSync(makeOptions(async (url) => {
+      calls.push(url);
+      return url === healthUrl ? freshHealthAtAge(10 * 60 + 1) : syncSuccess();
+    }));
+
+    expect(result).toMatchObject({ ok: true, payload: { generation: 42 } });
+    expect(calls).toEqual([healthUrl, syncUrl]);
   });
 
   it("forces synchronization for an explicit manual dispatch despite a fresh preflight", async () => {
