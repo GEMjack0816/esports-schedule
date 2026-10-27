@@ -146,12 +146,28 @@ for (const profile of [
       ]);
       return [
         { status: versionResponse.status, body: await versionResponse.json() },
-        { status: healthResponse.status, body: await healthResponse.json() },
+        {
+          status: healthResponse.status,
+          cacheControl: healthResponse.headers.get("cache-control"),
+          vercelCdnCacheControl: healthResponse.headers.get("vercel-cdn-cache-control"),
+          expires: healthResponse.headers.get("expires"),
+          pragma: healthResponse.headers.get("pragma"),
+          body: await healthResponse.json(),
+        },
       ];
     });
   } catch (error) {
     errors.push(`version-health:${error instanceof Error ? error.message : "request failed"}`);
   }
+  const healthCacheDirectives = new Set(
+    (healthResult.cacheControl || "").split(",").map((directive) => directive.trim().toLowerCase()),
+  );
+  const healthCachePolicyValid = healthCacheDirectives.has("no-store")
+    && healthCacheDirectives.has("no-cache")
+    && healthCacheDirectives.has("must-revalidate")
+    && healthResult.vercelCdnCacheControl?.trim().toLowerCase() === "no-store"
+    && healthResult.expires === "0"
+    && healthResult.pragma?.trim().toLowerCase() === "no-cache";
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
   const adminResponse = await page.goto(`${baseUrl}/admin`, {
@@ -192,6 +208,9 @@ for (const profile of [
     refreshedApiDeployment: apiBody.deployment,
     apiBodyReadFallback,
     healthStatus: healthResult.status,
+    healthCachePolicyValid,
+    healthCacheControl: healthResult.cacheControl,
+    healthVercelCdnCacheControl: healthResult.vercelCdnCacheControl,
     healthMode: healthResult.body.mode,
     healthDemoMode: healthResult.body.demoMode,
     healthGames: Object.keys(healthResult.body.games || {}),
@@ -238,6 +257,7 @@ for (const result of results) {
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
+  if (!result.healthCachePolicyValid) failures.push(`${prefix}: health response cache policy is not strict no-store`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
   if (result.versionStatus !== 200) failures.push(`${prefix}: version HTTP ${result.versionStatus}`);
   if (!result.versionMatchesHomepage) failures.push(`${prefix}: homepage/version commit mismatch`);
