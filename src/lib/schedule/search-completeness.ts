@@ -27,13 +27,19 @@ export function hasEffectiveScheduleSearch(query: string): boolean {
   return normalizeScheduleSearchText(query.trim()).length > 0;
 }
 
-export function matchesScheduleSearch(query: string, fields: readonly string[]): boolean {
+export function createScheduleSearchMatcher(query: string): (normalizedFields: readonly string[]) => boolean {
   const trimmedQuery = query.trim();
-  if (!trimmedQuery) return true;
+  if (!trimmedQuery) return () => true;
 
   const normalizedQuery = normalizeScheduleSearchText(trimmedQuery);
-  return normalizedQuery.length > 0
-    && fields.some((field) => normalizeScheduleSearchText(field).includes(normalizedQuery));
+  if (!normalizedQuery) return () => false;
+
+  return (normalizedFields) => normalizedFields.some((field) => field.includes(normalizedQuery));
+}
+
+export function matchesScheduleSearch(query: string, fields: readonly string[]): boolean {
+  const matcher = createScheduleSearchMatcher(query);
+  return matcher(fields.map(normalizeScheduleSearchText));
 }
 
 /**

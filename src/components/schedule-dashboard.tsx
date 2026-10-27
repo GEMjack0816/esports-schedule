@@ -9,9 +9,10 @@ import { isMatchInScheduleRange, scheduleDateGroupKey, type ScheduleDateRange } 
 import { getScheduleHeroStats } from "@/lib/schedule/hero-stats";
 import { subscribeToMinuteClock } from "@/lib/schedule/minute-clock";
 import {
+  createScheduleSearchMatcher,
   hasEffectiveScheduleSearch,
   isMatchInSearchDateScope,
-  matchesScheduleSearch,
+  normalizeScheduleSearchText,
   requestCompleteScheduleForSearch,
 } from "@/lib/schedule/search-completeness";
 import { addDaysKey, dateInputBoundsInTimeZone, dateKeyInTimeZone } from "@/lib/schedule/time";
@@ -229,6 +230,17 @@ export function ScheduleDashboard({
     [availableLeagues, payload.matches],
   );
 
+  const normalizedSearchFieldsByMatchId = useMemo(() => new Map(
+    payload.matches.map((match) => [match.id, [
+      match.homeTeam.name,
+      match.awayTeam.name,
+      match.league,
+      match.tournament || "",
+      match.stage || "",
+    ].map(normalizeScheduleSearchText)]),
+  ), [payload.matches]);
+  const matchesSearch = useMemo(() => createScheduleSearchMatcher(query), [query]);
+
   const filtered = useMemo(() => {
     return payload.matches.filter((match) => {
       const key = matchDateKey(match, timeZone);
@@ -246,15 +258,9 @@ export function ScheduleDashboard({
         && (game === "all" || match.game === game)
         && (league === "all" || match.league === league)
         && (status === "all" || match.status === status)
-        && matchesScheduleSearch(query, [
-          match.homeTeam.name,
-          match.awayTeam.name,
-          match.league,
-          match.tournament || "",
-          match.stage || "",
-        ]);
+        && matchesSearch(normalizedSearchFieldsByMatchId.get(match.id) ?? []);
     });
-  }, [game, league, payload.matches, query, range, selectedDate, sevenDaysOut, status, timeZone, today, tomorrow]);
+  }, [game, league, matchesSearch, normalizedSearchFieldsByMatchId, payload.matches, query, range, selectedDate, sevenDaysOut, status, timeZone, today, tomorrow]);
 
   const grouped = useMemo(() => {
     const groups = new Map<string, EsportsMatch[]>();

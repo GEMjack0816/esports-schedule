@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createScheduleSearchMatcher,
   hasEffectiveScheduleSearch,
   isMatchInSearchDateScope,
   matchesScheduleSearch,
@@ -37,6 +38,12 @@ describe("schedule search text", () => {
   it("still requires a real substring match", () => {
     expect(matchesScheduleSearch("sao", ["São Paulo"])).toBe(true);
     expect(matchesScheduleSearch("são paulox", ["São Paulo"])).toBe(false);
+    expect(createScheduleSearchMatcher("Sao")([
+      normalizeScheduleSearchText("São Paulo"),
+    ])).toBe(true);
+    expect(createScheduleSearchMatcher("\u0301")([
+      normalizeScheduleSearchText("São Paulo"),
+    ])).toBe(false);
   });
 });
 
