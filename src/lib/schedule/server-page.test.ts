@@ -50,11 +50,12 @@ describe("server-paginated schedule pages", () => {
     expect(page.rangeCounts).toEqual({ today: 1, tomorrow: 1, seven: 3, history: 1, all: 5 });
   });
 
-  it("keeps running fixtures visible in Today without leaking them into date-specific ranges", () => {
+  it("keeps current-day running fixtures in date selection without leaking other live fixtures", () => {
     const schedule = payload([
       match("live-undated", null, { status: "running" }),
       match("live-yesterday", "2026-03-07T15:30:00.000Z", { status: "running" }),
       match("live-tomorrow", "2026-03-08T18:30:00.000Z", { status: "running" }),
+      match("live-today", "2026-03-08T02:00:00.000Z", { status: "running" }),
       match("today-scheduled", "2026-03-07T16:30:00.000Z"),
       match("yesterday-scheduled", "2026-03-07T14:00:00.000Z"),
       match("tomorrow-scheduled", "2026-03-08T16:30:00.000Z"),
@@ -77,10 +78,10 @@ describe("server-paginated schedule pages", () => {
     );
 
     expect(today.matches.map((item) => item.id).sort()).toEqual([
-      "live-tomorrow", "live-undated", "live-yesterday", "today-scheduled",
+      "live-today", "live-tomorrow", "live-undated", "live-yesterday", "today-scheduled",
     ]);
-    expect(today.page.total).toBe(4);
-    expect(today.rangeCounts.today).toBe(4);
+    expect(today.page.total).toBe(5);
+    expect(today.rangeCounts.today).toBe(5);
     expect(tomorrow.matches.map((item) => item.id)).toEqual(["tomorrow-scheduled"]);
     expect(seven.matches.map((item) => item.id)).toEqual(["today-scheduled", "tomorrow-scheduled"]);
     expect(history.matches.map((item) => item.id)).toEqual(["yesterday-scheduled"]);
@@ -88,7 +89,7 @@ describe("server-paginated schedule pages", () => {
     expect(seven.rangeCounts.seven).toBe(2);
     expect(history.rangeCounts.history).toBe(1);
     expect(all.page.total).toBe(schedule.matches.length);
-    expect(selectedDate.matches.map((item) => item.id)).toEqual(["today-scheduled"]);
+    expect(selectedDate.matches.map((item) => item.id).sort()).toEqual(["live-today", "today-scheduled"]);
     expect(selectedTomorrow.matches.map((item) => item.id)).toEqual(["tomorrow-scheduled"]);
   });
 

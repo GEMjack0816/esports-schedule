@@ -162,7 +162,8 @@ function isInRange(
   dates: ReturnType<typeof dateKeys>,
 ): boolean {
   if (match.status === "running") {
-    return !filters.selectedDate && (filters.range === "today" || filters.range === "all");
+    if (filters.selectedDate) return filters.selectedDate === dates.today && key === dates.today;
+    return filters.range === "today" || filters.range === "all";
   }
   if (filters.selectedDate) return key === filters.selectedDate;
   if (filters.range === "all") return true;
