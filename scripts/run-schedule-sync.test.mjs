@@ -12,6 +12,7 @@ function healthResponse({ lastSuccessfulSyncAt, sourceFetchedAt, stale, ageSecon
     syncStatus: stale ? "delayed" : "normal",
     sourceFetchedAt,
     lastSuccessfulSyncAt,
+    snapshotAgeSeconds: ageSeconds,
   }]));
   return Response.json({
     mode: "live",
@@ -374,6 +375,26 @@ describe("runScheduleSync", () => {
 
     expect(result).toMatchObject({ ok: true, payload: { generation: 42 } });
     expect(calls).toEqual([healthUrl, syncUrl]);
+  });
+
+  it("does not skip when a game's snapshot age is stale or inconsistent despite fresh timestamps", async () => {
+    for (const snapshotAgeSeconds of [10 * 60 + 1, 420]) {
+      const calls = [];
+      const result = await runScheduleSync(makeOptions(async (url) => {
+        calls.push(url);
+        if (url === healthUrl) {
+          const payload = await freshHealth().json();
+          payload.games.cs2.snapshotAgeSeconds = snapshotAgeSeconds;
+          return Response.json(payload, {
+            headers: { "cache-control": "no-store, no-cache, must-revalidate" },
+          });
+        }
+        return syncSuccess();
+      }));
+
+      expect(result).toMatchObject({ ok: true, payload: { generation: 42 } });
+      expect(calls).toEqual([healthUrl, syncUrl]);
+    }
   });
 
   it("keeps concurrent stale preflights behind the sync lock without treating busy as a refresh", async () => {

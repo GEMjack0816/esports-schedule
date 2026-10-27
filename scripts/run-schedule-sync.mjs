@@ -140,9 +140,19 @@ function isFreshFiveGameSnapshot(payload, now) {
     const state = payload.games[game];
     const gameSourceFetchedAt = parseTimestamp(state?.sourceFetchedAt);
     const gameLastSuccessfulSyncAt = parseTimestamp(state?.lastSuccessfulSyncAt);
+    const gameSnapshotAgeSeconds = state?.snapshotAgeSeconds;
+    const gameTimestampAgeSeconds = gameSourceFetchedAt === null
+      ? null
+      : (now - gameSourceFetchedAt) / 1_000;
     return state?.syncStatus === "normal"
       && gameSourceFetchedAt !== null
       && gameLastSuccessfulSyncAt !== null
+      && Number.isSafeInteger(gameSnapshotAgeSeconds)
+      && gameSnapshotAgeSeconds >= 0
+      && gameSnapshotAgeSeconds <= FRESHNESS_LIMIT_SECONDS
+      && gameTimestampAgeSeconds !== null
+      && gameTimestampAgeSeconds >= -60
+      && Math.abs(gameTimestampAgeSeconds - gameSnapshotAgeSeconds) <= 60
       && gameSourceFetchedAt <= gameLastSuccessfulSyncAt
       && gameLastSuccessfulSyncAt <= now
       && (now - gameSourceFetchedAt) / 1_000 <= FRESHNESS_LIMIT_SECONDS
