@@ -288,6 +288,48 @@ describe("runScheduleSync", () => {
     expect(calls).toEqual([healthUrl]);
   });
 
+  it.each([
+    ["+14:01", "2026-10-19T00:00:30+14:01"],
+    ["+15:00", "2026-10-19T00:59:30+15:00"],
+    ["-14:01", "2026-10-18T19:58:30-14:01"],
+    ["+23:59", "2026-10-19T09:58:30+23:59"],
+  ])("does not treat an out-of-range ISO offset (%s) as a fresh snapshot", async (_offset, timestamp) => {
+    const calls = [];
+    const result = await runScheduleSync(makeOptions(async (url) => {
+      calls.push(url);
+      return url === healthUrl
+        ? healthResponse({
+          lastSuccessfulSyncAt: timestamp,
+          sourceFetchedAt: timestamp,
+          stale: false,
+          ageSeconds: 30,
+        })
+        : syncSuccess();
+    }));
+
+    expect(result).toMatchObject({ ok: true, payload: { generation: 42 } });
+    expect(calls).toEqual([healthUrl, syncUrl]);
+  });
+
+  it.each([
+    ["+14:00", "2026-10-18T23:59:30+14:00"],
+    ["-14:00", "2026-10-17T19:59:30-14:00"],
+  ])("accepts the ISO offset boundary (%s) when the instant is fresh", async (_offset, timestamp) => {
+    const calls = [];
+    const result = await runScheduleSync(makeOptions(async (url) => {
+      calls.push(url);
+      return healthResponse({
+        lastSuccessfulSyncAt: timestamp,
+        sourceFetchedAt: timestamp,
+        stale: false,
+        ageSeconds: 30,
+      });
+    }));
+
+    expect(result).toMatchObject({ ok: true, outcome: "already_fresh" });
+    expect(calls).toEqual([healthUrl]);
+  });
+
   it("refreshes once the snapshot enters the five-minute pre-expiry guard band", async () => {
     const calls = [];
     const result = await runScheduleSync(makeOptions(async (url) => {

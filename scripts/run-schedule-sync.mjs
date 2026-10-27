@@ -28,8 +28,10 @@ function parseTimestamp(value) {
   const minute = Number(value.slice(14, 16));
   const second = Number(value.slice(17, 19));
   const offset = value.match(/([+-])(\d{2}):(\d{2})$/);
+  const offsetHour = offset ? Number(offset[2]) : 0;
+  const offsetMinute = offset ? Number(offset[3]) : 0;
   if (hour > 23 || minute > 59 || second > 59
-    || (offset && (Number(offset[2]) > 23 || Number(offset[3]) > 59))) {
+    || (offset && (offsetHour > 14 || (offsetHour === 14 && offsetMinute !== 0) || offsetMinute > 59))) {
     return null;
   }
   const date = new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
