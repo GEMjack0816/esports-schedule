@@ -135,6 +135,16 @@ describe("schedule freshness monitor validation", () => {
     });
   });
 
+  it("rejects aggregate success metadata that predates the aggregate source snapshot", () => {
+    expect(validateScheduleFreshness(health({
+      sourceFetchedAt: new Date(now - 2 * 60_000).toISOString(),
+      lastSuccessfulSyncAt: new Date(now - 3 * 60_000).toISOString(),
+    }), 200, now)).toEqual({
+      ok: false,
+      message: "lastSuccessfulSyncAt is earlier than sourceFetchedAt",
+    });
+  });
+
   it("rejects per-game failed or delayed sync status", () => {
     const games = health().games;
     games.cs2 = { ...games.cs2, syncStatus: "failed" };

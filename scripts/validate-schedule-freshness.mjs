@@ -132,6 +132,13 @@ export function validateScheduleFreshness(
     if (error) return { ok: false, message: error };
   }
 
+  if (Date.parse(payload.lastSuccessfulSyncAt) < Date.parse(payload.sourceFetchedAt)) {
+    return {
+      ok: false,
+      message: "lastSuccessfulSyncAt is earlier than sourceFetchedAt",
+    };
+  }
+
   if (payload.stale !== false) {
     return { ok: false, message: "health response reports stale schedule data" };
   }
