@@ -28,6 +28,7 @@ function health(overrides = {}) {
       syncStatus: "normal",
       sourceFetchedAt: freshTime,
       lastSuccessfulSyncAt: freshTime,
+      snapshotAgeSeconds: 5 * 60,
     }])),
     ...overrides,
   };
@@ -128,12 +129,30 @@ describe("schedule freshness monitor validation", () => {
       ...games.cs2,
       sourceFetchedAt: new Date(now - 2 * 60_000).toISOString(),
       lastSuccessfulSyncAt: new Date(now - 3 * 60_000).toISOString(),
+      snapshotAgeSeconds: 2 * 60,
     };
 
     expect(validateScheduleFreshness(health({ games }), 200, now)).toEqual({
       ok: false,
       message: "cs2 lastSuccessfulSyncAt is earlier than sourceFetchedAt",
     });
+  });
+
+  it("requires each game's snapshot age to be present, fresh, and consistent with its timestamp", () => {
+    const missingAge = health().games;
+    delete missingAge.cs2.snapshotAgeSeconds;
+    expect(validateScheduleFreshness(health({ games: missingAge }), 200, now).message)
+      .toBe("cs2 snapshotAgeSeconds is missing or invalid");
+
+    const oldAge = health().games;
+    oldAge.cs2 = { ...oldAge.cs2, snapshotAgeSeconds: DEFAULT_MAX_AGE_SECONDS + 1 };
+    expect(validateScheduleFreshness(health({ games: oldAge }), 200, now).message)
+      .toBe("cs2 snapshotAgeSeconds is 901s old (maximum 900s)");
+
+    const mismatchedAge = health().games;
+    mismatchedAge.cs2 = { ...mismatchedAge.cs2, snapshotAgeSeconds: 420 };
+    expect(validateScheduleFreshness(health({ games: mismatchedAge }), 200, now).message)
+      .toBe("cs2 snapshotAgeSeconds does not match sourceFetchedAt");
   });
 
   it("rejects aggregate success metadata that predates the aggregate source snapshot", () => {
@@ -201,6 +220,7 @@ describe("schedule freshness monitor validation", () => {
           syncStatus: "normal",
           sourceFetchedAt: currentTime,
           lastSuccessfulSyncAt: currentTime,
+          snapshotAgeSeconds: 0,
         }])),
       });
       writeFileSync(responsePath, JSON.stringify(currentHealth));

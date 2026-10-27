@@ -160,6 +160,20 @@ export function validateScheduleFreshness(
       const error = timestampAgeError(`${game} ${field}`, value, now, maxAgeSeconds);
       if (error) return { ok: false, message: error };
     }
+    const gameAge = coverage.snapshotAgeSeconds;
+    if (!Number.isSafeInteger(gameAge) || gameAge < 0) {
+      return { ok: false, message: `${game} snapshotAgeSeconds is missing or invalid` };
+    }
+    if (gameAge > maxAgeSeconds) {
+      return {
+        ok: false,
+        message: `${game} snapshotAgeSeconds is ${gameAge}s old (maximum ${maxAgeSeconds}s)`,
+      };
+    }
+    const sourceAgeSeconds = (now - Date.parse(coverage.sourceFetchedAt)) / 1_000;
+    if (sourceAgeSeconds < -60 || Math.abs(sourceAgeSeconds - gameAge) > 60) {
+      return { ok: false, message: `${game} snapshotAgeSeconds does not match sourceFetchedAt` };
+    }
     if (Date.parse(coverage.lastSuccessfulSyncAt) < Date.parse(coverage.sourceFetchedAt)) {
       return {
         ok: false,
