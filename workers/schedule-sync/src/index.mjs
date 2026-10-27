@@ -256,7 +256,10 @@ function getFreshScheduleAgeSeconds(payload, now) {
   }
   for (const game of PANDA_GAMES) {
     const coverage = payload.games[game];
-    if (coverage?.syncStatus !== "normal") return null;
+    if (coverage?.syncStatus !== "normal"
+      || !Number.isInteger(coverage.snapshotAgeSeconds)
+      || coverage.snapshotAgeSeconds < 0
+      || coverage.snapshotAgeSeconds > FRESHNESS_LIMIT_SECONDS) return null;
 
     const gameSourceFetchedAt = parseTimestampWithTimezone(coverage.sourceFetchedAt);
     const gameLastSuccessfulSyncAt = parseTimestampWithTimezone(coverage.lastSuccessfulSyncAt);
@@ -268,6 +271,7 @@ function getFreshScheduleAgeSeconds(payload, now) {
     const gameSourceAgeSeconds = (now - gameSourceFetchedAt) / 1_000;
     const gameSuccessfulSyncAgeSeconds = (now - gameLastSuccessfulSyncAt) / 1_000;
     if (gameSourceAgeSeconds < -60 || gameSourceAgeSeconds > FRESHNESS_LIMIT_SECONDS
+      || Math.abs(gameSourceAgeSeconds - coverage.snapshotAgeSeconds) > 60
       || gameSuccessfulSyncAgeSeconds < -60
       || gameSuccessfulSyncAgeSeconds > FRESHNESS_LIMIT_SECONDS) {
       return null;

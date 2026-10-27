@@ -17,6 +17,7 @@ function healthResponse(overrides = {}, status = 200, cacheControl = "no-store, 
     syncStatus: "normal",
     sourceFetchedAt,
     lastSuccessfulSyncAt,
+    snapshotAgeSeconds: overrides.snapshotAgeSeconds ?? 300,
   }]));
 
   return new Response(JSON.stringify({
@@ -828,6 +829,7 @@ describe("schedule sync Worker client", () => {
         syncStatus: "normal",
         sourceFetchedAt: freshAt,
         lastSuccessfulSyncAt: freshAt,
+        snapshotAgeSeconds: 30,
       }]));
       games.cs2 = {
         ...games.cs2,
@@ -857,6 +859,52 @@ describe("schedule sync Worker client", () => {
       )).resolves.toMatchObject({ outcome: "success", gamesSucceeded: 5 });
       expect(requests.map(({ url }) => url)).toEqual([healthUrl, syncUrl]);
     }
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["null", null],
+    ["non-integer", 30.5],
+    ["negative", -1],
+    ["over the freshness limit", 601],
+    ["inconsistent with the source timestamp", 91],
+  ])("syncs when an individual game's snapshot age is %s", async (_description, invalidAge) => {
+    const now = Date.parse("2026-10-18T10:00:00.000Z");
+    const freshAt = new Date(now - 30_000).toISOString();
+    const games = Object.fromEntries(pandaGames.map((game) => [game, {
+      syncStatus: "normal",
+      sourceFetchedAt: freshAt,
+      lastSuccessfulSyncAt: freshAt,
+      snapshotAgeSeconds: 30,
+    }]));
+    if (invalidAge === undefined) {
+      delete games.cs2.snapshotAgeSeconds;
+    } else {
+      games.cs2.snapshotAgeSeconds = invalidAge;
+    }
+
+    const requests = [];
+    const worker = createScheduleSyncWorker({
+      nowImpl: () => now,
+      fetchImpl: async (url) => {
+        requests.push(url);
+        return url === healthUrl
+          ? healthResponse({
+            sourceFetchedAt: freshAt,
+            lastSuccessfulSyncAt: freshAt,
+            snapshotAgeSeconds: 30,
+            games,
+          })
+          : response();
+      },
+      log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+    await expect(worker.scheduled(
+      { scheduledTime: now, noRetry: vi.fn() },
+      { CRON_SECRET: syncSecret },
+    )).resolves.toMatchObject({ outcome: "success", gamesSucceeded: 5 });
+    expect(requests).toEqual([healthUrl, syncUrl]);
   });
 
   it("skips the authenticated sync when the no-store health probe confirms all games are fresh", async () => {
