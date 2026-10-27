@@ -267,6 +267,20 @@ describe("runScheduleSync", () => {
     expect(calls).toEqual([healthUrl]);
   });
 
+  it("forces synchronization for an explicit manual dispatch despite a fresh preflight", async () => {
+    const calls = [];
+    const result = await runScheduleSync({
+      ...makeOptions(async (url) => {
+        calls.push(url);
+        return url === healthUrl ? freshHealth() : syncSuccess();
+      }),
+      force: true,
+    });
+
+    expect(result).toMatchObject({ ok: true, payload: { generation: 42 } });
+    expect(calls).toEqual([healthUrl, syncUrl]);
+  });
+
   it("does not skip when one game's timestamp is stale despite fresh aggregate health", async () => {
     const calls = [];
     const result = await runScheduleSync(makeOptions(async (url) => {
