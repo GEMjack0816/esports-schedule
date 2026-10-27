@@ -14,6 +14,12 @@ describe("schedule search text", () => {
     expect(matchesScheduleSearch("OREBRO", ["Örebro"])).toBe(true);
   });
 
+  it("preserves meaningful combining marks in non-Latin scripts", () => {
+    expect(normalizeScheduleSearchText("कि")).toBe("कि");
+    expect(normalizeScheduleSearchText("किताब")).toBe("किताब");
+    expect(normalizeScheduleSearchText("\u0301")).toBe("");
+  });
+
   it("keeps non-Latin text searchable and treats an empty query as a match", () => {
     expect(matchesScheduleSearch("王者", ["王者荣耀"])).toBe(true);
     expect(matchesScheduleSearch("  ", ["any match"])).toBe(true);

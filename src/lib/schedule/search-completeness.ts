@@ -3,7 +3,24 @@ import type { MatchStatus } from "./types";
 
 /** Make search tolerant of accents while preserving non-Latin characters. */
 export function normalizeScheduleSearchText(value: string): string {
-  return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+  let normalized = "";
+  let hasBaseCharacter = false;
+  let previousBaseIsLatin = false;
+
+  for (const character of value.normalize("NFD")) {
+    if (/\p{M}/u.test(character)) {
+      // Drop combining marks only when they modify a Latin base character.
+      // Marks are meaningful in many other scripts and must remain searchable.
+      if (hasBaseCharacter && !previousBaseIsLatin) normalized += character;
+      continue;
+    }
+
+    normalized += character;
+    hasBaseCharacter = !/\s/u.test(character);
+    previousBaseIsLatin = hasBaseCharacter && /\p{Script=Latin}/u.test(character);
+  }
+
+  return normalized.toLowerCase();
 }
 
 export function hasEffectiveScheduleSearch(query: string): boolean {
