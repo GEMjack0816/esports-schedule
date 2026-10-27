@@ -238,6 +238,8 @@ describe("public external URL sanitization", () => {
 
   it("rejects inline authorization headers and JWTs embedded in ordinary parameter values", () => {
     const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.c2lnbmF0dXJl";
+    const compactJwsWithEmptyPayload = `eyJhbGciOiJIUzI1NiJ9..${"a".repeat(43)}`;
+    const compactJweWithDirectEncryption = `eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4R0NNIiwiYXB1IjoiZXhhbXBsZSJ9..${"b".repeat(16)}.${"c".repeat(32)}.${"d".repeat(22)}`;
     const encodedJwt = [...jwt]
       .map((character) => `%${character.charCodeAt(0).toString(16).padStart(2, "0")}`)
       .join("");
@@ -249,6 +251,18 @@ describe("public external URL sanitization", () => {
     )).toBeNull();
     expect(sanitizePublicExternalUrl(
       `https://stream.example/watch?data=${encodeURIComponent(jwt)}`,
+    )).toBeNull();
+    expect(sanitizePublicExternalUrl(
+      `https://stream.example/watch?reference=${compactJwsWithEmptyPayload}`,
+    )).toBeNull();
+    expect(sanitizePublicExternalUrl(
+      `https://stream.example/watch?reference=${encodeURIComponent(compactJwsWithEmptyPayload)}`,
+    )).toBeNull();
+    expect(sanitizePublicExternalUrl(
+      `https://stream.example/watch?reference=${compactJweWithDirectEncryption}`,
+    )).toBeNull();
+    expect(sanitizePublicExternalUrl(
+      `https://stream.example/watch/${compactJwsWithEmptyPayload}`,
     )).toBeNull();
     expect(sanitizePublicExternalUrl(`https://stream.example/watch#${jwt}`)).toBeNull();
     expect(sanitizePublicExternalUrl(`https://stream.example/watch?${jwt}`)).toBeNull();

@@ -77,6 +77,14 @@ function isCredentialParameter(name: string): boolean {
 
 const MAX_STRUCTURED_VALUE_NODES = 128;
 const MAX_STRUCTURED_VALUE_DEPTH = 16;
+const COMPACT_JWS_PATTERN = /\beyJ[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\b/;
+const COMPACT_JWE_PATTERN = /\beyJ[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/;
+
+function hasCompactJoseCredential(value: string): boolean {
+  // Compact JWS/JWT permits an empty payload segment. Compact JWE has five
+  // segments and may have an empty encrypted-key segment when using `dir`.
+  return COMPACT_JWS_PATTERN.test(value) || COMPACT_JWE_PATTERN.test(value);
+}
 
 function hasCredentialInJson(value: unknown, nestedDepth: number): boolean {
   const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
@@ -124,7 +132,7 @@ function hasCredentialPathParameters(pathname: string): boolean {
 
     for (let index = 0; index < segments.length; index += 1) {
       const segment = segments[index] ?? "";
-      if (/^eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(segment)) return true;
+      if (hasCompactJoseCredential(segment)) return true;
 
       const pathName = segment.split(/[;?&=]/, 1)[0] ?? "";
       if (hasFollowingValue[index] && matchesCredentialParameter(pathName)) return true;
@@ -173,7 +181,7 @@ function hasCredentialParameters(search: string, nestedDepth = 0): boolean {
 
 function hasInlineCredentialMaterial(value: string): boolean {
   return /(?:^|[^a-z0-9_])authorization\s*:\s*[a-z][a-z0-9+.-]*\s+\S+/i.test(value)
-    || /\beyJ[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\b/.test(value);
+    || hasCompactJoseCredential(value);
 }
 
 function hasNestedCredentialParameters(value: string, nestedDepth: number): boolean {
