@@ -187,6 +187,10 @@ for (const profile of [
     };
   });
   const scheduleFilterFocus = await tabToAndReadFocusIndicator(page, ".search-field input");
+  const gameFilterFocus = await tabToAndReadFocusIndicator(page, ".filter-panel label:nth-child(2) select");
+  const tournamentFilterFocus = await tabToAndReadFocusIndicator(page, ".filter-panel label:nth-child(3) select");
+  const statusFilterFocus = await tabToAndReadFocusIndicator(page, ".filter-panel label:nth-child(4) select");
+  const dateFilterFocus = await tabToAndReadFocusIndicator(page, ".filter-panel label:nth-child(5) input");
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   const themeButtonFocus = await tabToAndReadFocusIndicator(page, ".theme-button");
@@ -266,6 +270,7 @@ for (const profile of [
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
   const submitInputFocus = await tabToAndReadFocusIndicator(page, '.submit-form input[name="league"]');
+  const submitButtonFocus = await tabToAndReadFocusIndicator(page, ".submit-actions button");
   const adminResponse = await page.goto(`${baseUrl}/admin`, {
     waitUntil: "networkidle",
     timeout: 120_000,
@@ -300,9 +305,14 @@ for (const profile of [
     skipLinkFirstTab,
     skipNavigation,
     scheduleFilterFocus,
+    gameFilterFocus,
+    tournamentFilterFocus,
+    statusFilterFocus,
+    dateFilterFocus,
     themeButtonFocus,
     rangeTabFocus,
     submitInputFocus,
+    submitButtonFocus,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
@@ -378,9 +388,14 @@ for (const result of results) {
   }
   for (const [control, focus] of Object.entries({
     scheduleFilter: result.scheduleFilterFocus,
+    gameFilter: result.gameFilterFocus,
+    tournamentFilter: result.tournamentFilterFocus,
+    statusFilter: result.statusFilterFocus,
+    dateFilter: result.dateFilterFocus,
     themeToggle: result.themeButtonFocus,
     scheduleRangeTab: result.rangeTabFocus,
     submissionInput: result.submitInputFocus,
+    submissionButton: result.submitButtonFocus,
   })) {
     if (
       !focus ||
