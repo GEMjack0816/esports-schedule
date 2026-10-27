@@ -17,6 +17,7 @@ describe("GET /api/health/data-coverage", () => {
     const staleGame = {
       sourceFetchedAt: "2026-10-27T02:00:00.000Z",
       lastSuccessfulSyncAt: "2026-10-27T02:00:00.000Z",
+      snapshotAgeSeconds: 1_200,
       syncStatus: "delayed",
       dataSource: "persistent",
     };
@@ -71,6 +72,7 @@ describe("GET /api/health/data-coverage", () => {
       expect(body.games[game]).toMatchObject({
         sourceFetchedAt: "2026-10-27T02:00:00.000Z",
         lastSuccessfulSyncAt: "2026-10-27T02:00:00.000Z",
+        snapshotAgeSeconds: 1_200,
         syncStatus: "delayed",
         dataSource: "persistent",
       });
@@ -79,3 +81,4 @@ describe("GET /api/health/data-coverage", () => {
     expect(getDatabaseHealth).toHaveBeenCalledExactlyOnceWith();
   });
 });
+
