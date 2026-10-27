@@ -7,6 +7,7 @@ import { ScheduleResultsPanel } from "@/components/schedule-results-panel";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { isMatchInScheduleRange, scheduleDateGroupKey, type ScheduleDateRange } from "@/lib/schedule/date-range";
 import { getScheduleHeroStats } from "@/lib/schedule/hero-stats";
+import { fetchCompleteSchedulePayload } from "@/lib/schedule/complete-schedule-client";
 import { subscribeToMinuteClock } from "@/lib/schedule/minute-clock";
 import {
   createScheduleSearchMatcher,
@@ -287,13 +288,7 @@ export function ScheduleDashboard({
       setLoadingCompleteSchedule(true);
       setCompleteScheduleError(false);
       try {
-        const response = await fetch("/api/matches", { cache: "no-store" });
-        if (!response.ok) throw new Error("schedule_request_failed");
-        const nextPayload = await response.json() as SchedulePayload;
-        if (!Array.isArray(nextPayload.matches)
-          || nextPayload.matches.length !== nextPayload.coverage.totals.finalWithManual) {
-          throw new Error("incomplete_schedule_response");
-        }
+        const nextPayload = await fetchCompleteSchedulePayload();
         setPayload(nextPayload);
         return true;
       } catch {
