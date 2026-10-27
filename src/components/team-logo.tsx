@@ -82,6 +82,7 @@ export function TeamLogo({ src }: { src: string }) {
       width={28}
       height={28}
       unoptimized
+      referrerPolicy="no-referrer"
       onLoad={() => {
         if (displayedSource === activeSource) {
           requestVersion.current += 1;

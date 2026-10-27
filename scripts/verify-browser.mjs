@@ -43,6 +43,8 @@ for (const profile of [
   const retryLogoUrl = "https://cdn-api.pandascore.co/images/team/image/123/browser-retry-verification.webp";
   const successLogoUrl = "https://logo-success.invalid/loaded-team.svg";
   const updatedLogoUrl = "https://logo-success.invalid/updated-team.svg";
+  let logoSuccessRequestObserved = false;
+  let logoSuccessRequestReferer = null;
   let logoTimeoutFallback = null;
   let logoRetryFallback = null;
   let logoSuccessRetention = null;
@@ -115,6 +117,8 @@ for (const profile of [
     }
     if (verifyLogoSuccess || verifyLogoSourceUpdate) {
       await context.route("https://logo-success.invalid/**", async (route) => {
+        logoSuccessRequestObserved = true;
+        logoSuccessRequestReferer = route.request().headers().referer ?? null;
         await route.fulfill({
           status: 200,
           contentType: "image/svg+xml",
@@ -318,6 +322,8 @@ for (const profile of [
       imageLoaded,
       retainedExternalSource: (await verificationLogo.getAttribute("src")) === successLogoUrl,
       naturalWidth: await verificationLogo.evaluate((image) => image.naturalWidth),
+      requestObserved: logoSuccessRequestObserved,
+      referer: logoSuccessRequestReferer,
     };
   }
   const layout = await page.evaluate(() => ({
@@ -470,6 +476,9 @@ for (const result of results) {
   if (simulateLogoSuccess && prefix === "desktop") {
     if (!result.logoSuccessRetention?.imageLoaded || !result.logoSuccessRetention?.retainedExternalSource) {
       failures.push(`${prefix}: successfully loaded team logo was replaced after its timeout deadline`);
+    }
+    if (!result.logoSuccessRetention?.requestObserved || result.logoSuccessRetention?.referer !== null) {
+      failures.push(`${prefix}: external team logo request sent a Referer header`);
     }
   }
   if (simulateLogoSourceUpdate && prefix === "desktop") {
