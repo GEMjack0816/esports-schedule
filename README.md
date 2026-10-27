@@ -72,6 +72,8 @@ Vercel Cron（每日保底） ──────┼─> /api/cron/sync
 
 每个游戏也返回同样的时间和状态字段，以及端点分页、X-Total、原始/规范化/去重/最终数量。同步尝试不会让快照变新；只有成功写入 PostgreSQL 最后成功快照才会更新源时间。Runtime Cache miss 会读取 PostgreSQL 并回填快速层；只要持久快照存在，接口不会因为缓存逐出进入 `mode=unavailable`。快照超过 15 分钟仍会准确显示 `stale=true`。
 
+`.github/workflows/monitor-schedule-freshness.yml` 在每次 `Sync esports fixtures` 工作流完成后，以及每 15 分钟在同步时段之后，只读查询健康接口，并要求最终 HTTP 响应明确返回无矛盾的 `Cache-Control: no-store`，且聚合快照及五个游戏各自的 `sourceFetchedAt` / `lastSuccessfulSyncAt` 均不超过 15 分钟，状态为 `live`、`stale=false`、游戏同步状态为 `normal`。请求会要求跳过缓存；缺失或矛盾的缓存头会 fail closed，避免旧 CDN 响应造成误报为新鲜。同步完成后的检查只接受仓库内 `main` 分支运行；它不使用 Secret、不修改数据，也不触发同步。失败会让 GitHub Actions run 失败，作为可追踪告警；可在仓库 Actions 通知设置中开启失败通知。GitHub schedule 和 `workflow_run` 都依赖 GitHub 工作流实际启动，可能延迟或漏跑，因此该监控不能保证精确 15 分钟告警或调度 SLA；若需要有 SLA 的持续监控/调度，需采用具备相应保证的外部服务或更高等级平台并单独评估成本。
+
 ## 生产版本指纹
 
 `GET /api/version` 动态返回当前部署的公开版本信息，包括环境、Git commit/ref、Deployment ID/URL、构建时间和请求时间。接口只读取明确列入白名单的 Vercel 系统变量和构建期回退值，不枚举环境变量，也不读取或返回业务密钥、请求头或 Cookie。响应同时设置浏览器和 Vercel CDN 的 `no-store` 缓存策略。
