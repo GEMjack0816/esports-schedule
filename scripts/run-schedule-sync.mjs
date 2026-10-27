@@ -187,6 +187,13 @@ export async function runScheduleSync({
 
   const before = await readHealth({ fetchImpl, timeoutSignalImpl });
   const baseline = getSuccessfulSyncTimestamp(before);
+  if (isFreshFiveGameSnapshot(before, nowImpl())) {
+    return {
+      ok: true,
+      outcome: "already_fresh",
+      lastSuccessfulSyncAt: before.lastSuccessfulSyncAt,
+    };
+  }
   let response;
   try {
     response = await fetchImpl(SYNC_URL, {
