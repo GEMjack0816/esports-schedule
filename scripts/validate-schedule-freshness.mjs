@@ -89,6 +89,7 @@ function validTimestamp(value) {
   }
 
   const offset = value.match(/[+-](\d{2}):(\d{2})$/);
+  if (offset && value.endsWith("-00:00")) return false;
   if (offset && Number(offset[1]) === 14 && Number(offset[2]) !== 0) return false;
   return Number.isFinite(Date.parse(value));
 }

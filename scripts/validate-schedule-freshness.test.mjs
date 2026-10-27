@@ -98,6 +98,7 @@ describe("schedule freshness monitor validation", () => {
     "2026-02-30T11:55:00.000Z",
     "2026-10-22T11:55:00.000",
     "2026-10-22T11:55:00.000+14:30",
+    "2026-10-22T11:55:00.000-00:00",
   ])("rejects malformed or ambiguous ISO timestamps: %s", (timestamp) => {
     expect(validateScheduleFreshness(health({ sourceFetchedAt: timestamp }), 200, now))
       .toMatchObject({ ok: false, message: "sourceFetchedAt is missing or invalid" });
