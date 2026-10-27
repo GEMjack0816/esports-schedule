@@ -250,7 +250,8 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   }
 
   return (
-    <div className="site-shell">
+    <div className="site-shell" id="top">
+      <a className="skip-link" href="#main-content">跳过站点导航，转到主要内容</a>
       <header className="site-header">
         <a className="brand" href="#top" aria-label="赛界首页">
           <span className="brand-mark"><i /><i /><i /></span>
@@ -271,7 +272,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
         </div>
       </header>
 
-      <main id="top">
+      <main id="main-content" tabIndex={-1}>
         <section className="hero-section">
           <div className="hero-copy">
             <span className="eyebrow"><i /> GLOBAL ESPORTS FIXTURES</span>
