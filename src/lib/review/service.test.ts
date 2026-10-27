@@ -6,7 +6,26 @@ vi.mock("next/cache", () => ({
   unstable_cache: (callback: unknown) => callback,
 }));
 
-import { toggleManualMatchHidden } from "./service";
+import { toggleManualMatchHidden, validatePublishedMatch } from "./service";
+
+describe("published stream URL validation", () => {
+  it("rejects credentialed stream and logo URLs on admin writes", () => {
+    const valid = {
+      game: "lol",
+      league: "League",
+      homeTeamName: "A",
+      awayTeamName: "B",
+    };
+    expect(() => validatePublishedMatch({ ...valid, streamUrl: "https://stream.example/live?token=private" }))
+      .toThrow("公开链接不能包含账号凭据或访问令牌。");
+    expect(() => validatePublishedMatch({ ...valid, homeTeamLogo: "https://cdn.example/logo.svg?signature=private" }))
+      .toThrow("公开链接不能包含账号凭据或访问令牌。");
+    expect(() => validatePublishedMatch({
+      ...valid,
+      sourceUrl: "https://admin:password@example.com/match",
+    })).toThrow("来源链接不能包含账号凭据或访问令牌。");
+  });
+});
 
 describe("manual match visibility service", () => {
   it("delegates the atomic toggle and invalidates the public match cache", async () => {

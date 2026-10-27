@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { gameKeys } from "./schedule/types";
 import type { GameKey } from "./schedule/types";
+import { sanitizePublicExternalUrl, sanitizePublicHttpUrl } from "./schedule/stream-url";
 
 export const SUBMISSION_LIMITS = {
   league: 120,
@@ -75,6 +76,11 @@ export function validateSubmission(value: unknown): MatchSubmissionInput {
     throw new SubmissionValidationError("赛制必须为 BO1 到 BO9，或选择未知。");
   }
 
+  const sourceUrl = validatedUrl(input.sourceUrl, SUBMISSION_LIMITS.sourceUrl);
+  if (!sanitizePublicHttpUrl(sourceUrl)) {
+    throw new SubmissionValidationError("来源链接不能包含账号凭据或访问令牌。");
+  }
+
   return {
     game: input.game as GameKey,
     league,
@@ -82,7 +88,7 @@ export function validateSubmission(value: unknown): MatchSubmissionInput {
     teamB,
     scheduledAt: new Date(epoch).toISOString(),
     bestOf,
-    sourceUrl: validatedUrl(input.sourceUrl, SUBMISSION_LIMITS.sourceUrl),
+    sourceUrl,
     notes,
   };
 }
@@ -113,9 +119,20 @@ export function validateOptionalHttpsUrl(value: unknown, maxLength = 500): strin
   return validatedUrl(value, maxLength, true);
 }
 
-export function validateOptionalHttpUrl(value: unknown, maxLength = 500): string | null {
+export function validateOptionalPublicExternalUrl(value: unknown, maxLength = 500): string | null {
+  const url = validateOptionalHttpsUrl(value, maxLength);
+  if (url === null) return null;
+  const sanitized = sanitizePublicExternalUrl(url);
+  if (!sanitized) throw new SubmissionValidationError("公开链接不能包含账号凭据或访问令牌。");
+  return sanitized;
+}
+
+export function validateOptionalPublicHttpUrl(value: unknown, maxLength = 500): string | null {
   if (value === null || value === undefined || value === "") return null;
-  return validatedUrl(value, maxLength);
+  const url = validatedUrl(value, maxLength);
+  const sanitized = sanitizePublicHttpUrl(url);
+  if (!sanitized) throw new SubmissionValidationError("来源链接不能包含账号凭据或访问令牌。");
+  return sanitized;
 }
 
 export function validateOptionalText(value: unknown, maxLength: number): string | null {
