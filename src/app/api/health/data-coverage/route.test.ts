@@ -14,6 +14,12 @@ import { dynamic, GET } from "./route";
 
 describe("GET /api/health/data-coverage", () => {
   beforeEach(() => {
+    const staleGame = {
+      sourceFetchedAt: "2026-10-27T02:00:00.000Z",
+      lastSuccessfulSyncAt: "2026-10-27T02:00:00.000Z",
+      syncStatus: "delayed",
+      dataSource: "persistent",
+    };
     getSchedule.mockReset().mockResolvedValue({
       demoMode: false,
       providers: { pandascore: "stale-cache", manual: "json+database" },
@@ -28,11 +34,11 @@ describe("GET /api/health/data-coverage", () => {
         refreshInProgress: false,
         lastError: "UPSTREAM_TIMEOUT",
         games: {
-          lol: { syncStatus: "delayed", dataSource: "persistent" },
-          valorant: { syncStatus: "delayed", dataSource: "persistent" },
-          "honor-of-kings": { syncStatus: "delayed", dataSource: "persistent" },
-          cs2: { syncStatus: "delayed", dataSource: "persistent" },
-          dota2: { syncStatus: "delayed", dataSource: "persistent" },
+          lol: staleGame,
+          valorant: staleGame,
+          "honor-of-kings": staleGame,
+          cs2: staleGame,
+          dota2: staleGame,
         },
       },
     });
@@ -61,6 +67,14 @@ describe("GET /api/health/data-coverage", () => {
       providers: { pandascore: "stale-cache" },
       database: { status: "connected" },
     });
+    for (const game of ["lol", "valorant", "honor-of-kings", "cs2", "dota2"]) {
+      expect(body.games[game]).toMatchObject({
+        sourceFetchedAt: "2026-10-27T02:00:00.000Z",
+        lastSuccessfulSyncAt: "2026-10-27T02:00:00.000Z",
+        syncStatus: "delayed",
+        dataSource: "persistent",
+      });
+    }
     expect(getSchedule).toHaveBeenCalledExactlyOnceWith({ cachedOnly: true });
     expect(getDatabaseHealth).toHaveBeenCalledExactlyOnceWith();
   });
