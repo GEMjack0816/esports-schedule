@@ -293,6 +293,7 @@ describe("runScheduleSync", () => {
     ["+15:00", "2026-10-19T00:59:30+15:00"],
     ["-14:01", "2026-10-18T19:58:30-14:01"],
     ["+23:59", "2026-10-19T09:58:30+23:59"],
+    ["-00:00", "2026-10-18T09:59:30-00:00"],
   ])("does not treat an out-of-range ISO offset (%s) as a fresh snapshot", async (_offset, timestamp) => {
     const calls = [];
     const result = await runScheduleSync(makeOptions(async (url) => {

@@ -30,7 +30,9 @@ function parseTimestamp(value) {
   const offset = value.match(/([+-])(\d{2}):(\d{2})$/);
   const offsetHour = offset ? Number(offset[2]) : 0;
   const offsetMinute = offset ? Number(offset[3]) : 0;
+  const unknownOffset = offset?.[1] === "-" && offsetHour === 0 && offsetMinute === 0;
   if (hour > 23 || minute > 59 || second > 59
+    || unknownOffset
     || (offset && (offsetHour > 14 || (offsetHour === 14 && offsetMinute !== 0) || offsetMinute > 59))) {
     return null;
   }
