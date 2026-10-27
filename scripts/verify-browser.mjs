@@ -246,12 +246,15 @@ for (const profile of [
       const body = await response.json();
       const fixtureName = 'Codex global search fixture';
       const outsideToday = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
-      body.matches = body.matches.map((match, index) => ({
-        ...match,
+      const matchingMatch = body.matches.find((match) =>
+        match.homeTeam.name === partialSearchTerm || match.awayTeam.name === partialSearchTerm);
+      if (!matchingMatch) throw new Error('The full schedule response did not contain the visible partial-search match.');
+      body.matches = [{
+        ...matchingMatch,
         startTimeUtc: outsideToday,
         status: 'scheduled',
-        homeTeam: index === 0 ? { ...match.homeTeam, name: fixtureName } : match.homeTeam,
-      }));
+        homeTeam: { ...matchingMatch.homeTeam, name: `${fixtureName} ${partialSearchTerm}` },
+      }];
       body.coverage.totals.finalWithManual = body.matches.length;
       await route.fulfill({ response, body: JSON.stringify(body) });
     });
