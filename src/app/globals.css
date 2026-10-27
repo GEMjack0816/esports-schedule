@@ -110,6 +110,7 @@ a { color: inherit; text-decoration: none; }
 
 .site-shell { width: min(100%, 1480px); margin: 0 auto; }
 #main-content { scroll-margin-top: calc(var(--site-header-height) + 8px); }
+#main-content:focus-visible { box-shadow: inset 0 3px 0 var(--focus-ring); }
 
 .site-header {
   height: 82px;
