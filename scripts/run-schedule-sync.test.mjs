@@ -252,14 +252,72 @@ describe("runScheduleSync", () => {
     expect(calls).toEqual([healthUrl, syncUrl, healthUrl]);
   });
 
-  it("does not accept a fresh but unadvanced snapshot after an ambiguous request", async () => {
+  it("skips the sync request when preflight confirms all five game snapshots are fresh", async () => {
     const calls = [];
-    await expect(runScheduleSync(makeOptions(async (url) => {
+    const result = await runScheduleSync(makeOptions(async (url) => {
       calls.push(url);
-      return url === healthUrl ? freshHealth() : Promise.reject(new TypeError("response lost"));
-    }))).rejects.toMatchObject({ code: "sync_transport_failed_without_verified_refresh" });
+      return freshHealth();
+    }));
 
-    expect(calls).toEqual([healthUrl, syncUrl, healthUrl]);
+    expect(result).toEqual({
+      ok: true,
+      outcome: "already_fresh",
+      lastSuccessfulSyncAt: "2026-10-18T09:59:30.000Z",
+    });
+    expect(calls).toEqual([healthUrl]);
+  });
+
+  it("does not skip when one game's timestamp is stale despite fresh aggregate health", async () => {
+    const calls = [];
+    const result = await runScheduleSync(makeOptions(async (url) => {
+      calls.push(url);
+      if (url === healthUrl) {
+        const payload = await freshHealth().json();
+        const staleAt = "2026-10-18T09:30:00.000Z";
+        payload.games.cs2.sourceFetchedAt = staleAt;
+        payload.games.cs2.lastSuccessfulSyncAt = staleAt;
+        return Response.json(payload, {
+          headers: { "cache-control": "no-store, no-cache, must-revalidate" },
+        });
+      }
+      return syncSuccess();
+    }));
+
+    expect(result).toMatchObject({ ok: true, payload: { generation: 42 } });
+    expect(calls).toEqual([healthUrl, syncUrl]);
+  });
+
+  it("keeps concurrent stale preflights behind the sync lock without treating busy as a refresh", async () => {
+    const calls = [];
+    let healthCalls = 0;
+    let syncCalls = 0;
+    const fetchImpl = async (url) => {
+      calls.push(url);
+      if (url === healthUrl) {
+        healthCalls += 1;
+        return healthCalls <= 2 ? staleHealth() : freshHealth();
+      }
+      syncCalls += 1;
+      if (syncCalls === 1) return syncSuccess();
+      return Response.json({
+        ok: false,
+        status: "busy",
+        lockAcquired: false,
+        generation: null,
+      }, { status: 409 });
+    };
+
+    const results = await Promise.all([
+      runScheduleSync(makeOptions(fetchImpl)),
+      runScheduleSync(makeOptions(fetchImpl)),
+    ]);
+
+    expect(results.map((result) => result.outcome).sort()).toEqual([
+      "success: 5 games updated, 0 failed",
+      "verified_fresh_after_concurrent_sync",
+    ]);
+    expect(calls.filter((url) => url === syncUrl)).toHaveLength(2);
+    expect(healthCalls).toBe(3);
   });
 
   it("fails closed when the baseline health probe is unavailable and the sync response is ambiguous", async () => {
