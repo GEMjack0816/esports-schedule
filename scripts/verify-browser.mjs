@@ -195,6 +195,21 @@ for (const profile of [
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   const themeButtonFocus = await tabToAndReadFocusIndicator(page, ".theme-button");
   const rangeTabFocus = await tabToAndReadFocusIndicator(page, '.range-tabs [role="tab"]:first-of-type');
+  const focusThemeCoverage = {};
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate((nextTheme) => {
+      document.documentElement.dataset.theme = nextTheme;
+      window.dispatchEvent(new Event("schedule-theme-change"));
+    }, theme);
+    focusThemeCoverage[theme] = {
+      gameFilter: await tabToAndReadFocusIndicator(page, ".filter-panel label:nth-child(2) select"),
+      themeButton: await tabToAndReadFocusIndicator(page, ".theme-button"),
+    };
+  }
+  await page.evaluate((theme) => {
+    document.documentElement.dataset.theme = theme;
+    window.dispatchEvent(new Event("schedule-theme-change"));
+  }, initialTheme);
 
   const gameFilterCounts = {};
   const statusFilterCounts = {};
@@ -311,6 +326,7 @@ for (const profile of [
     dateFilterFocus,
     themeButtonFocus,
     rangeTabFocus,
+    focusThemeCoverage,
     submitInputFocus,
     submitButtonFocus,
     refreshedApiUrl: apiResponse.url(),
@@ -406,6 +422,20 @@ for (const result of results) {
       focus.luminanceContrast < 3
     ) {
       failures.push(`${prefix}: ${control} has no visible keyboard focus indicator`);
+    }
+  }
+  for (const [theme, controls] of Object.entries(result.focusThemeCoverage ?? {})) {
+    for (const [control, focus] of Object.entries(controls)) {
+      if (
+        !focus ||
+        focus.focusVisible !== true ||
+        focus.outlineStyle !== "solid" ||
+        Number.parseFloat(focus.outlineWidth) < 2 ||
+        focus.luminanceContrast === null ||
+        focus.luminanceContrast < 3
+      ) {
+        failures.push(`${prefix}: ${control} has no contrast-compliant keyboard focus indicator in ${theme} theme`);
+      }
     }
   }
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
