@@ -182,7 +182,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [requestError, setRequestError] = useState(false);
+  const [requestError, setRequestError] = useState<"filter" | "more" | null>(null);
   const [paginationRestartedFor, setPaginationRestartedFor] = useState<string | null>(null);
   const activeController = useRef<AbortController | null>(null);
   const requestSerial = useRef(0);
@@ -255,7 +255,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
     const delay = requestQuery.query.trim() ? 250 : 0;
     const timer = setTimeout(async () => {
       setLoading(true);
-      setRequestError(false);
+      setRequestError(null);
       try {
         const response = await fetch(pageUrl(requestQuery), { cache: "no-store", signal: controller.signal });
         if (!response.ok) throw new Error("schedule page request failed");
@@ -267,7 +267,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")
           && isCurrentSchedulePageRequest(serial, requestSerial.current, requestKey, currentRequestKey.current)) {
-          setRequestError(true);
+          setRequestError("filter");
         }
       } finally {
         if (isCurrentSchedulePageRequest(serial, requestSerial.current, requestKey, currentRequestKey.current)) {
@@ -304,7 +304,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
     const controller = new AbortController();
     activeController.current?.abort();
     activeController.current = controller;
-    setRequestError(false);
+    setRequestError(null);
     try {
       const response = await fetch(pageUrl(requestQuery), { cache: "no-store", signal: controller.signal });
       if (!response.ok) throw new Error("schedule page request failed");
@@ -316,7 +316,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
       }
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")
-        && serial === requestSerial.current && requestKey === currentRequestKey.current) setRequestError(true);
+        && serial === requestSerial.current && requestKey === currentRequestKey.current) setRequestError("filter");
     } finally {
       if (serial === requestSerial.current) setLoading(false);
       setRefreshing(false);
@@ -333,7 +333,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
     const controller = new AbortController();
     activeController.current?.abort();
     activeController.current = controller;
-    setRequestError(false);
+    setRequestError(null);
     try {
       const response = await fetch(pageUrl({ ...requestQuery, cursor }), { cache: "no-store", signal: controller.signal });
       if (response.status === 409) {
@@ -351,7 +351,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
           setPayload(restarted);
           setLoadedRequestKey(requestKey);
           setPaginationRestartedFor(requestKey);
-          setRequestError(false);
+          setRequestError(null);
         }
         return;
       }
@@ -371,7 +371,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
       }
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")
-        && serial === requestSerial.current && requestKey === currentRequestKey.current) setRequestError(true);
+        && serial === requestSerial.current && requestKey === currentRequestKey.current) setRequestError("more");
     } finally {
       if (serial === requestSerial.current) {
         loadingMoreRef.current = false;
@@ -497,12 +497,20 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePageDa
 
           <ScheduleResultStatus count={announcedMatchCount} />
           <div className="match-list" id={rangePanelId} role="tabpanel" aria-labelledby={`${rangeId}-${range}`} tabIndex={0} aria-busy={loading || loadingMore}>
-            {!payloadMatchesFilters && <div className="data-notice" role={requestError ? "alert" : "status"}>
-              {requestError
-                ? "当前筛选加载失败，下面显示的是上一组筛选结果；请重试。"
-                : "筛选更新中，下面暂时保留上一组筛选结果。"}
+            {requestError === "filter" && <div className="data-notice" role="alert">
+              <span className="notice-message">{payloadMatchesFilters
+                ? "赛程筛选暂时失败，已保留当前结果。"
+                : "当前筛选加载失败，下面显示的是上一组筛选结果。"}</span>
+              <button className="notice-retry" type="button" onClick={refreshSchedule} disabled={refreshing || loading}>
+                重试当前筛选
+              </button>
             </div>}
-            {requestError && payloadMatchesFilters && <div className="data-notice" role="alert">赛程筛选暂时失败，已保留当前结果，请重试。</div>}
+            {requestError === "more" && <div className="data-notice" role="alert">
+              <span className="notice-message">继续加载失败，已保留当前列表；可再次点击“加载更多”。</span>
+            </div>}
+            {!payloadMatchesFilters && !requestError && <div className="data-notice" role="status">
+              筛选更新中，下面暂时保留上一组筛选结果。
+            </div>}
             {paginationRestartedFor === requestKey && <div className="data-notice" role="status">赛程在浏览期间更新，已从最新结果重新载入。</div>}
             {loading && <div className="results-meta" role="status">{payloadMatchesFilters ? "正在更新筛选结果…" : "正在更新筛选结果，列表暂为上一组结果…"}</div>}
             {grouped.length > 0 ? grouped.map(([key, matches]) => (

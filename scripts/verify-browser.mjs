@@ -47,6 +47,7 @@ for (const profile of [
   const browserResourceWarnings = [];
   let expectScheduleChanged = false;
   let failNextCs2Filter = false;
+  let failNextPaginationRequest = false;
   let delayNextPaginationResponse = false;
   let delayedPaginationRequestStarted = false;
   let serveRefreshAfterPagination = false;
@@ -262,6 +263,8 @@ for (const profile of [
   let paginationRestartWorked = false;
   let refreshRestoredPagination = false;
   let failedFilterRetainedResultsSafely = false;
+  let failedFilterRetryWorked = false;
+  let failedLoadMoreCanRetry = false;
   let injectMissingTimeLiveFixture = true;
   await page.route("**/api/matches/page?*", async (route) => {
     const url = new URL(route.request().url());
@@ -299,6 +302,16 @@ for (const profile of [
     }
     if (failNextCs2Filter && url.searchParams.get("game") === "cs2") {
       failNextCs2Filter = false;
+      expectedFilterFailureResponse = true;
+      expectedFilterFailureConsole = true;
+      return route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "TEMPORARILY_UNAVAILABLE" }),
+      });
+    }
+    if (url.searchParams.has("cursor") && failNextPaginationRequest) {
+      failNextPaginationRequest = false;
       expectedFilterFailureResponse = true;
       expectedFilterFailureConsole = true;
       return route.fulfill({
@@ -457,6 +470,16 @@ for (const profile of [
   const loadMoreAfterRefresh = page.getByRole("button", { name: /加载更多/ });
   const paginationUnlocked = await loadMoreAfterRefresh.isEnabled();
   if (paginationUnlocked) {
+    failNextPaginationRequest = true;
+    const failedLoadMoreResponse = page.waitForResponse((candidate) => {
+      const url = new URL(candidate.url());
+      return url.pathname === "/api/matches/page" && url.searchParams.has("cursor") && candidate.status() === 503;
+    });
+    await loadMoreAfterRefresh.click();
+    await failedLoadMoreResponse;
+    await page.locator('.match-list .data-notice[role="alert"]').filter({ hasText: "继续加载失败" }).waitFor();
+    failedLoadMoreCanRetry = await loadMoreAfterRefresh.isEnabled()
+      && await page.locator('.match-list .data-notice[role="alert"]').innerText().then((text) => text.includes("加载更多"));
     returnNextPageAfterRefresh = true;
     await loadMoreAfterRefresh.click();
     await page.getByText("Recovered Page Team", { exact: true }).waitFor();
@@ -474,8 +497,20 @@ for (const profile of [
   await gameSelect.selectOption("cs2");
   await failedFilterResponse;
   await page.locator('.data-notice[role="alert"]').filter({ hasText: "上一组筛选结果" }).waitFor();
+  const retryCurrentFilter = page.getByRole("button", { name: "重试当前筛选" });
   failedFilterRetainedResultsSafely = await page.getByRole("button", { name: /加载更多/ }).count() === 0
+    && await retryCurrentFilter.isVisible()
     && (await page.locator(".match-card").allTextContents()).join(" ").includes("Recovered Page Team");
+  const filterRetryResponse = page.waitForResponse((candidate) => {
+    const url = new URL(candidate.url());
+    return url.pathname === "/api/matches/page" && url.searchParams.get("game") === "cs2"
+      && !url.searchParams.has("cursor") && candidate.status() === 200;
+  });
+  await retryCurrentFilter.click();
+  await filterRetryResponse;
+  await page.waitForFunction(() => document.querySelector(".match-list")?.getAttribute("aria-busy") === "false");
+  failedFilterRetryWorked = await page.locator('.match-list .data-notice[role="alert"]').count() === 0
+    && !(await page.locator(".match-page-footer").innerText()).includes("上一组筛选结果");
 
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
@@ -543,6 +578,8 @@ for (const profile of [
     paginationRestartWorked,
     refreshRestoredPagination,
     failedFilterRetainedResultsSafely,
+    failedFilterRetryWorked,
+    failedLoadMoreCanRetry,
     liveFixtureVisible,
     liveGroupHeadingExplicit,
     errors,
@@ -583,6 +620,8 @@ for (const result of results) {
   if (!result.paginationRestartWorked) failures.push(`${prefix}: stale pagination did not restart from the latest result set`);
   if (!result.refreshRestoredPagination) failures.push(`${prefix}: refresh during pagination left Load More unavailable`);
   if (!result.failedFilterRetainedResultsSafely) failures.push(`${prefix}: failed filter exposed a stale pagination cursor or ambiguous previous results`);
+  if (!result.failedFilterRetryWorked) failures.push(`${prefix}: current-filter retry did not recover from a failed page request`);
+  if (!result.failedLoadMoreCanRetry) failures.push(`${prefix}: failed Load More did not leave a usable retry path`);
   if (!result.liveFixtureVisible) failures.push(`${prefix}: undated running match was not visible in Today`);
   if (!result.liveGroupHeadingExplicit) failures.push(`${prefix}: running match group was not labeled as in progress`);
   failures.push(...result.errors.map((error) => `${prefix}: ${error}`));
