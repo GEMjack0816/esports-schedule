@@ -3,20 +3,11 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
-import type { KeyboardEvent } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
-
-const rangeOptions = [
-  ["today", "今日"],
-  ["tomorrow", "明日"],
-  ["seven", "未来 7 天"],
-  ["history", "历史比赛"],
-  ["all", "全部收录"],
-] as const satisfies readonly (readonly [RangeKey, string])[];
 
 const subscribeToTimeZone = () => () => undefined;
 const getBrowserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -174,40 +165,6 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   );
   const theme = useSyncExternalStore(subscribeToTheme, getBrowserTheme, getServerTheme);
 
-  function handleRangeTabKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
-    const tabs = Array.from(
-      event.currentTarget.closest('[role="tablist"]')?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [],
-    );
-    const currentIndex = tabs.indexOf(event.currentTarget);
-    if (currentIndex < 0 || tabs.length === 0) return;
-
-    let nextIndex: number;
-    switch (event.key) {
-      case "ArrowRight":
-        nextIndex = (currentIndex + 1) % tabs.length;
-        break;
-      case "ArrowLeft":
-        nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
-        break;
-      case "Home":
-        nextIndex = 0;
-        break;
-      case "End":
-        nextIndex = tabs.length - 1;
-        break;
-      default:
-        return;
-    }
-
-    event.preventDefault();
-    const nextTab = tabs[nextIndex];
-    nextTab.focus();
-    const nextRange = nextTab.dataset.rangeKey;
-    if (rangeOptions.some(([key]) => key === nextRange)) {
-      setRange(nextRange as RangeKey);
-    }
-  }
-
   const today = addDaysKey(0, timeZone);
   const tomorrow = addDaysKey(1, timeZone);
   const sevenDaysOut = addDaysKey(6, timeZone);
@@ -363,44 +320,30 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           </div>
 
           <div className="range-tabs" role="tablist" aria-label="选择时间范围">
-            {rangeOptions.map(([key, label]) => (
-              <button
-                key={key}
-                id={`range-tab-${key}`}
-                data-range-key={key}
-                role="tab"
-                aria-controls="range-panel"
-                aria-selected={range === key}
-                tabIndex={range === key ? 0 : -1}
-                className={range === key ? "active" : ""}
-                type="button"
-                onClick={() => setRange(key)}
-                onKeyDown={handleRangeTabKeyDown}
-              >
+            {([ ["today", "今日"], ["tomorrow", "明日"], ["seven", "未来 7 天"], ["history", "历史比赛"], ["all", "全部收录"] ] as const).map(([key, label]) => (
+              <button key={key} role="tab" aria-selected={range === key} className={range === key ? "active" : ""} type="button" onClick={() => setRange(key)}>
                 <span>{label}</span><em>{rangeCounts[key]}</em>
               </button>
             ))}
           </div>
 
-          <div id="range-panel" role="tabpanel" aria-labelledby={`range-tab-${range}`}>
-            <div className="filter-panel">
-              <label className="search-field"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索战队或赛事" /></label>
-              <label><span className="sr-only">游戏</span><select value={game} onChange={(event) => setGame(event.target.value as GameKey | "all")}><option value="all">全部游戏</option>{Object.entries(games).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
-              <label><span className="sr-only">赛事</span><select value={league} onChange={(event) => setLeague(event.target.value)}><option value="all">全部赛事</option>{leagues.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
-              <label><span className="sr-only">状态</span><select value={status} onChange={(event) => setStatus(event.target.value as MatchStatus | "all")}><option value="all">全部状态</option>{Object.entries(statusMeta).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
-              <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt?.slice(0, 10)} max={payload.coverage.range.latestMatchAt?.slice(0, 10)} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
-            </div>
+          <div className="filter-panel">
+            <label className="search-field"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索战队或赛事" /></label>
+            <label><span className="sr-only">游戏</span><select value={game} onChange={(event) => setGame(event.target.value as GameKey | "all")}><option value="all">全部游戏</option>{Object.entries(games).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
+            <label><span className="sr-only">赛事</span><select value={league} onChange={(event) => setLeague(event.target.value)}><option value="all">全部赛事</option>{leagues.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
+            <label><span className="sr-only">状态</span><select value={status} onChange={(event) => setStatus(event.target.value as MatchStatus | "all")}><option value="all">全部状态</option>{Object.entries(statusMeta).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
+            <label className="date-field"><span className="sr-only">日期</span><input type="date" min={payload.coverage.range.earliestMatchAt?.slice(0, 10)} max={payload.coverage.range.latestMatchAt?.slice(0, 10)} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
+          </div>
 
-            <div className="match-list" aria-live="polite">
-              {grouped.length > 0 ? grouped.map(([key, matches]) => (
-                <section className="date-group" key={key}>
-                  <div className="date-divider"><span>{formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
-                  {matches.map((match) => <MatchCard match={match} timeZone={timeZone} key={match.id} />)}
-                </section>
-              )) : (
-                <div className="empty-state"><span className="empty-glyph">⌁</span><h3>没有找到符合条件的比赛</h3><p>试试切换时间范围，或清除部分筛选条件。</p><button type="button" onClick={resetFilters}>清除筛选</button></div>
-              )}
-            </div>
+          <div className="match-list" aria-live="polite">
+            {grouped.length > 0 ? grouped.map(([key, matches]) => (
+              <section className="date-group" key={key}>
+                <div className="date-divider"><span>{formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
+                {matches.map((match) => <MatchCard match={match} timeZone={timeZone} key={match.id} />)}
+              </section>
+            )) : (
+              <div className="empty-state"><span className="empty-glyph">⌁</span><h3>没有找到符合条件的比赛</h3><p>试试切换时间范围，或清除部分筛选条件。</p><button type="button" onClick={resetFilters}>清除筛选</button></div>
+            )}
           </div>
         </section>
       </main>

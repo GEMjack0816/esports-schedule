@@ -191,33 +191,6 @@ for (const profile of [
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   const themeButtonFocus = await tabToAndReadFocusIndicator(page, ".theme-button");
   const rangeTabFocus = await tabToAndReadFocusIndicator(page, '.range-tabs [role="tab"]:first-of-type');
-  const rangeTabKeyboard = {};
-  const rangeTabs = page.getByRole("tab");
-  const readRangeTabState = () => page.evaluate(() => {
-    const activeTab = document.activeElement?.closest('[role="tab"]');
-    const selectedTab = document.querySelector('[role="tab"][aria-selected="true"]');
-    const panel = document.getElementById("range-panel");
-    return {
-      activeId: activeTab?.id ?? null,
-      selectedId: selectedTab?.id ?? null,
-      selectedTabStopCount: document.querySelectorAll('[role="tab"][tabindex="0"]').length,
-      panelLinkedToSelectedTab: panel?.getAttribute("aria-labelledby") === selectedTab?.id,
-      selectedTabControlsPanel: selectedTab?.getAttribute("aria-controls") === panel?.id,
-      panelHasTabPanelRole: panel?.getAttribute("role") === "tabpanel",
-    };
-  });
-  await rangeTabs.first().focus();
-  await page.keyboard.press("ArrowRight");
-  rangeTabKeyboard.arrowRight = await readRangeTabState();
-  await page.keyboard.press("ArrowLeft");
-  rangeTabKeyboard.arrowLeft = await readRangeTabState();
-  await page.keyboard.press("ArrowLeft");
-  rangeTabKeyboard.wrapsAtStart = await readRangeTabState();
-  await page.keyboard.press("Home");
-  rangeTabKeyboard.home = await readRangeTabState();
-  await page.keyboard.press("End");
-  rangeTabKeyboard.end = await readRangeTabState();
-  await rangeTabs.first().click();
 
   const gameFilterCounts = {};
   const statusFilterCounts = {};
@@ -329,7 +302,6 @@ for (const profile of [
     scheduleFilterFocus,
     themeButtonFocus,
     rangeTabFocus,
-    rangeTabKeyboard,
     submitInputFocus,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -419,24 +391,6 @@ for (const result of results) {
       focus.luminanceContrast < 3
     ) {
       failures.push(`${prefix}: ${control} has no visible keyboard focus indicator`);
-    }
-  }
-  const tabStateIsValid = (state, expectedId) =>
-    state?.activeId === expectedId &&
-    state?.selectedId === expectedId &&
-    state?.selectedTabStopCount === 1 &&
-    state?.panelLinkedToSelectedTab === true &&
-    state?.selectedTabControlsPanel === true &&
-    state?.panelHasTabPanelRole === true;
-  for (const [key, expectedId] of [
-    ["arrowRight", "range-tab-tomorrow"],
-    ["arrowLeft", "range-tab-today"],
-    ["wrapsAtStart", "range-tab-all"],
-    ["home", "range-tab-today"],
-    ["end", "range-tab-all"],
-  ]) {
-    if (!tabStateIsValid(result.rangeTabKeyboard?.[key], expectedId)) {
-      failures.push(`${prefix}: range tab ${key} keyboard navigation or ARIA relationships failed`);
     }
   }
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
