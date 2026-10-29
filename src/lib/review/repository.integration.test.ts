@@ -3,6 +3,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { DrizzleReviewRepository } from "./repository";
 import type { MatchSubmissionInput } from "@/lib/submissions";
+import { createSubmissionFingerprint } from "@/lib/submissions";
 import {
   PUBLIC_SUBMISSION_GATE_LOCK,
   submissionControlWindowKey,
@@ -262,6 +263,71 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     expect(audits.reduce((total, audit) => total + Number(audit.after_json.imported), 0)).toBe(records.length);
     expect(audits.reduce((total, audit) => total + Number(audit.after_json.duplicate), 0)).toBe(records.length);
   });
+
+  it("bounds lock waits when a legacy import conflicts with an uncommitted submission", async () => {
+    const actorId = `integration-legacy-lock-timeout-${randomUUID()}`;
+    legacyImportActors.push(actorId);
+    const record = legacyRecord(`lock-timeout-${randomUUID()}`);
+    const fingerprint = createSubmissionFingerprint(record.input);
+    const blocker = postgres(testUrl!, { max: 1, prepare: false });
+    let rowInserted!: () => void;
+    let releaseBlocker!: () => void;
+    let insertFailed!: (error: unknown) => void;
+    const inserted = new Promise<void>((resolve, reject) => {
+      rowInserted = resolve;
+      insertFailed = reject;
+    });
+    const release = new Promise<void>((resolve) => { releaseBlocker = resolve; });
+    const blockerTransaction = blocker.begin(async (tx) => {
+      try {
+        await tx`insert into match_submissions (
+          id, game, league, team_a, team_b, scheduled_at, best_of, source_url,
+          notes, status, fingerprint, submitted_at, updated_at
+        ) values (
+          ${record.id}::uuid, ${record.input.game}, ${record.input.league},
+          ${record.input.teamA}, ${record.input.teamB}, ${record.input.scheduledAt}::timestamptz,
+          ${record.input.bestOf}, ${record.input.sourceUrl}, ${record.input.notes},
+          'pending', ${fingerprint}, ${record.submittedAt.toISOString()}::timestamptz,
+          ${record.submittedAt.toISOString()}::timestamptz
+        )`;
+        rowInserted();
+      } catch (error) {
+        insertFailed(error);
+        throw error;
+      }
+      await release;
+    });
+    void blockerTransaction.catch(() => undefined);
+
+    let importAttempt: Promise<{ kind: "resolved" } | { kind: "rejected"; error: unknown }> | undefined;
+    try {
+      await inserted;
+      importAttempt = repository.importLegacySubmissions(actorId, [record], {
+        scanned: 1,
+        invalid: 0,
+      }).then(
+        () => ({ kind: "resolved" as const }),
+        (error: unknown) => ({ kind: "rejected" as const, error }),
+      );
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      const outcome = await Promise.race([
+        importAttempt,
+        new Promise<{ kind: "deadline" }>((resolve) => {
+          deadlineTimer = setTimeout(() => resolve({ kind: "deadline" }), 6_500);
+        }),
+      ]);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      expect(outcome.kind).toBe("rejected");
+      if (outcome.kind === "rejected") {
+        expect(outcome.error).toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+      }
+    } finally {
+      releaseBlocker();
+      await blockerTransaction.catch(() => undefined);
+      await blocker.end();
+      if (importAttempt) await importAttempt;
+    }
+  }, 8_000);
 
   it("rolls back imported rows if the summary audit insert fails", async () => {
     const actorId = `integration-legacy-rollback-${randomUUID()}`;

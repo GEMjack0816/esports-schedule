@@ -57,6 +57,11 @@ type CreateOptions = {
   submittedAt?: Date;
 };
 
+// Bound query and lock waits so a blocked one-time import cannot hold a
+// serverless function open indefinitely.
+const LEGACY_IMPORT_STATEMENT_TIMEOUT_MS = 30_000;
+const LEGACY_IMPORT_LOCK_TIMEOUT_MS = 5_000;
+
 function submissionValues(input: MatchSubmissionInput, updatedAt = new Date()) {
   return {
     game: input.game,
@@ -360,6 +365,11 @@ export class DrizzleReviewRepository {
   ): Promise<LegacyImportCounts> {
     try {
       return await getDatabase().transaction(async (tx) => {
+        await tx.execute(sql`select
+          set_config('statement_timeout', ${`${LEGACY_IMPORT_STATEMENT_TIMEOUT_MS}ms`}, true),
+          set_config('lock_timeout', ${`${LEGACY_IMPORT_LOCK_TIMEOUT_MS}ms`}, true)
+        `);
+
         const counts: LegacyImportCounts = {
           ...inputCounts,
           imported: 0,
