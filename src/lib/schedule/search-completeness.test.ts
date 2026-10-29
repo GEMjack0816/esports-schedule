@@ -45,6 +45,11 @@ describe("schedule search text", () => {
       normalizeScheduleSearchText("São Paulo"),
     ])).toBe(false);
   });
+
+  it("matches phrases spanning adjacent searchable fields", () => {
+    expect(matchesScheduleSearch("LCK Worlds", ["Team A", "Team B", "LCK", "Worlds Championship"])).toBe(true);
+    expect(matchesScheduleSearch("LCK WorldsX", ["Team A", "Team B", "LCK", "Worlds Championship"])).toBe(false);
+  });
 });
 
 describe("requestCompleteScheduleForSearch", () => {

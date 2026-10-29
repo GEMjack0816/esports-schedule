@@ -34,7 +34,9 @@ export function createScheduleSearchMatcher(query: string): (normalizedFields: r
   const normalizedQuery = normalizeScheduleSearchText(trimmedQuery);
   if (!normalizedQuery) return () => false;
 
-  return (normalizedFields) => normalizedFields.some((field) => field.includes(normalizedQuery));
+  // Preserve the established search behavior: phrases may cross adjacent
+  // fields (for example, league + tournament) in the space-separated text.
+  return (normalizedFields) => normalizedFields.join(" ").includes(normalizedQuery);
 }
 
 export function matchesScheduleSearch(query: string, fields: readonly string[]): boolean {
