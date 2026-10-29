@@ -41,7 +41,9 @@ import {
 import type {
   AdminSummary,
   ApprovalInput,
-  LegacyInsertResult,
+  LegacyImportCounts,
+  LegacyImportInputCounts,
+  LegacySubmissionRecord,
   ManualMatchPage,
   PublicSubmissionResult,
   PublishedMatchWrite,
@@ -54,6 +56,11 @@ type CreateOptions = {
   id?: string;
   submittedAt?: Date;
 };
+
+// Bound query and lock waits so a blocked one-time import cannot hold a
+// serverless function open indefinitely.
+const LEGACY_IMPORT_STATEMENT_TIMEOUT_MS = 30_000;
+const LEGACY_IMPORT_LOCK_TIMEOUT_MS = 5_000;
 
 function submissionValues(input: MatchSubmissionInput, updatedAt = new Date()) {
   return {
@@ -351,23 +358,44 @@ export class DrizzleReviewRepository {
     }
   }
 
-  async insertLegacySubmission(
-    input: MatchSubmissionInput,
-    id: string,
-    submittedAt: Date,
-  ): Promise<LegacyInsertResult> {
+  async importLegacySubmissions(
+    actorId: string,
+    records: LegacySubmissionRecord[],
+    inputCounts: LegacyImportInputCounts,
+  ): Promise<LegacyImportCounts> {
     try {
-      const rows = await getDatabase()
-        .insert(matchSubmissions)
-        .values({
-          ...submissionValues(input),
-          id,
-          submittedAt,
-          status: "pending",
+      return await getDatabase().transaction(async (tx) => {
+        await tx.execute(sql`select
+          set_config('statement_timeout', ${`${LEGACY_IMPORT_STATEMENT_TIMEOUT_MS}ms`}, true),
+          set_config('lock_timeout', ${`${LEGACY_IMPORT_LOCK_TIMEOUT_MS}ms`}, true)
+        `);
+
+        const counts: LegacyImportCounts = {
+          ...inputCounts,
+          imported: 0,
+          duplicate: 0,
+        };
+
+        for (const record of records) {
+          const rows = await tx.insert(matchSubmissions).values({
+            ...submissionValues(record.input),
+            id: record.id,
+            submittedAt: record.submittedAt,
+            status: "pending",
+          }).onConflictDoNothing().returning({ id: matchSubmissions.id });
+          if (rows.length === 1) counts.imported += 1;
+          else counts.duplicate += 1;
+        }
+
+        await tx.insert(adminAuditEvents).values({
+          actorId,
+          action: "legacy_submissions.imported",
+          entityType: "legacy_import",
+          entityId: crypto.randomUUID(),
+          afterJson: counts,
         })
-        .onConflictDoNothing()
-        .returning({ id: matchSubmissions.id });
-      return rows.length === 1 ? "imported" : "duplicate";
+        return counts;
+      });
     } catch (error) {
       translateDatabaseError(error);
     }
@@ -755,20 +783,6 @@ export class DrizzleReviewRepository {
       });
     } catch (error) {
       if (error instanceof ReviewNotFoundError || error instanceof ReviewConflictError) throw error;
-      translateDatabaseError(error);
-    }
-  }
-
-  async auditLegacyImport(actorId: string, counts: Record<string, number>): Promise<void> {
-    try {
-      await getDatabase().insert(adminAuditEvents).values({
-        actorId,
-        action: "legacy_submissions.imported",
-        entityType: "legacy_import",
-        entityId: crypto.randomUUID(),
-        afterJson: counts,
-      });
-    } catch (error) {
       translateDatabaseError(error);
     }
   }
