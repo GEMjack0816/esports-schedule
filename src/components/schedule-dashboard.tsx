@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { buildMatchShareText } from "@/lib/schedule/share";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
@@ -173,12 +173,17 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [selectedDate, setSelectedDate] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [shareFeedback, setShareFeedback] = useState("");
+  const shareFeedbackTimer = useRef<number | null>(null);
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
     getServerTimeZone,
   );
   const theme = useSyncExternalStore(subscribeToTheme, getBrowserTheme, getServerTheme);
+
+  useEffect(() => () => {
+    if (shareFeedbackTimer.current !== null) window.clearTimeout(shareFeedbackTimer.current);
+  }, []);
 
   const today = addDaysKey(0, timeZone);
   const tomorrow = addDaysKey(1, timeZone);
@@ -258,14 +263,25 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
       game: games[match.game].label,
       status: statusMeta[match.status].label,
       localStartTime: formatDateTime(match.startTimeUtc, timeZone),
+      localTimeZone: timeZone,
       siteUrl: `${window.location.origin}/`,
     });
 
+    if (shareFeedbackTimer.current !== null) window.clearTimeout(shareFeedbackTimer.current);
+    shareFeedbackTimer.current = null;
     setShareFeedback("");
+    const announce = (message: string) => {
+      setShareFeedback(message);
+      shareFeedbackTimer.current = window.setTimeout(() => {
+        setShareFeedback("");
+        shareFeedbackTimer.current = null;
+      }, 4000);
+    };
+
     if (typeof navigator.share === "function") {
       try {
         await navigator.share({ title: "分享电竞比赛", text });
-        setShareFeedback("比赛信息已分享");
+        announce("比赛信息已分享");
         return;
       } catch (error) {
         if (typeof error === "object" && error !== null && "name" in error && error.name === "AbortError") return;
@@ -275,9 +291,9 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     try {
       if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
       await navigator.clipboard.writeText(text);
-      setShareFeedback("比赛信息已复制，可粘贴分享");
+      announce("比赛信息已复制，可粘贴分享");
     } catch {
-      setShareFeedback("无法自动分享或复制，请手动复制比赛信息");
+      announce("无法自动分享或复制，请手动复制比赛信息");
     }
   }
 
@@ -313,6 +329,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           </button>
         </div>
       </header>
+      {shareFeedback && <p className="share-feedback" role="status" aria-live="polite">{shareFeedback}</p>}
 
       <main id="top">
         <section className="hero-section">
@@ -346,8 +363,6 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <span>当前收录范围 <strong>{formatDateTime(payload.coverage.range.earliestMatchAt, timeZone)} — {formatDateTime(payload.coverage.range.latestMatchAt, timeZone)}</strong></span>
             <Link href="/submit-match" prefetch={false}>提交遗漏比赛</Link>
           </div>
-          {shareFeedback && <p className="share-feedback" role="status" aria-live="polite">{shareFeedback}</p>}
-
           <div className="sync-status-grid" aria-label="各游戏数据同步状态">
             {Object.entries(games).map(([key, value]) => {
               const coverage = payload.coverage.games[key as GameKey];

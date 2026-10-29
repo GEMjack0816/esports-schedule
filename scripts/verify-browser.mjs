@@ -106,13 +106,18 @@ for (const profile of [
   const shareButtons = page.getByRole("button", { name: /^分享比赛：/ });
   const shareButtonCount = await shareButtons.count();
   let sharePayloadSafe = false;
+  let shareFeedbackVisible = false;
   if (shareButtonCount > 0) {
     await shareButtons.first().click();
+    const feedback = page.locator(".share-feedback");
+    await feedback.waitFor({ state: "visible" });
+    shareFeedbackVisible = await feedback.isVisible();
     const sharePayload = await page.evaluate(() => window.__sharePayload);
     const shareText = typeof sharePayload?.text === "string" ? sharePayload.text : "";
     sharePayloadSafe = (shareText.match(/https?:\/\//g) || []).length === 1
       && shareText.includes(`赛程：${auditUrl.origin}/`)
-      && !shareText.includes("?audit=");
+      && !shareText.includes("?audit=")
+      && shareText.includes("时间（Asia/Shanghai）：");
   }
 
   const apiResponsePromise = page.waitForResponse(
@@ -203,6 +208,7 @@ for (const profile of [
     statusFilterCounts,
     shareButtonCount,
     sharePayloadSafe,
+    shareFeedbackVisible,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -257,6 +263,7 @@ for (const result of results) {
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
   if (result.shareButtonCount < 1) failures.push(`${prefix}: no match available to verify share action`);
   if (!result.sharePayloadSafe) failures.push(`${prefix}: share payload contains unexpected URLs or query state`);
+  if (!result.shareFeedbackVisible) failures.push(`${prefix}: share feedback was not announced visibly`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);

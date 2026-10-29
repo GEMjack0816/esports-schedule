@@ -27,12 +27,13 @@ describe("buildMatchShareText", () => {
       game: "英雄联盟",
       status: "已结束",
       localStartTime: "2026年10月29日 18:00",
+      localTimeZone: "Asia/Shanghai",
       siteUrl: "https://example.test/",
     });
 
     expect(text).toContain("英雄联盟 · LPL · 夏季赛 · 决赛");
     expect(text).toContain("Team A vs Team B");
-    expect(text).toContain("时间：2026年10月29日 18:00");
+    expect(text).toContain("时间（Asia/Shanghai）：2026年10月29日 18:00");
     expect(text).toContain("赛制：BO5");
     expect(text).toContain("比分：3–1");
     expect(text).toContain("状态：已结束");
@@ -51,11 +52,12 @@ describe("buildMatchShareText", () => {
       game: "无畏契约",
       status: "未开始",
       localStartTime: "待定",
+      localTimeZone: "Asia/Shanghai",
       siteUrl: "https://example.test/",
     });
 
     expect(text).toContain("无畏契约 · LPL");
-    expect(text).toContain("时间：待定");
+    expect(text).toContain("时间（Asia/Shanghai）：待定");
     expect(text).toContain("赛制：待定");
     expect(text).not.toContain("比分：");
     expect(text).not.toContain("stream.example");

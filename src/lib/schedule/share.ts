@@ -4,6 +4,7 @@ export type MatchShareLabels = {
   game: string;
   status: string;
   localStartTime: string;
+  localTimeZone: string;
   siteUrl: string;
 };
 
@@ -17,7 +18,7 @@ export function buildMatchShareText(match: EsportsMatch, labels: MatchShareLabel
   return [
     `${labels.game} · ${event || "赛事待更新"}`,
     `${match.homeTeam.name} vs ${match.awayTeam.name}`,
-    `时间：${labels.localStartTime}`,
+    `时间（${labels.localTimeZone}）：${labels.localStartTime}`,
     `赛制：${match.bestOf ? `BO${match.bestOf}` : "待定"}`,
     score,
     `状态：${labels.status}`,
