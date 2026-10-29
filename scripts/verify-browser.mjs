@@ -107,6 +107,7 @@ for (const profile of [
   const shareButtonCount = await shareButtons.count();
   let sharePayloadSafe = false;
   let shareFeedbackVisible = false;
+  let clipboardFallbackWorks = false;
   if (shareButtonCount > 0) {
     await shareButtons.first().click();
     const feedback = page.locator(".share-feedback");
@@ -118,6 +119,27 @@ for (const profile of [
       && shareText.includes(`赛程：${auditUrl.origin}/`)
       && !shareText.includes("?audit=")
       && shareText.includes("时间（Asia/Shanghai）：");
+  }
+  if (shareButtonCount > 1) {
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "share", { configurable: true, value: undefined });
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async (text) => { window.__clipboardText = text; } },
+      });
+    });
+    await shareButtons.nth(1).click();
+    await page.waitForFunction(() => document.querySelector(".share-feedback")?.textContent?.includes("已复制"));
+    const fallback = await page.evaluate(() => ({
+      text: window.__clipboardText,
+      message: document.querySelector(".share-feedback")?.textContent ?? "",
+    }));
+    const clipboardText = typeof fallback.text === "string" ? fallback.text : "";
+    clipboardFallbackWorks = (clipboardText.match(/https?:\/\//g) || []).length === 1
+      && clipboardText.includes(`赛程：${auditUrl.origin}/`)
+      && clipboardText.includes("时间（Asia/Shanghai）：")
+      && !clipboardText.includes("?audit=")
+      && fallback.message.includes("已复制");
   }
 
   const apiResponsePromise = page.waitForResponse(
@@ -209,6 +231,7 @@ for (const profile of [
     shareButtonCount,
     sharePayloadSafe,
     shareFeedbackVisible,
+    clipboardFallbackWorks,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -264,6 +287,7 @@ for (const result of results) {
   if (result.shareButtonCount < 1) failures.push(`${prefix}: no match available to verify share action`);
   if (!result.sharePayloadSafe) failures.push(`${prefix}: share payload contains unexpected URLs or query state`);
   if (!result.shareFeedbackVisible) failures.push(`${prefix}: share feedback was not announced visibly`);
+  if (!result.clipboardFallbackWorks) failures.push(`${prefix}: clipboard share fallback failed or included unexpected data`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
