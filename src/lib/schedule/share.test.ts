@@ -63,4 +63,23 @@ describe("buildMatchShareText", () => {
     expect(text).not.toContain("stream.example");
     expect(text).not.toContain("token=private");
   });
+
+  it("keeps provider-controlled event and team names on one line and strips bidi controls", () => {
+    const text = buildMatchShareText({
+      ...match,
+      league: "LPL\n伪造新行",
+      homeTeam: { ...match.homeTeam, name: "Team A\n状态：已取消\u202e" },
+    }, {
+      game: "英雄联盟",
+      status: "已结束",
+      localStartTime: "2026年10月29日 18:00",
+      localTimeZone: "Asia/Shanghai",
+      siteUrl: "https://example.test/",
+    });
+
+    expect(text.split("\n")).toHaveLength(7);
+    expect(text).toContain("LPL 伪造新行 · 夏季赛 · 决赛");
+    expect(text).toContain("Team A 状态：已取消 vs Team B");
+    expect(text).not.toContain("\u202e");
+  });
 });
