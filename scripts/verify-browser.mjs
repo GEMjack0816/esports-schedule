@@ -110,6 +110,7 @@ for (const profile of [
   let clipboardFallbackWorks = false;
   let shareCancelHandled = false;
   let shareErrorFallbackWorks = false;
+  let shareManualFallbackWorks = false;
   if (shareButtonCount > 0) {
     await shareButtons.first().click();
     const feedback = page.locator(".share-feedback");
@@ -182,6 +183,35 @@ for (const profile of [
         && text.includes(`赛程：${siteOrigin}/`)
         && feedback.includes("已复制");
     }, auditUrl.origin);
+
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async () => { throw new Error("Clipboard unavailable"); } },
+      });
+      Object.defineProperty(navigator, "share", { configurable: true, value: undefined });
+    });
+    await shareButtons.first().evaluate((element) => { window.__manualShareTrigger = element; });
+    await shareButtons.first().click();
+    const manualPanel = page.getByRole("region", { name: "手动复制比赛信息" });
+    await manualPanel.waitFor({ state: "visible" });
+    shareManualFallbackWorks = await page.evaluate((siteOrigin) => {
+      const textarea = document.querySelector(".share-manual-panel textarea");
+      const text = textarea?.value ?? "";
+      return !!textarea
+        && document.activeElement === textarea
+        && textarea.selectionStart === 0
+        && textarea.selectionEnd === text.length
+        && (text.match(/https?:\/\//g) || []).length === 1
+        && text.includes(`赛程：${siteOrigin}/`)
+        && !text.includes("stream.example")
+        && document.querySelector(".share-feedback")?.textContent?.includes("手动选择并复制");
+    }, auditUrl.origin);
+    await page.getByRole("button", { name: "关闭手动复制内容" }).click();
+    await manualPanel.waitFor({ state: "hidden" });
+    shareManualFallbackWorks = shareManualFallbackWorks && await page.evaluate(() =>
+      document.activeElement === window.__manualShareTrigger,
+    );
   }
 
   const apiResponsePromise = page.waitForResponse(
@@ -276,6 +306,7 @@ for (const profile of [
     clipboardFallbackWorks,
     shareCancelHandled,
     shareErrorFallbackWorks,
+    shareManualFallbackWorks,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -334,6 +365,7 @@ for (const result of results) {
   if (!result.clipboardFallbackWorks) failures.push(`${prefix}: clipboard share fallback failed or included unexpected data`);
   if (!result.shareCancelHandled) failures.push(`${prefix}: cancelling native share incorrectly triggered clipboard fallback or feedback`);
   if (!result.shareErrorFallbackWorks) failures.push(`${prefix}: failed native share did not safely fall back to clipboard`);
+  if (!result.shareManualFallbackWorks) failures.push(`${prefix}: failed automatic sharing did not expose selectable manual copy text`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);

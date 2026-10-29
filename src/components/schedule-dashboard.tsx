@@ -173,7 +173,10 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [selectedDate, setSelectedDate] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [shareFeedback, setShareFeedback] = useState("");
+  const [manualShareText, setManualShareText] = useState<string | null>(null);
   const shareFeedbackTimer = useRef<number | null>(null);
+  const manualShareTextRef = useRef<HTMLTextAreaElement | null>(null);
+  const manualShareReturnFocusRef = useRef<HTMLElement | null>(null);
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
@@ -184,6 +187,12 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   useEffect(() => () => {
     if (shareFeedbackTimer.current !== null) window.clearTimeout(shareFeedbackTimer.current);
   }, []);
+
+  useEffect(() => {
+    if (!manualShareText) return;
+    manualShareTextRef.current?.focus();
+    manualShareTextRef.current?.select();
+  }, [manualShareText]);
 
   const today = addDaysKey(0, timeZone);
   const tomorrow = addDaysKey(1, timeZone);
@@ -259,6 +268,9 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   }
 
   async function shareMatch(match: EsportsMatch) {
+    manualShareReturnFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
     const text = buildMatchShareText(match, {
       game: games[match.game].label,
       status: statusMeta[match.status].label,
@@ -270,6 +282,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     if (shareFeedbackTimer.current !== null) window.clearTimeout(shareFeedbackTimer.current);
     shareFeedbackTimer.current = null;
     setShareFeedback("");
+    setManualShareText(null);
     const announce = (message: string) => {
       setShareFeedback(message);
       shareFeedbackTimer.current = window.setTimeout(() => {
@@ -293,7 +306,8 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
       await navigator.clipboard.writeText(text);
       announce("比赛信息已复制，可粘贴分享");
     } catch {
-      announce("无法自动分享或复制，请手动复制比赛信息");
+      setManualShareText(text);
+      announce("自动分享和复制不可用，请手动选择并复制下方内容");
     }
   }
 
@@ -330,6 +344,25 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
         </div>
       </header>
       {shareFeedback && <p className="share-feedback" role="status" aria-live="polite">{shareFeedback}</p>}
+      {manualShareText && (
+        <section className="share-manual-panel" aria-label="手动复制比赛信息">
+          <div className="share-manual-heading">
+            <p>请选中并复制以下内容：</p>
+            <button type="button" onClick={() => {
+              manualShareReturnFocusRef.current?.focus();
+              setManualShareText(null);
+            }} aria-label="关闭手动复制内容">关闭</button>
+          </div>
+          <textarea
+            ref={manualShareTextRef}
+            aria-label="可手动复制的比赛信息"
+            readOnly
+            rows={6}
+            value={manualShareText}
+            onClick={(event) => event.currentTarget.select()}
+          />
+        </section>
+      )}
 
       <main id="top">
         <section className="hero-section">
