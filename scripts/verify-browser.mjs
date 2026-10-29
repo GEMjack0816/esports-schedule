@@ -31,6 +31,12 @@ for (const profile of [
     timezoneId: "Asia/Shanghai",
   });
   const page = await context.newPage();
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: async (payload) => { window.__sharePayload = payload; },
+    });
+  });
   const errors = [];
   const criticalRequestFailures = [];
   const optionalResourceFailures = [];
@@ -96,7 +102,117 @@ for (const profile of [
     statusFilterCounts[status] = await page.locator(".match-card").count();
   }
   await statusSelect.selectOption("all");
-  await page.getByRole("tab", { name: /^今日/ }).click();
+  await page.getByRole("tab", { name: /全部收录/ }).click();
+  const shareButtons = page.getByRole("button", { name: /^分享比赛：/ });
+  const shareButtonCount = await shareButtons.count();
+  let sharePayloadSafe = false;
+  let shareFeedbackVisible = false;
+  let clipboardFallbackWorks = false;
+  let shareCancelHandled = false;
+  let shareErrorFallbackWorks = false;
+  let shareManualFallbackWorks = false;
+  if (shareButtonCount > 0) {
+    await shareButtons.first().click();
+    const feedback = page.locator(".share-feedback");
+    await feedback.waitFor({ state: "visible" });
+    shareFeedbackVisible = await feedback.isVisible();
+    const sharePayload = await page.evaluate(() => window.__sharePayload);
+    const shareText = typeof sharePayload?.text === "string" ? sharePayload.text : "";
+    sharePayloadSafe = (shareText.match(/https?:\/\//g) || []).length === 1
+      && shareText.includes(`赛程：${auditUrl.origin}/`)
+      && !shareText.includes("?audit=")
+      && shareText.includes("时间（Asia/Shanghai）：");
+  }
+  if (shareButtonCount > 1) {
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "share", { configurable: true, value: undefined });
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async (text) => { window.__clipboardText = text; } },
+      });
+    });
+    await shareButtons.nth(1).click();
+    await page.waitForFunction(() => document.querySelector(".share-feedback")?.textContent?.includes("已复制"));
+    const fallback = await page.evaluate(() => ({
+      text: window.__clipboardText,
+      message: document.querySelector(".share-feedback")?.textContent ?? "",
+    }));
+    const clipboardText = typeof fallback.text === "string" ? fallback.text : "";
+    clipboardFallbackWorks = (clipboardText.match(/https?:\/\//g) || []).length === 1
+      && clipboardText.includes(`赛程：${auditUrl.origin}/`)
+      && clipboardText.includes("时间（Asia/Shanghai）：")
+      && !clipboardText.includes("?audit=")
+      && fallback.message.includes("已复制");
+  }
+  if (shareButtonCount > 0) {
+    await page.evaluate(() => {
+      window.__clipboardAbortWrites = 0;
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async () => { window.__clipboardAbortWrites += 1; } },
+      });
+      Object.defineProperty(navigator, "share", {
+        configurable: true,
+        value: async () => { throw new DOMException("Share cancelled", "AbortError"); },
+      });
+    });
+    await shareButtons.first().click();
+    await page.locator(".share-feedback").waitFor({ state: "hidden" });
+    shareCancelHandled = await page.evaluate(() =>
+      window.__clipboardAbortWrites === 0 && !document.querySelector(".share-feedback"),
+    );
+
+    await page.evaluate(() => {
+      window.__clipboardErrorFallbackText = "";
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async (text) => { window.__clipboardErrorFallbackText = text; } },
+      });
+      Object.defineProperty(navigator, "share", {
+        configurable: true,
+        value: async () => { throw new TypeError("Share unavailable"); },
+      });
+    });
+    await shareButtons.first().click();
+    await page.waitForFunction(() => document.querySelector(".share-feedback")?.textContent?.includes("已复制"));
+    shareErrorFallbackWorks = await page.evaluate((siteOrigin) => {
+      const text = window.__clipboardErrorFallbackText;
+      const feedback = document.querySelector(".share-feedback")?.textContent ?? "";
+      return typeof text === "string"
+        && (text.match(/https?:\/\//g) || []).length === 1
+        && text.includes(`赛程：${siteOrigin}/`)
+        && feedback.includes("已复制");
+    }, auditUrl.origin);
+
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async () => { throw new Error("Clipboard unavailable"); } },
+      });
+      Object.defineProperty(navigator, "share", { configurable: true, value: undefined });
+    });
+    await shareButtons.first().evaluate((element) => { window.__manualShareTrigger = element; });
+    await shareButtons.first().click();
+    const manualPanel = page.getByRole("region", { name: "手动复制比赛信息" });
+    await manualPanel.waitFor({ state: "visible" });
+    shareManualFallbackWorks = await page.evaluate((siteOrigin) => {
+      const textarea = document.querySelector(".share-manual-panel textarea");
+      const text = textarea?.value ?? "";
+      return !!textarea
+        && document.activeElement === textarea
+        && textarea.selectionStart === 0
+        && textarea.selectionEnd === text.length
+        && (text.match(/https?:\/\//g) || []).length === 1
+        && text.includes(`赛程：${siteOrigin}/`)
+        && !text.includes("stream.example")
+        && document.querySelector(".share-feedback")?.textContent?.includes("手动选择并复制");
+    }, auditUrl.origin);
+    await page.getByRole("button", { name: "关闭手动复制内容" }).click();
+    await manualPanel.waitFor({ state: "hidden" });
+    shareManualFallbackWorks = shareManualFallbackWorks && await page.evaluate(() =>
+      document.activeElement === window.__manualShareTrigger,
+    );
+  }
 
   const apiResponsePromise = page.waitForResponse(
     (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
@@ -184,6 +300,13 @@ for (const profile of [
     gameOptions,
     gameFilterCounts,
     statusFilterCounts,
+    shareButtonCount,
+    sharePayloadSafe,
+    shareFeedbackVisible,
+    clipboardFallbackWorks,
+    shareCancelHandled,
+    shareErrorFallbackWorks,
+    shareManualFallbackWorks,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -236,6 +359,13 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (result.shareButtonCount < 1) failures.push(`${prefix}: no match available to verify share action`);
+  if (!result.sharePayloadSafe) failures.push(`${prefix}: share payload contains unexpected URLs or query state`);
+  if (!result.shareFeedbackVisible) failures.push(`${prefix}: share feedback was not announced visibly`);
+  if (!result.clipboardFallbackWorks) failures.push(`${prefix}: clipboard share fallback failed or included unexpected data`);
+  if (!result.shareCancelHandled) failures.push(`${prefix}: cancelling native share incorrectly triggered clipboard fallback or feedback`);
+  if (!result.shareErrorFallbackWorks) failures.push(`${prefix}: failed native share did not safely fall back to clipboard`);
+  if (!result.shareManualFallbackWorks) failures.push(`${prefix}: failed automatic sharing did not expose selectable manual copy text`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);

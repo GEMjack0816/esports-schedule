@@ -2,8 +2,9 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
+import { buildMatchShareText } from "@/lib/schedule/share";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
@@ -113,7 +114,11 @@ function TeamRow({ team, score, winning }: {
   );
 }
 
-function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string }) {
+function MatchCard({ match, timeZone, onShare }: {
+  match: EsportsMatch;
+  timeZone: string;
+  onShare: (match: EsportsMatch) => void;
+}) {
   const game = games[match.game];
   const scoreA = match.homeScore;
   const scoreB = match.awayScore;
@@ -144,6 +149,15 @@ function MatchCard({ match, timeZone }: { match: EsportsMatch; timeZone: string 
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.25 3.5h7.25v7.25M12.3 3.7l-8.8 8.8" /></svg>
           </a>
         ) : <span className="no-stream">暂无直播</span>}
+        <button
+          className="share-match-button"
+          type="button"
+          aria-label={`分享比赛：${match.homeTeam.name} 对阵 ${match.awayTeam.name}`}
+          onClick={() => onShare(match)}
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="12" cy="3" r="2" /><circle cx="4" cy="8" r="2" /><circle cx="12" cy="13" r="2" /><path d="m5.8 7 4.4-2.8M5.8 9l4.4 2.8" /></svg>
+          <span>分享比赛</span>
+        </button>
       </div>
     </article>
   );
@@ -158,12 +172,27 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
   const [query, setQuery] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [shareFeedback, setShareFeedback] = useState("");
+  const [manualShareText, setManualShareText] = useState<string | null>(null);
+  const shareFeedbackTimer = useRef<number | null>(null);
+  const manualShareTextRef = useRef<HTMLTextAreaElement | null>(null);
+  const manualShareReturnFocusRef = useRef<HTMLElement | null>(null);
   const timeZone = useSyncExternalStore(
     subscribeToTimeZone,
     getBrowserTimeZone,
     getServerTimeZone,
   );
   const theme = useSyncExternalStore(subscribeToTheme, getBrowserTheme, getServerTheme);
+
+  useEffect(() => () => {
+    if (shareFeedbackTimer.current !== null) window.clearTimeout(shareFeedbackTimer.current);
+  }, []);
+
+  useEffect(() => {
+    if (!manualShareText) return;
+    manualShareTextRef.current?.focus();
+    manualShareTextRef.current?.select();
+  }, [manualShareText]);
 
   const today = addDaysKey(0, timeZone);
   const tomorrow = addDaysKey(1, timeZone);
@@ -238,6 +267,50 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
     }
   }
 
+  async function shareMatch(match: EsportsMatch) {
+    manualShareReturnFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const text = buildMatchShareText(match, {
+      game: games[match.game].label,
+      status: statusMeta[match.status].label,
+      localStartTime: formatDateTime(match.startTimeUtc, timeZone),
+      localTimeZone: timeZone,
+      siteUrl: `${window.location.origin}/`,
+    });
+
+    if (shareFeedbackTimer.current !== null) window.clearTimeout(shareFeedbackTimer.current);
+    shareFeedbackTimer.current = null;
+    setShareFeedback("");
+    setManualShareText(null);
+    const announce = (message: string) => {
+      setShareFeedback(message);
+      shareFeedbackTimer.current = window.setTimeout(() => {
+        setShareFeedback("");
+        shareFeedbackTimer.current = null;
+      }, 4000);
+    };
+
+    if (typeof navigator.share === "function") {
+      try {
+        await navigator.share({ title: "分享电竞比赛", text });
+        announce("比赛信息已分享");
+        return;
+      } catch (error) {
+        if (typeof error === "object" && error !== null && "name" in error && error.name === "AbortError") return;
+      }
+    }
+
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(text);
+      announce("比赛信息已复制，可粘贴分享");
+    } catch {
+      setManualShareText(text);
+      announce("自动分享和复制不可用，请手动选择并复制下方内容");
+    }
+  }
+
   function resetFilters() {
     setGame("all"); setLeague("all"); setStatus("all"); setQuery(""); setSelectedDate("");
   }
@@ -270,6 +343,26 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
           </button>
         </div>
       </header>
+      {shareFeedback && <p className="share-feedback" role="status" aria-live="polite">{shareFeedback}</p>}
+      {manualShareText && (
+        <section className="share-manual-panel" aria-label="手动复制比赛信息">
+          <div className="share-manual-heading">
+            <p>请选中并复制以下内容：</p>
+            <button type="button" onClick={() => {
+              manualShareReturnFocusRef.current?.focus();
+              setManualShareText(null);
+            }} aria-label="关闭手动复制内容">关闭</button>
+          </div>
+          <textarea
+            ref={manualShareTextRef}
+            aria-label="可手动复制的比赛信息"
+            readOnly
+            rows={6}
+            value={manualShareText}
+            onClick={(event) => event.currentTarget.select()}
+          />
+        </section>
+      )}
 
       <main id="top">
         <section className="hero-section">
@@ -303,7 +396,6 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             <span>当前收录范围 <strong>{formatDateTime(payload.coverage.range.earliestMatchAt, timeZone)} — {formatDateTime(payload.coverage.range.latestMatchAt, timeZone)}</strong></span>
             <Link href="/submit-match" prefetch={false}>提交遗漏比赛</Link>
           </div>
-
           <div className="sync-status-grid" aria-label="各游戏数据同步状态">
             {Object.entries(games).map(([key, value]) => {
               const coverage = payload.coverage.games[key as GameKey];
@@ -338,7 +430,7 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
             {grouped.length > 0 ? grouped.map(([key, matches]) => (
               <section className="date-group" key={key}>
                 <div className="date-divider"><span>{formatDate(matches[0].startTimeUtc, timeZone)}</span><i /><em>{matches.length} 场</em></div>
-                {matches.map((match) => <MatchCard match={match} timeZone={timeZone} key={match.id} />)}
+                {matches.map((match) => <MatchCard match={match} timeZone={timeZone} onShare={shareMatch} key={match.id} />)}
               </section>
             )) : (
               <div className="empty-state"><span className="empty-glyph">⌁</span><h3>没有找到符合条件的比赛</h3><p>试试切换时间范围，或清除部分筛选条件。</p><button type="button" onClick={resetFilters}>清除筛选</button></div>
