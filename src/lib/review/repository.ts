@@ -69,6 +69,7 @@ const noCacheFence: ManualMatchCacheFence = async () => {};
 export const MANUAL_MATCH_MUTATION_LOCK = 7_214_603_119;
 const MANUAL_MATCH_LOCK_TIMEOUT_MS = 2_500;
 const MANUAL_MATCH_STATUS_STATEMENT_TIMEOUT_MS = 2_000;
+const MANUAL_MATCH_SNAPSHOT_STATEMENT_TIMEOUT_MS = 2_000;
 let manualMatchCacheStatusRead: Promise<ManualMatchCacheStatus> | null = null;
 const DELIVERED_OUTBOX_CLEANUP_BATCH = 100;
 
@@ -691,6 +692,15 @@ export class DrizzleReviewRepository {
   }> {
     try {
       return await getDatabase().transaction(async (tx) => {
+        // The caller may stop waiting before postgres-js cancels its query.
+        // Bound every statement in this snapshot transaction on the server so
+        // a slow row scan cannot keep a pool connection or shared mutation lock
+        // after the HTTP request has already fallen back.
+        await tx.execute(sql`select set_config(
+          'statement_timeout',
+          ${`${MANUAL_MATCH_SNAPSHOT_STATEMENT_TIMEOUT_MS}ms`},
+          true
+        )`);
         await lockManualMatchMutations(tx);
         const rows = await tx.select().from(publishedManualMatches)
           .where(eq(publishedManualMatches.hidden, false))

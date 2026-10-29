@@ -975,4 +975,34 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
       await cleanup`select pg_advisory_unlock(${MANUAL_MATCH_MUTATION_LOCK})`;
     }
   });
+
+  it("cancels a blocked manual cache snapshot query at the PostgreSQL statement timeout", async () => {
+    const blocker = postgres(testUrl!, { max: 1, prepare: false });
+    let signalLocked!: () => void;
+    let releaseLock!: () => void;
+    const lockAcquired = new Promise<void>((resolve) => { signalLocked = resolve; });
+    const keepLock = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const blockerTransaction = blocker.begin(async (tx) => {
+      await tx`lock table published_manual_matches in access exclusive mode`;
+      signalLocked();
+      await keepLock;
+    });
+
+    try {
+      await lockAcquired;
+      const startedAt = Date.now();
+      await expect(repository.readManualMatchCacheSnapshot())
+        .rejects.toMatchObject({ code: "DATABASE_UNAVAILABLE" });
+      const elapsedMs = Date.now() - startedAt;
+      expect(elapsedMs).toBeGreaterThanOrEqual(1_500);
+      expect(elapsedMs).toBeLessThan(4_500);
+      const [lockProbe] = await cleanup`select pg_try_advisory_lock(${MANUAL_MATCH_MUTATION_LOCK}) as acquired`;
+      expect(lockProbe.acquired).toBe(true);
+      await cleanup`select pg_advisory_unlock(${MANUAL_MATCH_MUTATION_LOCK})`;
+    } finally {
+      releaseLock();
+      await blockerTransaction;
+      await blocker.end();
+    }
+  }, 10_000);
 });
