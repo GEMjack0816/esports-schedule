@@ -12,6 +12,7 @@ function healthResponse({ lastSuccessfulSyncAt, sourceFetchedAt, stale, ageSecon
     syncStatus: stale ? "delayed" : "normal",
     sourceFetchedAt,
     lastSuccessfulSyncAt,
+    snapshotAgeSeconds: ageSeconds,
   }]));
   return Response.json({
     mode: "live",
@@ -44,6 +45,16 @@ function freshHealth() {
   });
 }
 
+function freshHealthAtAge(ageSeconds) {
+  const timestamp = new Date(now - ageSeconds * 1_000).toISOString();
+  return healthResponse({
+    lastSuccessfulSyncAt: timestamp,
+    sourceFetchedAt: timestamp,
+    stale: false,
+    ageSeconds,
+  });
+}
+
 function syncSuccess() {
   return Response.json({
     ok: true,
@@ -58,6 +69,28 @@ function syncSuccess() {
   });
 }
 
+function syncPartial() {
+  return Response.json({
+    ok: true,
+    status: "partial",
+    lockAcquired: true,
+    generation: 43,
+    gamesAttempted: 5,
+    gamesSucceeded: 4,
+    gamesFailed: 1,
+    snapshotsPersisted: 4,
+    lastSuccessfulSyncAt: "2026-10-18T09:59:40.000Z",
+  });
+}
+
+function successfulSyncFetch({ before = staleHealth(), after = freshHealthAtAge(20), sync = syncSuccess() } = {}) {
+  let healthCalls = 0;
+  return async (url) => {
+    if (url === healthUrl) return healthCalls++ === 0 ? before : after;
+    return sync;
+  };
+}
+
 function makeOptions(fetchImpl) {
   return {
     secret,
@@ -70,16 +103,45 @@ function makeOptions(fetchImpl) {
 describe("runScheduleSync", () => {
   it("performs one authenticated sync and validates its structured result", async () => {
     const calls = [];
+    const sequence = successfulSyncFetch();
     const result = await runScheduleSync(makeOptions(async (url, options) => {
       calls.push({ url, options });
-      return url === healthUrl ? staleHealth() : syncSuccess();
+      return sequence(url, options);
     }));
 
     expect(result).toMatchObject({ ok: true, payload: { generation: 42 } });
-    expect(calls.map(({ url }) => url)).toEqual([healthUrl, syncUrl]);
+    expect(calls.map(({ url }) => url)).toEqual([healthUrl, syncUrl, healthUrl]);
     expect(calls[1].options.headers.authorization).toBe(`Bearer ${secret}`);
     expect(calls[1].url).toBe(syncUrl);
     expect(calls[1].options.signal).toBeDefined();
+  });
+
+  it("fails a partial sync unless the post-sync health snapshot is fresh for all five games", async () => {
+    const calls = [];
+    const fetchImpl = successfulSyncFetch({ after: staleHealth(), sync: syncPartial() });
+    await expect(runScheduleSync(makeOptions(async (url, options) => {
+      calls.push(url);
+      return fetchImpl(url, options);
+    }))).rejects.toMatchObject({ code: "sync_completed_without_verified_fresh_snapshot" });
+
+    expect(calls).toEqual([healthUrl, syncUrl, healthUrl]);
+  });
+
+  it("accepts a partial sync only when health confirms all five games remain fresh", async () => {
+    const fetchImpl = successfulSyncFetch({ sync: syncPartial() });
+    const result = await runScheduleSync(makeOptions(fetchImpl));
+
+    expect(result).toMatchObject({
+      ok: true,
+      outcome: "partial: 4 games updated, 1 failed",
+      payload: { generation: 43, status: "partial" },
+    });
+  });
+
+  it("fails a nominal full success when the resulting health snapshot is stale", async () => {
+    const fetchImpl = successfulSyncFetch({ after: staleHealth() });
+    await expect(runScheduleSync(makeOptions(fetchImpl)))
+      .rejects.toMatchObject({ code: "sync_completed_without_verified_fresh_snapshot" });
   });
 
   it("accepts an ambiguous lost response only after freshness and successful time advance", async () => {
@@ -267,25 +329,97 @@ describe("runScheduleSync", () => {
     expect(calls).toEqual([healthUrl]);
   });
 
+  it("skips at the 10-minute guard-band boundary", async () => {
+    const calls = [];
+    const result = await runScheduleSync(makeOptions(async (url) => {
+      calls.push(url);
+      return freshHealthAtAge(10 * 60);
+    }));
+
+    expect(result).toMatchObject({ ok: true, outcome: "already_fresh" });
+    expect(calls).toEqual([healthUrl]);
+  });
+
+  it.each([
+    ["+14:01", "2026-10-19T00:00:30+14:01"],
+    ["+15:00", "2026-10-19T00:59:30+15:00"],
+    ["-14:01", "2026-10-18T19:58:30-14:01"],
+    ["+23:59", "2026-10-19T09:58:30+23:59"],
+    ["-00:00", "2026-10-18T09:59:30-00:00"],
+  ])("does not treat an out-of-range ISO offset (%s) as a fresh snapshot", async (_offset, timestamp) => {
+    const calls = [];
+    const sequence = successfulSyncFetch({ before: healthResponse({
+      lastSuccessfulSyncAt: timestamp,
+      sourceFetchedAt: timestamp,
+      stale: false,
+      ageSeconds: 30,
+    }) });
+    const result = await runScheduleSync(makeOptions(async (url) => {
+      calls.push(url);
+      return sequence(url);
+    }));
+
+    expect(result).toMatchObject({ ok: true, payload: { generation: 42 } });
+    expect(calls).toEqual([healthUrl, syncUrl, healthUrl]);
+  });
+
+  it.each([
+    ["+14:00", "2026-10-18T23:59:30+14:00"],
+    ["-14:00", "2026-10-17T19:59:30-14:00"],
+  ])("accepts the ISO offset boundary (%s) when the instant is fresh", async (_offset, timestamp) => {
+    const calls = [];
+    const result = await runScheduleSync(makeOptions(async (url) => {
+      calls.push(url);
+      return healthResponse({
+        lastSuccessfulSyncAt: timestamp,
+        sourceFetchedAt: timestamp,
+        stale: false,
+        ageSeconds: 30,
+      });
+    }));
+
+    expect(result).toMatchObject({ ok: true, outcome: "already_fresh" });
+    expect(calls).toEqual([healthUrl]);
+  });
+
+  it("refreshes once the snapshot enters the five-minute pre-expiry guard band", async () => {
+    const calls = [];
+    const sequence = successfulSyncFetch({ before: freshHealthAtAge(10 * 60 + 1) });
+    const result = await runScheduleSync(makeOptions(async (url) => {
+      calls.push(url);
+      return sequence(url);
+    }));
+
+    expect(result).toMatchObject({ ok: true, payload: { generation: 42 } });
+    expect(calls).toEqual([healthUrl, syncUrl, healthUrl]);
+  });
+
   it("forces synchronization for an explicit manual dispatch despite a fresh preflight", async () => {
     const calls = [];
     const result = await runScheduleSync({
       ...makeOptions(async (url) => {
         calls.push(url);
-        return url === healthUrl ? freshHealth() : syncSuccess();
+        return url === healthUrl
+          ? calls.filter((candidate) => candidate === healthUrl).length === 1
+            ? freshHealth()
+            : freshHealthAtAge(20)
+          : syncSuccess();
       }),
       force: true,
     });
 
     expect(result).toMatchObject({ ok: true, payload: { generation: 42 } });
-    expect(calls).toEqual([healthUrl, syncUrl]);
+    expect(calls).toEqual([healthUrl, syncUrl, healthUrl]);
   });
 
   it("does not skip when one game's timestamp is stale despite fresh aggregate health", async () => {
     const calls = [];
+    let healthCalls = 0;
     const result = await runScheduleSync(makeOptions(async (url) => {
       calls.push(url);
       if (url === healthUrl) {
+        healthCalls += 1;
+        if (healthCalls > 1) return freshHealthAtAge(20);
         const payload = await freshHealth().json();
         const staleAt = "2026-10-18T09:30:00.000Z";
         payload.games.cs2.sourceFetchedAt = staleAt;
@@ -298,7 +432,30 @@ describe("runScheduleSync", () => {
     }));
 
     expect(result).toMatchObject({ ok: true, payload: { generation: 42 } });
-    expect(calls).toEqual([healthUrl, syncUrl]);
+    expect(calls).toEqual([healthUrl, syncUrl, healthUrl]);
+  });
+
+  it("does not skip when a game's snapshot age is stale or inconsistent despite fresh timestamps", async () => {
+    for (const snapshotAgeSeconds of [10 * 60 + 1, 420]) {
+      const calls = [];
+      let healthCalls = 0;
+      const result = await runScheduleSync(makeOptions(async (url) => {
+        calls.push(url);
+        if (url === healthUrl) {
+          healthCalls += 1;
+          if (healthCalls > 1) return freshHealthAtAge(20);
+          const payload = await freshHealth().json();
+          payload.games.cs2.snapshotAgeSeconds = snapshotAgeSeconds;
+          return Response.json(payload, {
+            headers: { "cache-control": "no-store, no-cache, must-revalidate" },
+          });
+        }
+        return syncSuccess();
+      }));
+
+      expect(result).toMatchObject({ ok: true, payload: { generation: 42 } });
+      expect(calls).toEqual([healthUrl, syncUrl, healthUrl]);
+    }
   });
 
   it("keeps concurrent stale preflights behind the sync lock without treating busy as a refresh", async () => {
@@ -331,7 +488,7 @@ describe("runScheduleSync", () => {
       "verified_fresh_after_concurrent_sync",
     ]);
     expect(calls.filter((url) => url === syncUrl)).toHaveLength(2);
-    expect(healthCalls).toBe(3);
+    expect(healthCalls).toBe(4);
   });
 
   it("fails closed when the baseline health probe is unavailable and the sync response is ambiguous", async () => {
