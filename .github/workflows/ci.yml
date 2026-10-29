@@ -23,6 +23,7 @@ jobs:
       DATABASE_URL: postgresql://ci_user:ci_password@127.0.0.1:5432/esports_schedule_ci
       REVIEW_TEST_DATABASE_URL: postgresql://ci_user:ci_password@127.0.0.1:5432/esports_schedule_ci
       ALLOW_REVIEW_DATABASE_TESTS: "1"
+      VERCEL_GIT_COMMIT_SHA: ${{ github.sha }}
     services:
       postgres:
         image: postgres:16-alpine
@@ -67,6 +68,49 @@ jobs:
 
       - name: Build the production bundle
         run: npm run build
+
+      - name: Locate system Chrome
+        run: |
+          chrome_path="$(command -v google-chrome || command -v google-chrome-stable || true)"
+          if [ -z "$chrome_path" ]; then
+            echo "Google Chrome is not available on this runner" >&2
+            exit 1
+          fi
+          echo "CHROME_PATH=$chrome_path" >> "$GITHUB_ENV"
+
+      - name: Start production server for browser verification
+        run: |
+          server_log="$RUNNER_TEMP/esports-next-server.log"
+          server_pid_file="$RUNNER_TEMP/esports-next-server.pid"
+          npm start -- --hostname 127.0.0.1 --port 3000 > "$server_log" 2>&1 &
+          server_pid=$!
+          echo "$server_pid" > "$server_pid_file"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3000/api/version > /dev/null; then
+              echo "Local production server is ready."
+              exit 0
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              echo "Local production server exited before readiness." >&2
+              cat "$server_log"
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "Local production server did not become ready." >&2
+          cat "$server_log"
+          exit 1
+
+      - name: Verify desktop, mobile, and logo source-change retry
+        run: npm run verify:browser -- http://127.0.0.1:3000 --simulate-logo-source-update-retry
+
+      - name: Stop local production server
+        if: always()
+        run: |
+          server_pid_file="$RUNNER_TEMP/esports-next-server.pid"
+          if [ -f "$server_pid_file" ]; then
+            kill "$(cat "$server_pid_file")" 2>/dev/null || true
+          fi
 
       - name: Scan client assets for server credentials
         run: npm run test:client-bundle

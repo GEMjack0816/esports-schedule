@@ -9,9 +9,13 @@ const simulateLogoSuccess = process.argv.includes("--simulate-logo-success");
 const simulateLogoSourceUpdate = process.argv.includes("--simulate-logo-source-update");
 const simulateLogoSourceUpdateRetry = process.argv.includes("--simulate-logo-source-update-retry");
 const executableCandidates = [
+  process.env.CHROME_PATH,
+  process.env.CHROMIUM_PATH,
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-];
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+].filter((candidate) => typeof candidate === "string" && candidate.length > 0);
 
 let browser;
 let launchError;
