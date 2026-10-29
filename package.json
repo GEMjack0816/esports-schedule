@@ -19,11 +19,11 @@
     "check": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:client-bundle"
   },
   "dependencies": {
-    "@vercel/functions": "^3.7.5",
+    "@vercel/functions": "^3.10.4",
     "drizzle-orm": "^0.45.2",
     "geist": "^1.7.2",
     "jose": "^6.2.4",
-    "next": "16.3.3",
+    "next": "16.4.3",
     "postgres": "^3.4.9",
     "react": "19.2.4",
     "react-dom": "19.2.4",
@@ -36,10 +36,18 @@
     "@types/react-dom": "^19",
     "drizzle-kit": "^0.31.10",
     "eslint": "^9",
-    "eslint-config-next": "16.3.3",
+    "eslint-config-next": "16.4.3",
     "playwright-core": "^1.61.1",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.12"
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "^0.25.12"
+    },
+    "@vercel/cli-config": {
+      "zod": "^4.6.6"
+    }
   }
 }

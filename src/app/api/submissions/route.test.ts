@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { NextRequest } from "next/server";
 import { describe, expect, it, vi } from "vitest";
 import { handleSubmissionPost } from "./route";
 
@@ -22,6 +24,34 @@ function request(body: unknown) {
 }
 
 describe("POST /api/submissions", () => {
+  it("extracts the source IP from a NextRequest in the App Router", async () => {
+    const clientIp = "203.0.113.10";
+    const nextRequest = new NextRequest("https://example.com/api/submissions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-real-ip": clientIp },
+      body: JSON.stringify(valid),
+    });
+    let sourceHash = "";
+    const response = await handleSubmissionPost(nextRequest, async (_input, hash) => {
+      sourceHash = hash;
+      return {
+        kind: "created",
+        submission: {
+          id: "11111111-1111-4111-8111-111111111111",
+          status: "pending",
+          submittedAt: new Date("2026-07-26T00:00:00.000Z"),
+        },
+      };
+    });
+
+    expect(response.status).toBe(201);
+    expect(sourceHash).toBe(
+      createHash("sha256")
+        .update(`esports-schedule-public-submission\0${clientIp}`)
+        .digest("hex"),
+    );
+  });
+
   it("returns only the public receipt fields and no-store headers", async () => {
     const createSubmission = vi.fn(async (...args: unknown[]) => {
       expect(args).toHaveLength(2);
