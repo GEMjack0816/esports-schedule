@@ -80,6 +80,53 @@ for (const profile of [
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+  const statusTextContrast = await page.evaluate(() => {
+    const root = document.documentElement;
+    const originalTheme = root.dataset.theme;
+    const probe = document.createElement("span");
+    probe.className = "source-state source-stale";
+    probe.textContent = "过期状态对比度检查";
+    document.body.append(probe);
+    const luminance = (color) => {
+      const hex = color.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)?.[1];
+      const channels = hex
+        ? hex.length === 3
+          ? [...hex].map((channel) => parseInt(channel + channel, 16) / 255)
+          : hex.match(/../g).map((channel) => parseInt(channel, 16) / 255)
+        : color.match(/[\d.]+/g).slice(0, 3).map((channel) => Number(channel) / 255);
+      const [r, g, b] = channels.map((channel) => (
+        channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+      ));
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const contrast = (foreground, background) => {
+      const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+      return Number(((values[0] + 0.05) / (values[1] + 0.05)).toFixed(2));
+    };
+    const measurements = {};
+    try {
+      for (const theme of ["dark", "light"]) {
+        root.dataset.theme = theme;
+        probe.className = "source-state source-stale";
+        const staleColor = getComputedStyle(probe).color;
+        probe.className = "source-state source-critical";
+        const criticalColor = getComputedStyle(probe).color;
+        probe.className = "source-state";
+        const mutedColor = getComputedStyle(probe).color;
+        const background = getComputedStyle(root).getPropertyValue("--background").trim();
+        measurements[theme] = {
+          stale: contrast(staleColor, background),
+          critical: contrast(criticalColor, background),
+          staleDiffersFromMuted: staleColor !== mutedColor,
+        };
+      }
+    } finally {
+      probe.remove();
+      if (originalTheme) root.dataset.theme = originalTheme;
+      else delete root.dataset.theme;
+    }
+    return measurements;
+  });
 
   const gameFilterCounts = {};
   const statusFilterCounts = {};
@@ -185,6 +232,7 @@ for (const profile of [
     gameFilterCounts,
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
+    statusTextContrast,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
     refreshedApiDemoMode: apiBody.demoMode,
@@ -236,6 +284,15 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  for (const [theme, contrast] of Object.entries(result.statusTextContrast || {})) {
+    if (contrast.stale < 4.5) {
+      failures.push(`${prefix}: ${theme} stale status contrast ${contrast.stale}:1 is below 4.5:1`);
+    }
+    if (contrast.critical < 4.5) {
+      failures.push(`${prefix}: ${theme} critical status contrast ${contrast.critical}:1 is below 4.5:1`);
+    }
+    if (!contrast.staleDiffersFromMuted) failures.push(`${prefix}: ${theme} stale status is indistinguishable from muted text`);
+  }
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);

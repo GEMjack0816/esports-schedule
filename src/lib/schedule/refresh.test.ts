@@ -98,6 +98,38 @@ describe("refresh coordination and health metadata", () => {
     });
   });
 
+  it("marks an old snapshot stale without claiming that a sync failed", () => {
+    const oldSnapshot = snapshot("lol");
+    const game = deriveGameCoverage(
+      { lol: oldSnapshot },
+      { lol: stateAfterSuccess("lol", oldSnapshot, new Date("2026-07-18T00:00:05.000Z")) },
+      new Date("2026-07-18T01:00:01.000Z"),
+      false,
+    ).lol;
+
+    expect(game).toMatchObject({ syncStatus: "stale", lastError: null, dataSource: "cache" });
+  });
+
+  it("marks a missing first snapshot unavailable unless there is evidence of a failed attempt", () => {
+    const noAttempt = deriveGameCoverage({}, {}, new Date("2026-07-18T01:00:00.000Z"), false).lol;
+    const failedAttempt = stateAfterFailure(
+      "lol",
+      undefined,
+      undefined,
+      { code: "TIMEOUT", status: null },
+      new Date("2026-07-18T01:00:00.000Z"),
+    );
+    const failedWithoutSnapshot = deriveGameCoverage(
+      {},
+      { lol: failedAttempt },
+      new Date("2026-07-18T01:00:01.000Z"),
+      false,
+    ).lol;
+
+    expect(noAttempt.syncStatus).toBe("unavailable");
+    expect(failedWithoutSnapshot).toMatchObject({ syncStatus: "failed", lastError: { code: "TIMEOUT" } });
+  });
+
   it("does not advance lastSuccessfulSyncAt after a failed attempt and keeps the snapshot usable", () => {
     const oldSnapshot = snapshot("lol");
     const previous: PandaScoreGameSyncState = {
