@@ -23,7 +23,7 @@ describe("sync workflow response validation", () => {
   it("uses the bounded sync runner without automatic request retries", () => {
     const workflow = readFileSync(new URL("../.github/workflows/sync-schedule.yml", import.meta.url), "utf8");
     const runner = readFileSync(new URL("./run-schedule-sync.mjs", import.meta.url), "utf8");
-    const runBlock = workflow.slice(workflow.indexOf("        run: |");
+    const runBlock = workflow.slice(workflow.indexOf("        run: |"));
 
     expect(workflow).not.toMatch(/--retry(?:\s|=)|--retry-all-errors/);
     expect(workflow).toContain("CRON_SECRET: ${{ secrets.CRON_SECRET }}");
