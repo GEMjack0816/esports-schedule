@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getGameSyncPresentation, getScheduleSourceLabel } from "./presentation";
+import { getGameSyncPresentation, getScheduleSourceLabel, getScheduleSourceVisualStatus } from "./presentation";
 
 const fiveDelayed = ["delayed", "delayed", "delayed", "delayed", "delayed"] as const;
 const noErrorStates = fiveDelayed.map((syncStatus) => ({ syncStatus, lastError: null }));
@@ -139,5 +139,41 @@ describe("getScheduleSourceLabel", () => {
       refreshInProgress: false,
       gameStates: noErrorStates,
     })).toBe("PandaScore 聚合数据（服务暂不可用）");
+  });
+
+  it("adds explicit critical-age context when the snapshot is over one hour old", () => {
+    expect(getScheduleSourceLabel({
+      mode: "live",
+      stale: true,
+      refreshInProgress: false,
+      snapshotAgeSeconds: 3601,
+      gameStates: staleWithoutErrors,
+    })).toBe("PandaScore 聚合数据（赛程快照已过期，当前显示已缓存数据；数据已超过 1 小时未更新）");
+  });
+});
+
+describe("getScheduleSourceVisualStatus", () => {
+  const input = { mode: "live" as const, stale: false };
+
+  it("keeps a snapshot live through the 15-minute boundary", () => {
+    expect(getScheduleSourceVisualStatus({ ...input, snapshotAgeSeconds: 900 })).toBe("live");
+  });
+
+  it("marks data older than 15 minutes as delayed even if the stale flag disagrees", () => {
+    expect(getScheduleSourceVisualStatus({ ...input, snapshotAgeSeconds: 901 })).toBe("stale");
+  });
+
+  it("uses the critical state only when age exceeds one hour", () => {
+    expect(getScheduleSourceVisualStatus({ ...input, stale: true, snapshotAgeSeconds: 3600 })).toBe("stale");
+    expect(getScheduleSourceVisualStatus({ ...input, stale: false, snapshotAgeSeconds: 3601 })).toBe("critical");
+  });
+
+  it("does not label stale snapshots as fresh when age metadata is missing", () => {
+    expect(getScheduleSourceVisualStatus({ ...input, stale: true, snapshotAgeSeconds: null })).toBe("stale");
+  });
+
+  it("marks unavailable data as critical regardless of snapshot age", () => {
+    expect(getScheduleSourceVisualStatus({ mode: "unavailable", stale: true, snapshotAgeSeconds: null }))
+      .toBe("unavailable");
   });
 });

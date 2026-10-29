@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { EsportsMatch, GameKey, MatchStatus, SchedulePayload } from "@/lib/schedule";
 import { addDaysKey, dateKeyInTimeZone } from "@/lib/schedule/time";
-import { getGameSyncPresentation, getScheduleSourceLabel } from "@/lib/schedule/presentation";
+import { getGameSyncPresentation, getScheduleSourceLabel, getScheduleSourceVisualStatus } from "@/lib/schedule/presentation";
 
 type RangeKey = "today" | "tomorrow" | "seven" | "history" | "all";
 type Theme = "dark" | "light";
@@ -288,12 +288,17 @@ export function ScheduleDashboard({ initialData }: { initialData: SchedulePayloa
         <section className="schedule-section" aria-labelledby="schedule-title">
           <div className="section-heading">
             <div><span className="section-index">01 / 赛程中心</span><h2 id="schedule-title">比赛日历</h2></div>
-            <div className={`source-state ${payload.mode === "live" && !payload.stale ? "source-live" : "source-stale"}`}>
+            <div className={`source-state source-${getScheduleSourceVisualStatus({
+              mode: payload.mode,
+              stale: payload.stale,
+              snapshotAgeSeconds: payload.coverage.snapshotAgeSeconds,
+            })}`}>
               <i />
               <span>{getScheduleSourceLabel({
                 mode: payload.mode,
                 stale: payload.stale,
                 refreshInProgress: payload.coverage.refreshInProgress,
+                snapshotAgeSeconds: payload.coverage.snapshotAgeSeconds,
                 gameStates: Object.values(payload.coverage.games).map(({ syncStatus, lastError }) => ({ syncStatus, lastError })),
               })}</span>
             </div>
