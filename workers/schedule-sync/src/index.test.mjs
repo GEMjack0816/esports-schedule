@@ -1040,6 +1040,37 @@ describe("schedule sync Worker client", () => {
     expect(requests[1].options.headers.authorization).toBe(`Bearer ${syncSecret}`);
   });
 
+  it("does not skip a fresh aggregate snapshot when an individual game reports a sync failure", async () => {
+    const now = Date.parse("2026-10-18T10:00:00.000Z");
+    const sourceFetchedAt = new Date(now - 5 * 60_000).toISOString();
+    const requests = [];
+    const games = Object.fromEntries(pandaGames.map((game) => [game, {
+      syncStatus: game === "cs2" ? "failed" : "normal",
+      sourceFetchedAt,
+      lastSuccessfulSyncAt: sourceFetchedAt,
+      snapshotAgeSeconds: 300,
+    }]));
+    const worker = createScheduleSyncWorker({
+      nowImpl: () => now,
+      fetchImpl: async (url, options) => {
+        requests.push({ url, options });
+        return url === healthUrl
+          ? healthResponse({ sourceFetchedAt, lastSuccessfulSyncAt: sourceFetchedAt, snapshotAgeSeconds: 300, games })
+          : response();
+      },
+      log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+    const result = await worker.scheduled(
+      { scheduledTime: now, noRetry: vi.fn() },
+      { CRON_SECRET: syncSecret },
+    );
+
+    expect(result).toMatchObject({ outcome: "success", gamesSucceeded: 5 });
+    expect(requests.map(({ url }) => url)).toEqual([healthUrl, syncUrl]);
+    expect(requests[1].options.headers.authorization).toBe(`Bearer ${syncSecret}`);
+  });
+
   it("fails a stale schedule invocation when the contending refresh has not made the snapshot fresh", async () => {
     const now = Date.parse("2026-10-18T10:00:00.000Z");
     const staleAt = new Date(now - 20 * 60_000).toISOString();
