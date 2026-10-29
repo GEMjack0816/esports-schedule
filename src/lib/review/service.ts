@@ -14,7 +14,10 @@ import {
 import type { MatchSubmissionInput } from "@/lib/submissions";
 import { getReviewRepository } from "./repository";
 import type { DrizzleReviewRepository } from "./repository";
-import { synchronizePublishedManualMatchesSnapshot } from "./public-matches";
+import {
+  synchronizePublishedManualMatchesSnapshot,
+  writeManualMatchCacheFence,
+} from "./public-matches";
 import { ReviewConflictError } from "./types";
 import type {
   ApprovalInput,
@@ -30,11 +33,13 @@ export function invalidatePublishedManualMatches(): void {
 }
 
 export type PublishedManualCacheEffects = {
+  fence?: (revision: number) => Promise<void>;
   synchronize: (repository: DrizzleReviewRepository) => Promise<unknown>;
   invalidate: () => void;
 };
 
 const defaultCacheEffects: PublishedManualCacheEffects = {
+  fence: writeManualMatchCacheFence,
   synchronize: synchronizePublishedManualMatchesSnapshot,
   invalidate: invalidatePublishedManualMatches,
 };
@@ -44,14 +49,24 @@ async function synchronizeMutationCaches(
   effects: PublishedManualCacheEffects,
 ): Promise<void> {
   let synchronizationError: unknown;
+  let invalidationError: unknown;
   try {
     await effects.synchronize(repository);
   } catch (error) {
     synchronizationError = error;
   } finally {
-    effects.invalidate();
+    try {
+      effects.invalidate();
+    } catch (error) {
+      invalidationError = error;
+    }
   }
-  if (synchronizationError) throw synchronizationError;
+  if (synchronizationError) {
+    console.warn("[review-db] committed manual match mutation is pending cache synchronization");
+  }
+  if (invalidationError) {
+    console.warn("[review-db] committed manual match mutation Next Data Cache invalidation failed");
+  }
 }
 
 function integerOrNull(value: unknown, min: number, max: number, label: string): number | null {
@@ -187,6 +202,7 @@ export async function approveAndPublish(
     approvalFromRequest(value),
     actorId,
     validateExpectedUpdatedAt(expectedUpdatedAt),
+    effects.fence,
   );
   await synchronizeMutationCaches(repository, effects);
   return result;
@@ -195,10 +211,20 @@ export async function approveAndPublish(
 export async function createManualMatch(
   value: unknown,
   actorId: string,
+  operationKey: unknown,
   repository: DrizzleReviewRepository = getReviewRepository(),
   effects: PublishedManualCacheEffects = defaultCacheEffects,
 ) {
-  const result = await repository.createManualMatch(validatePublishedMatch(value), actorId);
+  if (typeof operationKey !== "string"
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(operationKey)) {
+    throw new SubmissionValidationError("操作标识无效，请重新加载后再试。");
+  }
+  const result = await repository.createManualMatch(
+    validatePublishedMatch(value),
+    actorId,
+    effects.fence,
+    operationKey,
+  );
   await synchronizeMutationCaches(repository, effects);
   return result;
 }
@@ -216,6 +242,7 @@ export async function updateManualMatch(
     validatePublishedMatch(value),
     actorId,
     validateExpectedUpdatedAt(expectedUpdatedAt),
+    effects.fence,
   );
   await synchronizeMutationCaches(repository, effects);
   return result;
@@ -234,6 +261,7 @@ export async function setManualMatchHidden(
     hidden,
     actorId,
     validateExpectedUpdatedAt(expectedUpdatedAt),
+    effects.fence,
   );
   await synchronizeMutationCaches(repository, effects);
   return result;
@@ -250,6 +278,7 @@ export async function toggleManualMatchHidden(
     id,
     actorId,
     validateExpectedUpdatedAt(expectedUpdatedAt),
+    effects.fence,
   );
   await synchronizeMutationCaches(repository, effects);
   return result;

@@ -36,6 +36,27 @@
       "when": 1788233322600,
       "tag": "0004_fluffy_avengers",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788579835721,
+      "tag": "0005_confused_sebastian_shaw",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788580333987,
+      "tag": "0006_shiny_lionheart",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793310901056,
+      "tag": "0007_clumsy_screwball",
+      "breakpoints": true
     }
   ]
 }

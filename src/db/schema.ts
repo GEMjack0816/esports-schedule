@@ -21,6 +21,10 @@ export const pandaScoreSyncGeneration = pgSequence("pandascore_sync_generation_s
   startWith: 1,
 });
 
+export const manualMatchCacheRevision = pgSequence("manual_match_cache_revision_seq", {
+  startWith: 1,
+});
+
 export const matchSubmissions = pgTable("match_submissions", {
   id: uuid("id").primaryKey().defaultRandom(),
   game: text("game").notNull(),
@@ -57,6 +61,7 @@ export const matchSubmissions = pgTable("match_submissions", {
 
 export const publishedManualMatches = pgTable("published_manual_matches", {
   id: uuid("id").primaryKey().defaultRandom(),
+  operationKey: uuid("operation_key").unique(),
   sourceSubmissionId: uuid("source_submission_id")
     .unique()
     .references(() => matchSubmissions.id, { onDelete: "set null" }),
@@ -162,6 +167,25 @@ export const adminAuditEvents = pgTable("admin_audit_events", {
   index("admin_audit_events_entity_idx").on(table.entityType, table.entityId),
 ]);
 
+export const manualMatchCacheOutbox = pgTable("manual_match_cache_outbox", {
+  revision: bigint("revision", { mode: "number" })
+    .primaryKey()
+    .default(sql`nextval('manual_match_cache_revision_seq')`),
+  eventId: uuid("event_id").notNull().unique().defaultRandom(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  deliveredAt: timestamp("delivered_at", { withTimezone: true, mode: "date" }),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  lastErrorCode: text("last_error_code"),
+}, (table) => [
+  check("manual_match_cache_outbox_attempt_count_check", sql`${table.attemptCount} >= 0`),
+  index("manual_match_cache_outbox_pending_idx")
+    .on(table.revision)
+    .where(sql`${table.deliveredAt} is null`),
+  index("manual_match_cache_outbox_delivered_idx")
+    .on(table.revision)
+    .where(sql`${table.deliveredAt} is not null`),
+]);
+
 export type MatchSubmissionRow = typeof matchSubmissions.$inferSelect;
 export type NewMatchSubmissionRow = typeof matchSubmissions.$inferInsert;
 export type PublishedManualMatchRow = typeof publishedManualMatches.$inferSelect;
@@ -170,3 +194,4 @@ export type AdminAuditEventRow = typeof adminAuditEvents.$inferSelect;
 export type SubmissionRateLimitRow = typeof submissionRateLimits.$inferSelect;
 export type SubmissionRateLimitWindowRow = typeof submissionRateLimitWindows.$inferSelect;
 export type PandaScoreGameSnapshotRow = typeof pandaScoreGameSnapshots.$inferSelect;
+export type ManualMatchCacheOutboxRow = typeof manualMatchCacheOutbox.$inferSelect;
