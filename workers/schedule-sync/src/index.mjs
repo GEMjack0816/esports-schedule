@@ -8,9 +8,10 @@ const MAX_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [500, 1_000];
 const REQUEST_TIMEOUT_MS = 300_000;
 const HEALTH_REQUEST_TIMEOUT_MS = 10_000;
-// Match the application's per-game freshness window. The health probe must
-// confirm every PandaScore game is fresh before the backup trigger can skip.
-const FRESHNESS_LIMIT_SECONDS = 15 * 60;
+// Keep the skip threshold below the 15-minute Worker schedule interval. If
+// GitHub misses a run, the next backup invocation must sync instead of
+// skipping at the same 15-minute boundary and waiting another full interval.
+const FRESHNESS_LIMIT_SECONDS = 10 * 60;
 const PANDA_GAMES = ["lol", "valorant", "honor-of-kings", "cs2", "dota2"];
 // Cloudflare Cron invocations have a 15-minute wall-time ceiling. Keep an
 // explicit total budget below it so retries cannot be cut off by the platform.
@@ -47,9 +48,8 @@ function cancelResponseBodyWithoutBlocking(response) {
 }
 
 function retryDelayFor(response, attempt, now) {
-  // A 429 is an explicit rate-limit rejection, so retrying it cannot replay a
-  // sync that already completed. Server errors are ambiguous and are never
-  // retried without first reconciling the public freshness snapshot.
+  // Only an explicit 429 is safe to retry: unlike a 5xx or lost response, it
+  // proves the write-like sync request was rejected before it could complete.
   if (response.status !== 429) return RETRY_DELAYS_MS[attempt];
 
   const retryAfter = response.headers.get("retry-after")?.trim();
@@ -143,6 +143,9 @@ function validateSyncPayload(payload, httpStatus) {
     || payload.snapshotsPersisted !== payload.gamesSucceeded) {
     throw new SyncInvocationError("snapshot_persistence_mismatch", httpStatus);
   }
+  if (!Array.isArray(payload.errors)) {
+    throw new SyncInvocationError("invalid_sync_errors", httpStatus);
+  }
   const sourceFetchedAt = parseTimestampWithTimezone(payload.sourceFetchedAt);
   const lastSuccessfulSyncAt = parseTimestampWithTimezone(payload.lastSuccessfulSyncAt);
   const refreshedAt = parseTimestampWithTimezone(payload.refreshedAt);
@@ -151,8 +154,8 @@ function validateSyncPayload(payload, httpStatus) {
     || lastSuccessfulSyncAt > refreshedAt) {
     throw new SyncInvocationError("invalid_success_timestamp", httpStatus);
   }
-  if ((payload.status === "success" && payload.gamesFailed !== 0)
-    || (payload.status === "partial" && payload.gamesFailed === 0)
+  if ((payload.status === "success" && (payload.gamesFailed !== 0 || payload.errors.length !== 0))
+    || (payload.status === "partial" && payload.errors.length === 0)
     || (payload.status !== "success" && payload.status !== "partial")) {
     throw new SyncInvocationError("invalid_sync_status", httpStatus);
   }
@@ -231,6 +234,7 @@ function getFreshScheduleAgeSeconds(payload, now) {
     || payload.snapshotAgeSeconds > FRESHNESS_LIMIT_SECONDS
     || sourceFetchedAt === null
     || lastSuccessfulSyncAt === null
+    || sourceFetchedAt > lastSuccessfulSyncAt
     || !payload.games || typeof payload.games !== "object" || Array.isArray(payload.games)) {
     return null;
   }
@@ -250,7 +254,29 @@ function getFreshScheduleAgeSeconds(payload, now) {
   if (successfulSyncAgeSeconds < -60 || successfulSyncAgeSeconds > FRESHNESS_LIMIT_SECONDS) {
     return null;
   }
-  if (!PANDA_GAMES.every((game) => payload.games[game]?.syncStatus === "normal")) return null;
+  for (const game of PANDA_GAMES) {
+    const coverage = payload.games[game];
+    if (coverage?.syncStatus !== "normal"
+      || !Number.isInteger(coverage.snapshotAgeSeconds)
+      || coverage.snapshotAgeSeconds < 0
+      || coverage.snapshotAgeSeconds > FRESHNESS_LIMIT_SECONDS) return null;
+
+    const gameSourceFetchedAt = parseTimestampWithTimezone(coverage.sourceFetchedAt);
+    const gameLastSuccessfulSyncAt = parseTimestampWithTimezone(coverage.lastSuccessfulSyncAt);
+    if (gameSourceFetchedAt === null || gameLastSuccessfulSyncAt === null
+      || gameLastSuccessfulSyncAt < gameSourceFetchedAt) {
+      return null;
+    }
+
+    const gameSourceAgeSeconds = (now - gameSourceFetchedAt) / 1_000;
+    const gameSuccessfulSyncAgeSeconds = (now - gameLastSuccessfulSyncAt) / 1_000;
+    if (gameSourceAgeSeconds < -60 || gameSourceAgeSeconds > FRESHNESS_LIMIT_SECONDS
+      || Math.abs(gameSourceAgeSeconds - coverage.snapshotAgeSeconds) > 60
+      || gameSuccessfulSyncAgeSeconds < -60
+      || gameSuccessfulSyncAgeSeconds > FRESHNESS_LIMIT_SECONDS) {
+      return null;
+    }
+  }
 
   return payload.snapshotAgeSeconds;
 }
@@ -270,12 +296,17 @@ async function getScheduleHealth({ fetchImpl, timeoutSignalImpl }) {
     return await readJsonBody(response);
   } catch {
     // This is best-effort optimization only: if health cannot be trusted,
-    // proceed with the authenticated sync instead of skipping it.
+    // proceed with the bounded authenticated sync instead of skipping it.
     return null;
   }
 }
 
-async function verifyFreshnessAdvancedAfterAmbiguousSync({
+async function getFreshScheduleAge({ fetchImpl, nowImpl, timeoutSignalImpl }) {
+  const payload = await getScheduleHealth({ fetchImpl, timeoutSignalImpl });
+  return payload ? getFreshScheduleAgeSeconds(payload, nowImpl()) : null;
+}
+
+async function verifyFreshAfterAmbiguousSyncResponse({
   fetchImpl,
   nowImpl,
   timeoutSignalImpl,
@@ -284,8 +315,9 @@ async function verifyFreshnessAdvancedAfterAmbiguousSync({
   if (!Number.isFinite(baselineLastSuccessfulSyncAt)) return null;
   const payload = await getScheduleHealth({ fetchImpl, timeoutSignalImpl });
   const latestSuccessfulSyncAt = parseTimestampWithTimezone(payload?.lastSuccessfulSyncAt);
-  const now = nowImpl();
-  const snapshotAgeSeconds = getFreshScheduleAgeSeconds(payload, now);
+  const snapshotAgeSeconds = payload
+    ? getFreshScheduleAgeSeconds(payload, nowImpl())
+    : null;
   if (snapshotAgeSeconds === null
     || latestSuccessfulSyncAt === null
     || latestSuccessfulSyncAt <= baselineLastSuccessfulSyncAt) {
@@ -295,6 +327,13 @@ async function verifyFreshnessAdvancedAfterAmbiguousSync({
     outcome: "verified_fresh_after_ambiguous_response",
     snapshotAgeSeconds,
   };
+}
+
+async function verifyFreshAfterConcurrentSync({ fetchImpl, nowImpl, timeoutSignalImpl }) {
+  const snapshotAgeSeconds = await getFreshScheduleAge({ fetchImpl, nowImpl, timeoutSignalImpl });
+  return snapshotAgeSeconds === null
+    ? null
+    : { outcome: "verified_fresh_after_concurrent_sync", snapshotAgeSeconds };
 }
 
 export async function invokeScheduleSync({
@@ -328,7 +367,7 @@ export async function invokeScheduleSync({
         signal: timeoutSignalImpl(Math.min(REQUEST_TIMEOUT_MS, remainingBudget)),
       });
     } catch {
-      const recovered = await verifyFreshnessAdvancedAfterAmbiguousSync({
+      const recovered = await verifyFreshAfterAmbiguousSyncResponse({
         fetchImpl,
         nowImpl,
         timeoutSignalImpl,
@@ -344,7 +383,12 @@ export async function invokeScheduleSync({
       try {
         payload = await readJsonBody(response);
       } catch {
-        const recovered = await verifyFreshnessAdvancedAfterAmbiguousSync({
+        // A 503 with an unreadable body is ambiguous: the request may have
+        // reached the sync handler and completed before a proxy truncated or
+        // corrupted its response. Never replay the sync here; reconcile once
+        // against the no-store health endpoint, then fail closed if it did not
+        // advance.
+        const recovered = await verifyFreshAfterAmbiguousSyncResponse({
           fetchImpl,
           nowImpl,
           timeoutSignalImpl,
@@ -361,6 +405,15 @@ export async function invokeScheduleSync({
       if (isCompletedSyncFailure(payload)) {
         throw new SyncInvocationError("sync_failed", response.status);
       }
+
+      const recovered = await verifyFreshAfterAmbiguousSyncResponse({
+        fetchImpl,
+        nowImpl,
+        timeoutSignalImpl,
+        baselineLastSuccessfulSyncAt,
+      });
+      if (recovered) return recovered;
+      throw new SyncInvocationError("ambiguous_sync_failure", response.status);
     }
 
     if (response.status === 429 && attempt < RETRY_DELAYS_MS.length) {
@@ -373,7 +426,7 @@ export async function invokeScheduleSync({
 
     if (response.status >= 500) {
       cancelResponseBodyWithoutBlocking(response);
-      const recovered = await verifyFreshnessAdvancedAfterAmbiguousSync({
+      const recovered = await verifyFreshAfterAmbiguousSyncResponse({
         fetchImpl,
         nowImpl,
         timeoutSignalImpl,
@@ -387,17 +440,36 @@ export async function invokeScheduleSync({
     try {
       payload = await readJsonBody(response);
     } catch (error) {
-      if (!response.ok) throw error;
-      const recovered = await verifyFreshnessAdvancedAfterAmbiguousSync({
-        fetchImpl,
-        nowImpl,
-        timeoutSignalImpl,
-        baselineLastSuccessfulSyncAt,
-      });
-      if (recovered) return recovered;
-      throw new SyncInvocationError("ambiguous_sync_failure", response.status);
+      // Fetch can resolve after headers arrive and still fail while the body
+      // is streaming (for example, a timeout or connection reset). Treat only
+      // transport/read failures as retryable; malformed or oversized payloads
+      // remain deterministic protocol failures.
+      if (error instanceof SyncInvocationError) throw error;
+      cancelResponseBodyWithoutBlocking(response);
+      if (response.ok) {
+        const recovered = await verifyFreshAfterAmbiguousSyncResponse({
+          fetchImpl,
+          nowImpl,
+          timeoutSignalImpl,
+          baselineLastSuccessfulSyncAt,
+        });
+        if (recovered) return recovered;
+      }
+      throw new SyncInvocationError(
+        response.ok ? "ambiguous_sync_failure" : "response_read_failure",
+        response.status,
+      );
     }
-    return validateSyncPayload(payload, response.status);
+    const result = validateSyncPayload(payload, response.status);
+    if (result.outcome === "skipped_busy") {
+      // A busy lock may belong to a concurrent sync that is about to finish.
+      // Report success only if the public health contract now proves freshness;
+      // otherwise a green Cron invocation would hide a missed refresh.
+      const recovered = await verifyFreshAfterConcurrentSync({ fetchImpl, nowImpl, timeoutSignalImpl });
+      if (recovered) return recovered;
+      throw new SyncInvocationError("sync_busy", response.status);
+    }
+    return result;
   }
 
   throw new SyncInvocationError("retry_budget_exhausted");
@@ -429,7 +501,9 @@ export function createScheduleSyncWorker({
         }
         const health = await getScheduleHealth({ fetchImpl, timeoutSignalImpl });
         const baselineLastSuccessfulSyncAt = parseTimestampWithTimezone(health?.lastSuccessfulSyncAt);
-        const freshAgeSeconds = getFreshScheduleAgeSeconds(health, nowImpl());
+        const freshAgeSeconds = health
+          ? getFreshScheduleAgeSeconds(health, nowImpl())
+          : null;
         const result = freshAgeSeconds === null
           ? await invokeScheduleSync({
               fetchImpl,
@@ -441,7 +515,7 @@ export function createScheduleSyncWorker({
             })
           : { outcome: "skipped_fresh", snapshotAgeSeconds: freshAgeSeconds };
         const summary = { event: "schedule_sync", scheduledTime, ...result };
-        if (result.outcome === "skipped_busy" || result.outcome === "partial") {
+        if (result.outcome === "partial") {
           log.warn(JSON.stringify(summary));
         } else {
           log.log(JSON.stringify(summary));
