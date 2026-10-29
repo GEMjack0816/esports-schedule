@@ -39,6 +39,10 @@ function observeNearViewport(element: Element, callback: () => void): () => void
 
 export function TeamLogo({ src }: { src: string }) {
   const source = src.trim() || TEAM_LOGO_PLACEHOLDER;
+  return <TeamLogoAttempt key={source} source={source} />;
+}
+
+function TeamLogoAttempt({ source }: { source: string }) {
   const imageRef = useRef<HTMLImageElement>(null);
   const [nearViewport, setNearViewport] = useState(false);
   const [status, setStatus] = useState<TeamLogoLoadStatus>("loading");

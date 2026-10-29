@@ -7,6 +7,7 @@ const simulateLogoTimeout = process.argv.includes("--simulate-logo-timeout");
 const simulateLogoRetry = process.argv.includes("--simulate-logo-retry");
 const simulateLogoSuccess = process.argv.includes("--simulate-logo-success");
 const simulateLogoSourceUpdate = process.argv.includes("--simulate-logo-source-update");
+const simulateLogoSourceUpdateRetry = process.argv.includes("--simulate-logo-source-update-retry");
 const executableCandidates = [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -43,15 +44,18 @@ for (const profile of [
   const retryLogoUrl = "https://cdn-api.pandascore.co/images/team/image/123/browser-retry-verification.webp";
   const successLogoUrl = "https://logo-success.invalid/loaded-team.svg";
   const updatedLogoUrl = "https://logo-success.invalid/updated-team.svg";
+  const updatedRetryLogoUrl = "https://cdn-api.pandascore.co/images/team/image/124/browser-updated-retry-verification.webp";
   let logoSuccessRequestObserved = false;
   let logoSuccessRequestReferer = null;
   let logoTimeoutFallback = null;
   let logoRetryFallback = null;
   let logoSuccessRetention = null;
   let logoSourceUpdate = null;
+  let logoSourceUpdateRetry = null;
   let sourceUpdateApiCalls = 0;
   const retryRequests = [];
-  if (verifyLogoTimeout || verifyLogoRetry || verifyLogoSuccess || verifyLogoSourceUpdate) {
+  const sourceUpdateRetryRequests = [];
+  if (verifyLogoTimeout || verifyLogoRetry || verifyLogoSuccess || verifyLogoSourceUpdate || simulateLogoSourceUpdateRetry) {
     await context.route((url) => new URL(url).pathname === "/api/matches", async (route) => {
       const response = await route.fetch();
       const payload = await response.json();
@@ -78,11 +82,13 @@ for (const profile of [
         tournament: "本地浏览器验证",
         league: "本地浏览器验证",
         stage: null,
-        homeTeam: verifyLogoSourceUpdate
+        homeTeam: verifyLogoSourceUpdate || simulateLogoSourceUpdateRetry
           ? {
               name: "Logo URL 更新验证",
               acronym: "UPDATE",
-              logo: sourceUpdateVersion === 0 ? retryLogoUrl : updatedLogoUrl,
+              logo: sourceUpdateVersion === 0
+                ? retryLogoUrl
+                : simulateLogoSourceUpdateRetry ? updatedRetryLogoUrl : updatedLogoUrl,
             }
           : verifyLogoRetry
             ? { name: "Logo 重试回退验证", acronym: "RETRY", logo: retryLogoUrl }
@@ -107,11 +113,18 @@ for (const profile of [
         await route.fulfill({ status: 503, contentType: "image/svg+xml", body: "" }).catch(() => undefined);
       });
     }
-    if (verifyLogoRetry || verifyLogoSourceUpdate) {
+    if (verifyLogoRetry || verifyLogoSourceUpdate || simulateLogoSourceUpdateRetry) {
       await context.route((url) =>
-        url.hostname === "cdn-api.pandascore.co" && url.pathname === "/images/team/image/123/browser-retry-verification.webp",
+        url.hostname === "cdn-api.pandascore.co"
+          && [
+            "/images/team/image/123/browser-retry-verification.webp",
+            "/images/team/image/124/browser-updated-retry-verification.webp",
+          ].includes(url.pathname),
       async (route) => {
-        retryRequests.push(new URL(route.request().url()).searchParams.get("esports_logo_retry"));
+        const requestUrl = new URL(route.request().url());
+        const retryValue = requestUrl.searchParams.get("esports_logo_retry");
+        if (requestUrl.pathname.includes("/124/")) sourceUpdateRetryRequests.push(retryValue);
+        else retryRequests.push(retryValue);
         await route.abort("failed");
       });
     }
@@ -303,6 +316,49 @@ for (const profile of [
       naturalWidth: await verificationLogo.evaluate((image) => image.naturalWidth),
     };
   }
+  if (simulateLogoSourceUpdateRetry) {
+    await page.getByRole("tab", { name: /全部收录/ }).click();
+    const verificationCard = page.locator(".match-card").filter({ hasText: "Logo URL 更新验证" }).first();
+    await verificationCard.waitFor({ state: "visible", timeout: 10_000 });
+    await verificationCard.scrollIntoViewIfNeeded();
+    const verificationLogo = verificationCard.locator(".team-row").first().locator("img");
+    const waitForRequestCount = async (requests, count) => {
+      const deadline = Date.now() + 6_000;
+      while (requests.length < count && Date.now() < deadline) await page.waitForTimeout(50);
+      return requests.length === count;
+    };
+    const firstSourceRetried = await waitForRequestCount(retryRequests, 2);
+    const firstSourceFellBack = firstSourceRetried && await page.waitForFunction(() => {
+      const card = Array.from(document.querySelectorAll(".match-card"))
+        .find((candidate) => candidate.textContent?.includes("Logo URL 更新验证"));
+      const src = card?.querySelector(".team-row img")?.getAttribute("src");
+      return !!src && new URL(src, location.href).pathname === "/team-placeholder.svg";
+    }, null, { timeout: 8_000 }).then(() => true).catch(() => false);
+
+    await page.waitForFunction(() => !document.querySelector(".refresh-button")?.disabled, null, { timeout: 5_000 });
+    const updatedResponse = page.waitForResponse(
+      (candidate) => candidate.url().includes("/api/matches") && candidate.request().method() === "GET",
+      { timeout: 10_000 },
+    );
+    await page.locator(".refresh-button").click();
+    await updatedResponse;
+    const secondSourceRetried = await waitForRequestCount(sourceUpdateRetryRequests, 2);
+    const secondSourceFellBack = secondSourceRetried && await page.waitForFunction(() => {
+      const card = Array.from(document.querySelectorAll(".match-card"))
+        .find((candidate) => candidate.textContent?.includes("Logo URL 更新验证"));
+      const src = card?.querySelector(".team-row img")?.getAttribute("src");
+      return !!src && new URL(src, location.href).pathname === "/team-placeholder.svg";
+    }, null, { timeout: 8_000 }).then(() => true).catch(() => false);
+    logoSourceUpdateRetry = {
+      firstSourceRetried,
+      firstSourceFellBack,
+      firstSourceRequests: retryRequests,
+      secondSourceRetried,
+      secondSourceFellBack,
+      secondSourceRequests: sourceUpdateRetryRequests,
+      finalSource: await verificationLogo.getAttribute("src"),
+    };
+  }
   if (verifyLogoSuccess) {
     await page.getByRole("tab", { name: /全部收录/ }).click();
     const verificationCard = page.locator(".match-card").filter({ hasText: "Logo 成功加载验证" }).first();
@@ -405,6 +461,7 @@ for (const profile of [
     logoRetryFallback,
     logoSuccessRetention,
     logoSourceUpdate,
+    logoSourceUpdateRetry,
     healthStatus: healthResult.status,
     healthMode: healthResult.body.mode,
     healthDemoMode: healthResult.body.demoMode,
@@ -491,6 +548,21 @@ for (const result of results) {
     }
     if (!result.logoSourceUpdate?.updatedImageLoaded) {
       failures.push(`${prefix}: updated logo URL did not load after refreshing the same match`);
+    }
+  }
+  if (simulateLogoSourceUpdateRetry && prefix === "desktop") {
+    const sourceUpdateResult = result.logoSourceUpdateRetry;
+    if (!sourceUpdateResult?.firstSourceRetried || !sourceUpdateResult?.firstSourceFellBack) {
+      failures.push(`${prefix}: initial logo source did not retry once and fall back`);
+    }
+    if (!sourceUpdateResult?.secondSourceRetried || !sourceUpdateResult?.secondSourceFellBack) {
+      failures.push(`${prefix}: changed logo source did not receive its own retry and fallback`);
+    }
+    if (sourceUpdateResult?.firstSourceRequests?.length !== 2 || sourceUpdateResult.firstSourceRequests[0] !== null || sourceUpdateResult.firstSourceRequests[1] !== "1") {
+      failures.push(`${prefix}: initial logo source retry was not bounded to one attempt`);
+    }
+    if (sourceUpdateResult?.secondSourceRequests?.length !== 2 || sourceUpdateResult.secondSourceRequests[0] !== null || sourceUpdateResult.secondSourceRequests[1] !== "1") {
+      failures.push(`${prefix}: changed logo source retry was not bounded to one attempt`);
     }
   }
   failures.push(...result.errors.map((error) => `${prefix}: ${error}`));
