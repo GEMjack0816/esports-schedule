@@ -192,6 +192,28 @@ async function verifyFreshnessAdvanced({ fetchImpl, timeoutSignalImpl, nowImpl, 
   };
 }
 
+async function verifyCompletedSyncFreshness({
+  fetchImpl,
+  timeoutSignalImpl,
+  nowImpl,
+  baseline,
+  syncTimestamp,
+}) {
+  const payload = await readHealth({ fetchImpl, timeoutSignalImpl });
+  const lastSuccessfulSyncAt = getSuccessfulSyncTimestamp(payload);
+  const now = nowImpl();
+  if (!isFreshFiveGameSnapshot(payload, now)
+    || lastSuccessfulSyncAt === null
+    || (baseline !== null && lastSuccessfulSyncAt <= baseline)
+    || (syncTimestamp !== null && lastSuccessfulSyncAt < syncTimestamp)) {
+    return null;
+  }
+  return {
+    ok: true,
+    lastSuccessfulSyncAt: payload.lastSuccessfulSyncAt,
+  };
+}
+
 export async function runScheduleSync({
   secret,
   fetchImpl = fetch,
@@ -258,6 +280,20 @@ export async function runScheduleSync({
 
   const result = validateSyncResponse(payload, response.status);
   if (!result.ok) throw new ScheduleSyncRunError("sync_response_invalid");
+
+  // A logical success (including a partial success) is not enough for the
+  // scheduled freshness guarantee. Verify the public health snapshot after
+  // the write so a single stale game cannot be reported as a healthy run.
+  const verified = await verifyCompletedSyncFreshness({
+    fetchImpl,
+    timeoutSignalImpl,
+    nowImpl,
+    baseline,
+    syncTimestamp: getSuccessfulSyncTimestamp(payload),
+  });
+  if (!verified) {
+    throw new ScheduleSyncRunError("sync_completed_without_verified_fresh_snapshot");
+  }
   return { ok: true, outcome: result.message, payload };
 }
 
