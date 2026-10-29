@@ -1,0 +1,1 @@
+ALTER TABLE "manual_match_cache_outbox" ADD COLUMN "retry_after" timestamp with time zone;

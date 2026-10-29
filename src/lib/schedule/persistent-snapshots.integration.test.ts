@@ -319,6 +319,35 @@ describe.skipIf(!enabled)("persistent PandaScore snapshots (isolated PostgreSQL)
       .every((value) => value.providerMatchId.endsWith("-new"))).toBe(true);
   });
 
+  it("does not replace a newer Runtime Cache generation with an older database snapshot", async () => {
+    const persistentGeneration = await nextGeneration();
+    const persistentValue = snapshot("lol", "2026-08-30T00:00:00.000Z", "persistent-old");
+    await expect(writePersistentPandaScoreSnapshot(
+      persistentValue,
+      state("lol", persistentValue.fetchedAt),
+      persistentGeneration,
+    )).resolves.toBe("written");
+
+    const runtimeValue = snapshot("lol", "2026-08-30T01:00:00.000Z", "runtime-new");
+    runtimeValue.syncGeneration = persistentGeneration + 1;
+    const cacheBackfills: PandaGameKey[] = [];
+    const recovered = await recoverScheduleParts({ lol: runtimeValue }, {}, {
+      readGenerations: readPersistentPandaScoreSnapshotGenerations,
+      readPersistent: readPersistentPandaScoreSnapshots,
+      writeRuntimeSnapshot: async (value) => {
+        cacheBackfills.push(value.game);
+        return true;
+      },
+      writeRuntimeState: async () => true,
+    });
+
+    expect(recovered.snapshots.lol?.matches[0].providerMatchId).toBe("runtime-new");
+    expect(recovered.snapshots.lol?.syncGeneration).toBe(persistentGeneration + 1);
+    expect(recovered.snapshotSources.lol).toBe("runtime-cache");
+    expect(recovered.recoveredGames).toEqual([]);
+    expect(cacheBackfills).toEqual([]);
+  });
+
   it("rejects a malformed replacement without damaging the good snapshot", async () => {
     const goodGeneration = await nextGeneration();
     const malformedGeneration = await nextGeneration();
