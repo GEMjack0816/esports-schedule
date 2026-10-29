@@ -1,6 +1,6 @@
 export const TEAM_LOGO_PLACEHOLDER = "/team-placeholder.svg";
 
-const RETRYABLE_LOGO_HOSTS = new Set(["cdn-api.pandascore.co"]);
+const RETRYABLE_LOGO_HOSTS = new Set(["cdn.pandascore.co"]);
 
 export type TeamLogoRecovery =
   | { kind: "retry"; src: string }
