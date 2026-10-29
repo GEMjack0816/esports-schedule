@@ -238,6 +238,11 @@ a { color: inherit; text-decoration: none; }
 .watch-link:hover { color: var(--cyan); }
 .watch-link svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.3; }
 .no-stream { color: #626a75; font-size: 10px; }
+.share-match-button { grid-column: 1 / -1; justify-self: start; display: inline-flex; align-items: center; gap: 7px; min-height: 30px; border: 1px solid var(--line); background: transparent; color: var(--muted-bright); padding: 5px 9px; cursor: pointer; font: 600 10px var(--font-geist-sans), sans-serif; }
+.share-match-button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.25; }
+.share-match-button:hover { border-color: var(--cyan); color: var(--cyan); }
+.share-match-button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.share-feedback { margin: 8px 0 0; color: var(--cyan); font-size: 12px; }
 
 .empty-state { min-height: 330px; border: 1px dashed var(--line); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 30px; }
 .empty-glyph { color: var(--cyan); font-size: 38px; line-height: 1; }
@@ -278,6 +283,7 @@ a { color: inherit; text-decoration: none; }
   .match-card { grid-template-columns: 110px minmax(170px, .8fr) minmax(240px, 1.25fr); }
   .match-meta-cell { grid-column: 1 / -1; border-top: 1px solid var(--line-soft); display: flex; align-items: center; padding: 13px 18px; }
   .watch-link, .no-stream { grid-column: auto; margin-left: auto; min-width: 130px; }
+  .share-match-button { margin-left: auto; }
 }
 
 @media (max-width: 720px) {
@@ -323,6 +329,7 @@ a { color: inherit; text-decoration: none; }
   .date-divider { gap: 8px; }
   .match-meta-cell { flex-wrap: wrap; }
   .watch-link, .no-stream { width: 100%; margin-left: 0; padding-top: 4px; }
+  .share-match-button { width: 100%; justify-content: center; margin-left: 0; }
   .submit-page { width: min(100% - 32px, 920px); padding-top: 44px; }
   .submit-form { grid-template-columns: 1fr; padding: 20px; }
   .submit-wide { grid-column: auto; }
