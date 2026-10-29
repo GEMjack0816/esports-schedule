@@ -108,6 +108,7 @@ for (const profile of [
   let sharePayloadSafe = false;
   let shareFeedbackVisible = false;
   let clipboardFallbackWorks = false;
+  let shareCancelHandled = false;
   if (shareButtonCount > 0) {
     await shareButtons.first().click();
     const feedback = page.locator(".share-feedback");
@@ -140,6 +141,24 @@ for (const profile of [
       && clipboardText.includes("时间（Asia/Shanghai）：")
       && !clipboardText.includes("?audit=")
       && fallback.message.includes("已复制");
+  }
+  if (shareButtonCount > 0) {
+    await page.evaluate(() => {
+      window.__clipboardAbortWrites = 0;
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async () => { window.__clipboardAbortWrites += 1; } },
+      });
+      Object.defineProperty(navigator, "share", {
+        configurable: true,
+        value: async () => { throw new DOMException("Share cancelled", "AbortError"); },
+      });
+    });
+    await shareButtons.first().click();
+    await page.locator(".share-feedback").waitFor({ state: "hidden" });
+    shareCancelHandled = await page.evaluate(() =>
+      window.__clipboardAbortWrites === 0 && !document.querySelector(".share-feedback"),
+    );
   }
 
   const apiResponsePromise = page.waitForResponse(
@@ -232,6 +251,7 @@ for (const profile of [
     sharePayloadSafe,
     shareFeedbackVisible,
     clipboardFallbackWorks,
+    shareCancelHandled,
     themeToggleWorks: initialTheme !== toggledTheme,
     refreshedApiUrl: apiResponse.url(),
     refreshedApiMode: apiBody.mode,
@@ -288,6 +308,7 @@ for (const result of results) {
   if (!result.sharePayloadSafe) failures.push(`${prefix}: share payload contains unexpected URLs or query state`);
   if (!result.shareFeedbackVisible) failures.push(`${prefix}: share feedback was not announced visibly`);
   if (!result.clipboardFallbackWorks) failures.push(`${prefix}: clipboard share fallback failed or included unexpected data`);
+  if (!result.shareCancelHandled) failures.push(`${prefix}: cancelling native share incorrectly triggered clipboard fallback or feedback`);
   if (result.refreshedApiMode === undefined) failures.push(`${prefix}: refresh API missing mode`);
   if (result.healthStatus !== 200) failures.push(`${prefix}: health HTTP ${result.healthStatus}`);
   if (result.healthGames.length !== 5) failures.push(`${prefix}: health game coverage incomplete`);
