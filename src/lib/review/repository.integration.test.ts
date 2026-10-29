@@ -33,6 +33,7 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
   let cleanup: ReturnType<typeof postgres>;
   const submissionIds: string[] = [];
   const manualMatchIds: string[] = [];
+  const manualMatchOutboxRevisions: number[] = [];
   const rateLimitSources: string[] = [];
   const rateLimitWindowKeys: string[] = [];
 
@@ -52,6 +53,9 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     }
     if (manualMatchIds.length > 0) {
       await cleanup`delete from published_manual_matches where id = any(${manualMatchIds}::uuid[])`;
+    }
+    if (manualMatchOutboxRevisions.length > 0) {
+      await cleanup`delete from manual_match_cache_outbox where revision = any(${manualMatchOutboxRevisions}::bigint[])`;
     }
     if (auditEntityIds.length > 0) {
       await cleanup`delete from admin_audit_events where entity_id = any(${auditEntityIds}::uuid[])`;
@@ -700,6 +704,47 @@ describe.skipIf(!enabled)("review repository transactions (isolated PostgreSQL)"
     } finally {
       await cleanup`select pg_advisory_unlock(${MANUAL_MATCH_MUTATION_LOCK})`;
     }
+  });
+
+  it("drains delivered cache outbox rows in bounded batches on ordinary status reads", async () => {
+    const seeded = await cleanup`
+      insert into manual_match_cache_outbox (delivered_at)
+      select now() from generate_series(1, 205)
+      returning revision
+    `;
+    const seededRevisions = seeded.map((row) => Number(row.revision));
+    manualMatchOutboxRevisions.push(...seededRevisions);
+    const [pending] = await cleanup`
+      insert into manual_match_cache_outbox (last_error_code)
+      values ('RUNTIME_CACHE_WRITE_FAILED')
+      returning revision
+    `;
+    const pendingRevision = Number(pending.revision);
+    manualMatchOutboxRevisions.push(pendingRevision);
+
+    const [before] = await cleanup`select count(*)::int as count from manual_match_cache_outbox`;
+    const status = await repository.getManualMatchCacheStatus();
+    const [afterFirstRead] = await cleanup`select count(*)::int as count from manual_match_cache_outbox`;
+    const firstBatchDeleted = Number(before.count) - Number(afterFirstRead.count);
+    expect(firstBatchDeleted).toBeGreaterThan(0);
+    expect(firstBatchDeleted).toBeLessThanOrEqual(100);
+    expect(status.pendingRevisions).toBeGreaterThan(0);
+
+    let remaining = seededRevisions.length;
+    for (let attempt = 0; attempt < 10 && remaining > 0; attempt += 1) {
+      await repository.getManualMatchCacheStatus();
+      const [rows] = await cleanup`
+        select count(*)::int as count from manual_match_cache_outbox
+        where revision = any(${seededRevisions}::bigint[])
+      `;
+      remaining = Number(rows.count);
+    }
+    expect(remaining).toBe(0);
+
+    const [active] = await cleanup`
+      select delivered_at from manual_match_cache_outbox where revision = ${pendingRevision}
+    `;
+    expect(active.delivered_at).toBeNull();
   });
 });
 

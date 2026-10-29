@@ -25,7 +25,7 @@
 
 审核通过使用单一数据库事务：锁定待审核行、创建公开比赛、更新提交状态并写审计事件。驳回不会创建公开比赛。待审核记录的保存、批准、驳回以及人工比赛的编辑、隐藏、恢复都会携带页面加载时的 `updatedAt`；事务在行锁内校验版本，并在不匹配时拒绝旧表单覆盖。更新时间保证单调递增，冲突页面会要求管理员重新加载。
 
-改变公开人工赛程的事务会在统一 PostgreSQL advisory lock 内分配 `manual_match_cache_revision_seq` revision，并在业务写入前使带 fallback tag 的 Runtime Cache 项全局失效，再把同一 revision 写入本区域 fence。事务持锁等待 350ms 传播保护窗口；失效或 fence 写入失败会回滚业务事务。业务写入、审计和 outbox revision 一起提交。Runtime Cache 快照携带 revision，低于 fence 或本次请求已观察到的数据库 revision 的旧快照会 fail closed。投递失败保留为 outbox pending，并由后续成功数据库读取重建；每个区域在持有相同数据库锁、读取当前数据库 revision 后重建自己的 fence；在此之前缺少 fence 的区域拒绝使用旧 fallback。健康接口公开 pending 数量但不公开内部错误。已投递 outbox 使用固定批量清理。人工新建表单使用 UUID operation key，重复提交返回第一次创建的记录，不会重复发布。
+改变公开人工赛程的事务会在统一 PostgreSQL advisory lock 内分配 `manual_match_cache_revision_seq` revision，并在业务写入前使带 fallback tag 的 Runtime Cache 项全局失效，再把同一 revision 写入本区域 fence。事务持锁等待 350ms 传播保护窗口；失效或 fence 写入失败会回滚业务事务。业务写入、审计和 outbox revision 一起提交。Runtime Cache 快照携带 revision，低于 fence 或本次请求已观察到的数据库 revision 的旧快照会 fail closed。投递失败保留为 outbox pending，并由后续成功数据库读取重建；每个区域在持有相同数据库锁、读取当前数据库 revision 后重建自己的 fence；在此之前缺少 fence 的区域拒绝使用旧 fallback。健康接口公开 pending 数量但不公开内部错误。已投递 outbox 使用 revision 索引和有界批次清理；普通缓存状态读取也会尽力再清理一批，避免一次批量恢复后遗留行长期累积。人工新建表单使用 UUID operation key，重复提交返回第一次创建的记录，不会重复发布。
 
 每次读取公开人工比赛时，先使用 outbox 主键索引查询一个最新已提交 revision，再比较 Next Data Cache；区域缓存与 fence 即使一起停留在旧版本，也不能遮挡在线数据库的新版本。版本不同时重建快照；Runtime Cache 写失败仍返回当前数据库结果。此检查增加一次单行数据库查询，不会重新调用 PandaScore，也不扫描全部人工比赛。
 

@@ -96,6 +96,25 @@ async function createManualMatchCacheRevision(
   return event.revision;
 }
 
+async function pruneDeliveredManualMatchCacheOutboxBatch(
+  db: ReturnType<typeof getDatabase>,
+  beforeRevision: number,
+): Promise<number> {
+  const deleted = await db.execute(sql`
+    with candidates as (
+      select revision from public.manual_match_cache_outbox
+      where delivered_at is not null and revision < ${beforeRevision}
+      order by revision asc
+      limit ${DELIVERED_OUTBOX_CLEANUP_BATCH}
+    )
+    delete from public.manual_match_cache_outbox as outbox
+    using candidates
+    where outbox.revision = candidates.revision
+    returning outbox.revision
+  `);
+  return deleted.length;
+}
+
 function submissionValues(input: MatchSubmissionInput, updatedAt = new Date()) {
   return {
     game: input.game,
@@ -707,19 +726,7 @@ export class DrizzleReviewRepository {
         isNull(manualMatchCacheOutbox.deliveredAt),
         lte(manualMatchCacheOutbox.revision, revision),
       ));
-      try {
-        await getDatabase().execute(sql`
-          delete from ${manualMatchCacheOutbox}
-          where revision in (
-            select revision from ${manualMatchCacheOutbox}
-            where delivered_at is not null and revision < ${revision}
-            order by revision asc
-            limit ${DELIVERED_OUTBOX_CLEANUP_BATCH}
-          )
-        `);
-      } catch {
-        console.warn("[review-db] delivered manual match cache outbox cleanup failed");
-      }
+      await this.pruneDeliveredManualMatchCacheOutboxBatch(revision);
     } catch (error) {
       translateDatabaseError(error);
     }
@@ -747,6 +754,19 @@ export class DrizzleReviewRepository {
     }
   }
 
+  async pruneDeliveredManualMatchCacheOutboxBatch(beforeRevision?: number): Promise<number> {
+    try {
+      const db = getDatabase();
+      const cutoff = beforeRevision ?? await readManualMatchSequenceRevision(db);
+      return await pruneDeliveredManualMatchCacheOutboxBatch(db, cutoff);
+    } catch {
+      // Cleanup is best-effort maintenance and must not make public matches
+      // unavailable when the bounded delete itself fails.
+      console.warn("[review-db] delivered manual match cache outbox cleanup failed");
+      return 0;
+    }
+  }
+
   async getManualMatchCacheStatus(): Promise<{ revision: number; pendingRevisions: number }> {
     try {
       const db = getDatabase();
@@ -755,6 +775,10 @@ export class DrizzleReviewRepository {
         db.select({ value: count() }).from(manualMatchCacheOutbox)
           .where(isNull(manualMatchCacheOutbox.deliveredAt)),
       ]);
+      // A prior recovery may have marked a large batch delivered but removed
+      // only its first bounded portion. Keep draining old acknowledgements on
+      // subsequent ordinary reads, even when no pending revisions remain.
+      await this.pruneDeliveredManualMatchCacheOutboxBatch(revision);
       return {
         revision,
         pendingRevisions: Number(pendingRows[0]?.value ?? 0),

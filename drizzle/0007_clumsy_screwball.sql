@@ -1,0 +1,1 @@
+CREATE INDEX "manual_match_cache_outbox_delivered_idx" ON "manual_match_cache_outbox" USING btree ("revision") WHERE "manual_match_cache_outbox"."delivered_at" is not null;

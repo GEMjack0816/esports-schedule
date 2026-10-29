@@ -181,6 +181,9 @@ export const manualMatchCacheOutbox = pgTable("manual_match_cache_outbox", {
   index("manual_match_cache_outbox_pending_idx")
     .on(table.revision)
     .where(sql`${table.deliveredAt} is null`),
+  index("manual_match_cache_outbox_delivered_idx")
+    .on(table.revision)
+    .where(sql`${table.deliveredAt} is not null`),
 ]);
 
 export type MatchSubmissionRow = typeof matchSubmissions.$inferSelect;
