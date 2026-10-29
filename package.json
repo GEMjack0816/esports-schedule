@@ -19,7 +19,7 @@
     "check": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:client-bundle"
   },
   "dependencies": {
-    "@vercel/functions": "^3.7.5",
+    "@vercel/functions": "^3.10.4",
     "drizzle-orm": "^0.45.2",
     "geist": "^1.7.2",
     "jose": "^6.2.4",
