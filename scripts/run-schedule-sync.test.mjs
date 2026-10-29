@@ -54,6 +54,7 @@ function syncSuccess() {
     gamesSucceeded: 5,
     gamesFailed: 0,
     snapshotsPersisted: 5,
+    errors: [],
     lastSuccessfulSyncAt: "2026-10-18T09:59:30.000Z",
   });
 }

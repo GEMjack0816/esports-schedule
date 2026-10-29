@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { validateSyncResponse } from "./validate-sync-response.mjs";
 
 const success = {
+  ok: true,
   status: "success",
   lockAcquired: true,
   generation: 41,
@@ -14,6 +15,7 @@ const success = {
   gamesSucceeded: 5,
   gamesFailed: 0,
   snapshotsPersisted: 5,
+  errors: [],
   lastSuccessfulSyncAt: "2026-08-30T00:00:00.000Z",
 };
 
@@ -34,6 +36,32 @@ describe("sync workflow response validation", () => {
 
   it("accepts a complete successful refresh", () => {
     expect(validateSyncResponse(success, 200).ok).toBe(true);
+  });
+
+  it.each([1, 4, 6])("rejects a response that did not attempt exactly five games (%s)", (gamesAttempted) => {
+    expect(validateSyncResponse({
+      ...success,
+      status: "partial",
+      gamesAttempted,
+      gamesSucceeded: gamesAttempted,
+      gamesFailed: 0,
+      snapshotsPersisted: gamesAttempted,
+      errors: [{ game: null, code: "CACHE_DELIVERY" }],
+    }, 200)).toMatchObject({ ok: false });
+  });
+
+  it.each([
+    { gamesSucceeded: 4, gamesFailed: 1, snapshotsPersisted: 4 },
+    { gamesSucceeded: 5, gamesFailed: 0, snapshotsPersisted: 5, errors: [{ game: "lol", code: "CACHE_WRITE" }] },
+  ])("rejects a contradictory success result: %o", (overrides) => {
+    expect(validateSyncResponse({ ...success, ...overrides }, 200)).toMatchObject({ ok: false });
+  });
+
+  it("requires the endpoint's explicit ok flag", () => {
+    expect(validateSyncResponse({ ...success, ok: false }, 200)).toMatchObject({ ok: false });
+    const withoutOk = { ...success };
+    delete withoutOk.ok;
+    expect(validateSyncResponse(withoutOk, 200)).toMatchObject({ ok: false });
   });
 
   it.each([Number.NaN, 200.5, "200"])(
@@ -105,7 +133,20 @@ describe("sync workflow response validation", () => {
       gamesSucceeded: 4,
       gamesFailed: 1,
       snapshotsPersisted: 4,
+      errors: [{ game: "cs2", code: "UPSTREAM" }],
     }, 200).ok).toBe(true);
+  });
+
+  it("accepts a partial result with all games fetched but a delivery error", () => {
+    expect(validateSyncResponse({
+      ...success,
+      status: "partial",
+      errors: [{ game: null, code: "CACHE_DELIVERY" }],
+    }, 200).ok).toBe(true);
+  });
+
+  it("rejects partial status without any reported errors", () => {
+    expect(validateSyncResponse({ ...success, status: "partial" }, 200)).toMatchObject({ ok: false });
   });
 
   it("rejects success or partial responses without a valid fencing generation", () => {
