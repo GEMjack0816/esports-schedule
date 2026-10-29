@@ -1,20 +1,28 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
+const EXPECTED_SYNC_GAME_COUNT = 5;
+
 export function validateSyncResponse(payload, httpStatus) {
-  if (!payload || typeof payload !== "object") {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return { ok: false, message: "sync endpoint returned invalid JSON" };
+  }
+  if (!Number.isInteger(httpStatus) || httpStatus < 100 || httpStatus > 599) {
+    return { ok: false, message: "sync endpoint returned an invalid HTTP status" };
   }
   if (payload.status === "busy" && payload.lockAcquired === false) {
     if (payload.generation !== null && payload.generation !== undefined) {
       return { ok: false, message: "sync busy response unexpectedly reported a generation" };
     }
     return httpStatus === 409
-      ? { ok: true, message: "sync busy: another refresh owns the lock" }
+      ? { ok: false, message: "sync busy: another refresh owns the lock; this run did not refresh the schedule" }
       : { ok: false, message: `sync busy response used unexpected HTTP ${httpStatus}` };
   }
   if (httpStatus < 200 || httpStatus >= 300) {
     return { ok: false, message: `sync endpoint returned HTTP ${httpStatus}` };
+  }
+  if (payload.ok !== true) {
+    return { ok: false, message: "sync endpoint did not confirm a successful response" };
   }
   if (payload.lockAcquired !== true) {
     return { ok: false, message: "sync did not acquire the refresh lock" };
@@ -22,11 +30,13 @@ export function validateSyncResponse(payload, httpStatus) {
   if (!Number.isSafeInteger(payload.generation) || payload.generation < 1) {
     return { ok: false, message: "sync did not report a valid fencing generation" };
   }
-  if (!Number.isInteger(payload.gamesAttempted) || payload.gamesAttempted < 1) {
-    return { ok: false, message: "sync did not report attempted games" };
+  if (payload.gamesAttempted !== EXPECTED_SYNC_GAME_COUNT) {
+    return { ok: false, message: "sync did not attempt the complete five-game catalog" };
   }
-  if (!Number.isInteger(payload.gamesSucceeded) || payload.gamesSucceeded < 1) {
-    return { ok: false, message: "sync did not update any game" };
+  if (!Number.isInteger(payload.gamesSucceeded)
+    || payload.gamesSucceeded < 1
+    || payload.gamesSucceeded > payload.gamesAttempted) {
+    return { ok: false, message: "sync did not update a valid number of games" };
   }
   if (!Number.isInteger(payload.snapshotsPersisted) || payload.snapshotsPersisted < 1) {
     return { ok: false, message: "sync did not persist a valid snapshot" };
@@ -35,18 +45,30 @@ export function validateSyncResponse(payload, httpStatus) {
     return { ok: false, message: "sync success count does not match persisted snapshots" };
   }
   if (!Number.isInteger(payload.gamesFailed)
+    || payload.gamesFailed < 0
     || payload.gamesSucceeded + payload.gamesFailed !== payload.gamesAttempted) {
     return { ok: false, message: "sync game outcome counts are inconsistent" };
   }
-  if (typeof payload.lastSuccessfulSyncAt !== "string" || Number.isNaN(Date.parse(payload.lastSuccessfulSyncAt))) {
+  if (typeof payload.lastSuccessfulSyncAt !== "string"
+    || Number.isNaN(Date.parse(payload.lastSuccessfulSyncAt))) {
     return { ok: false, message: "sync did not report a valid lastSuccessfulSyncAt" };
   }
-  if (payload.status !== "success" && payload.status !== "partial") {
-    return { ok: false, message: `sync reported logical status ${String(payload.status)}` };
+  if (!Array.isArray(payload.errors)) {
+    return { ok: false, message: "sync did not report a valid error summary" };
   }
+  if (payload.status !== "success" && payload.status !== "partial") {
+    return { ok: false, message: "sync reported an unrecognized logical status" };
+  }
+  if ((payload.status === "success" && (payload.gamesFailed !== 0 || payload.errors.length !== 0))
+    || (payload.status === "partial" && payload.errors.length === 0)) {
+    return { ok: false, message: "sync status does not match game outcome counts" };
+  }
+  const diagnosticSummary = payload.errors.length > 0
+    ? `, ${payload.errors.length} sync diagnostic(s)`
+    : "";
   return {
     ok: true,
-    message: `${payload.status}: ${payload.gamesSucceeded} games updated, ${payload.gamesFailed} failed`,
+    message: `${payload.status}: ${payload.gamesSucceeded} games updated, ${payload.gamesFailed} failed${diagnosticSummary}`,
   };
 }
 
