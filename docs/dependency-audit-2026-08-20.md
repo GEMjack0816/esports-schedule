@@ -1,6 +1,15 @@
 # Dependency audit — 2026-08-20
 
-This is a read-only analysis of the `npm audit` result on the reviewed lockfile. No audit fix, override, forced downgrade, or major dependency upgrade was applied in this change.
+This file records a read-only analysis of the `npm audit` result on the lockfile reviewed on 2026-08-20. No audit fix, override, forced downgrade, or major dependency upgrade had been applied at the time of that analysis.
+
+## Remediation status — 2026-10-30
+
+The table below is a historical assessment of the 2026-08-20 lockfile, not the current dependency state. The dedicated dependency PR now records the remediation separately:
+
+- The current lockfile reports **0 vulnerabilities** from both `npm audit` and `npm audit --omit=dev`.
+- The direct Next.js security upgrade and compatible transitive refreshes are recorded in PR #17 and its lockfile. The resolved Sharp version is `0.35.5`.
+- The legacy `@esbuild-kit/core-utils@3.3.2` and `@esbuild-kit/esm-loader@2.6.5` remain development-only dependencies of `drizzle-kit`. The lockfile now overrides only the nested `@esbuild-kit/core-utils > esbuild` dependency to `^0.25.12`; this is outside the loader's declared `~0.18.20` range. The compatibility override was retained only after the repository's Drizzle migration/schema checks and PostgreSQL integration tests passed in CI, along with a focused `transform` API smoke test. It is still a compatibility risk to revisit when `drizzle-kit` removes the legacy loader; do not remove or broaden the override without repeating those checks.
+- The old per-package severities and recommendations below remain useful only as historical context for that reviewed lockfile. Use `npm audit` against the checked-out lockfile for current exposure.
 
 ## Summary
 
@@ -27,3 +36,4 @@ This is a read-only analysis of the `npm audit` result on the reviewed lockfile.
 4. Track `drizzle-kit` upstream. Do not downgrade or force an incompatible nested esbuild override solely to reduce the audit count.
 
 The reported severities should not be treated as proof that every advisory is reachable. Next.js and Sharp deserve prompt remediation because they intersect active server paths; the Drizzle/ESLint findings are restricted to trusted development and CI tooling in the current architecture.
+
