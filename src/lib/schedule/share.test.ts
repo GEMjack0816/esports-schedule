@@ -82,4 +82,24 @@ describe("buildMatchShareText", () => {
     expect(text).toContain("Team A 状态：已取消 vs Team B");
     expect(text).not.toContain("\u202e");
   });
+
+  it("removes URLs embedded in provider-controlled event and team names", () => {
+    const text = buildMatchShareText({
+      ...match,
+      tournament: "夏季赛 https://provider.example/watch?token=private",
+      awayTeam: { ...match.awayTeam, name: "Team B www.tracker.example/match?id=123" },
+    }, {
+      game: "英雄联盟",
+      status: "已结束",
+      localStartTime: "2026年10月29日 18:00",
+      localTimeZone: "Asia/Shanghai",
+      siteUrl: "https://example.test/",
+    });
+
+    expect((text.match(/https?:\/\//g) || [])).toHaveLength(1);
+    expect(text).not.toContain("provider.example");
+    expect(text).not.toContain("tracker.example");
+    expect(text).not.toContain("token=private");
+    expect(text).not.toContain("id=123");
+  });
 });
