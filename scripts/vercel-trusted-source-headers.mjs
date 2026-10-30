@@ -29,10 +29,17 @@ const BROWSER_ENV_ALLOWLIST = new Set([
   "USERPROFILE",
   "WINDIR",
 ]);
+const VERCEL_CLI_ENV_ALLOWLIST = new Set([...BROWSER_ENV_ALLOWLIST, "VERCEL_TOKEN"]);
 
 export function isolateBrowserEnvironment(environment) {
   return Object.fromEntries(
     Object.entries(environment).filter(([name]) => BROWSER_ENV_ALLOWLIST.has(name.toUpperCase())),
+  );
+}
+
+export function isolateVercelCliEnvironment(environment) {
+  return Object.fromEntries(
+    Object.entries(environment).filter(([name]) => VERCEL_CLI_ENV_ALLOWLIST.has(name.toUpperCase())),
   );
 }
 
@@ -64,8 +71,7 @@ export function getTrustedVercelDeploymentOrigin(value) {
 }
 
 function runVercelJson(args) {
-  const env = { ...process.env };
-  delete env.VERCEL_OIDC_TOKEN;
+  const env = isolateVercelCliEnvironment(process.env);
   delete env.DEBUG;
   delete env.PWDEBUG;
 

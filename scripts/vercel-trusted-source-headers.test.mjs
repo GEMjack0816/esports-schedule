@@ -4,6 +4,7 @@ import {
   fetchTrustedSourceResponse,
   getTrustedVercelDeploymentOrigin,
   isolateBrowserEnvironment,
+  isolateVercelCliEnvironment,
   MAX_TRUSTED_SOURCE_REDIRECTS,
   redactTrustedSourceToken,
   VERCEL_TRUSTED_SOURCE_HEADER,
@@ -57,6 +58,22 @@ describe("addTrustedSourceHeader", () => {
       PANDASCORE_TOKEN: "provider-secret",
       DATABASE_URL: "db-credential",
     })).toEqual({ PATH: "safe-path", SYSTEMROOT: "windows-root" });
+  });
+
+  it("limits the Vercel CLI subprocess to platform variables and its own optional auth token", () => {
+    expect(isolateVercelCliEnvironment({
+      PATH: "safe-path",
+      SYSTEMROOT: "windows-root",
+      VERCEL_TOKEN: "cli-auth-token",
+      VERCEL_OIDC_TOKEN: "trusted-source-token",
+      PANDASCORE_TOKEN: "provider-secret",
+      DATABASE_URL: "db-credential",
+      CRON_SECRET: "cron-secret",
+    })).toEqual({
+      PATH: "safe-path",
+      SYSTEMROOT: "windows-root",
+      VERCEL_TOKEN: "cli-auth-token",
+    });
   });
 });
 
