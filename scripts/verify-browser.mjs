@@ -1,8 +1,37 @@
 import os from "node:os";
 import path from "node:path";
-import { chromium } from "playwright-core";
+import {
+  addTrustedSourceHeader,
+  fetchTrustedSourceResponse,
+  isolateBrowserEnvironment,
+  redactTrustedSourceToken,
+  verifyTrustedVercelPreviewDeployment,
+} from "./vercel-trusted-source-headers.mjs";
 
 const baseUrl = process.argv[2] || "http://localhost:3000";
+const trustedSourceToken = process.env.VERCEL_OIDC_TOKEN;
+const trustedSourceOrigin = trustedSourceToken
+  ? verifyTrustedVercelPreviewDeployment(baseUrl)
+  : null;
+
+if (trustedSourceToken && !trustedSourceOrigin) {
+  throw new Error("VERCEL_OIDC_TOKEN only supports this project's HTTPS Vercel Preview deployment URL.");
+}
+
+const browserEnvironment = trustedSourceToken
+  ? isolateBrowserEnvironment(process.env)
+  : process.env;
+
+if (trustedSourceToken) {
+  for (const name of Object.keys(process.env)) delete process.env[name];
+  Object.assign(process.env, browserEnvironment);
+  // Prevent Playwright protocol diagnostics from printing authenticated headers.
+  delete process.env.DEBUG;
+  delete process.env.PWDEBUG;
+}
+
+const { chromium } = await import("playwright-core");
+
 const executableCandidates = [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -12,7 +41,11 @@ let browser;
 let launchError;
 for (const executablePath of executableCandidates) {
   try {
-    browser = await chromium.launch({ executablePath, headless: true });
+    browser = await chromium.launch({
+      executablePath,
+      headless: true,
+      env: browserEnvironment,
+    });
     break;
   } catch (error) {
     launchError = error;
@@ -37,17 +70,46 @@ for (const profile of [
   const browserResourceWarnings = [];
   const criticalPaths = ["/api/matches", "/api/version", "/api/health/data-coverage"];
   const auditUrl = new URL(baseUrl);
+  const sanitizeDiagnostic = (value) => redactTrustedSourceToken(value, trustedSourceToken);
+  const continueRequest = async (route) => {
+    try {
+      const request = route.request();
+      if (!trustedSourceToken) return await route.continue();
+
+      if (new URL(request.url()).origin !== trustedSourceOrigin) {
+        return await route.continue({
+          headers: addTrustedSourceHeader(request.headers(), request.url(), trustedSourceOrigin, undefined),
+        });
+      }
+
+      const response = await fetchTrustedSourceResponse(route, trustedSourceOrigin, trustedSourceToken);
+      return await route.fulfill({ response });
+    } catch (error) {
+      throw new Error(sanitizeDiagnostic(error instanceof Error ? error.message : error));
+    }
+  };
+  const fetchRequest = async (route) => {
+    try {
+      if (!trustedSourceToken) return await route.fetch();
+      return await fetchTrustedSourceResponse(route, trustedSourceOrigin, trustedSourceToken);
+    } catch (error) {
+      throw new Error(sanitizeDiagnostic(error instanceof Error ? error.message : error));
+    }
+  };
+  // Vercel's short-lived local OIDC identity is optional. Scope it to this
+  // deployment origin only; never attach it to third-party scripts or images.
+  await context.route("**/*", continueRequest);
   auditUrl.searchParams.set("audit", `${profile.name}-${Date.now()}`);
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const text = message.text();
     if (/^Failed to load resource: net::ERR_/.test(text)) {
-      browserResourceWarnings.push(text);
+      browserResourceWarnings.push(sanitizeDiagnostic(text));
       return;
     }
-    errors.push(`console:${text}`);
+    errors.push(`console:${sanitizeDiagnostic(text)}`);
   });
-  page.on("pageerror", (error) => errors.push(`page:${error.message}`));
+  page.on("pageerror", (error) => errors.push(`page:${sanitizeDiagnostic(error.message)}`));
   page.on("requestfailed", (request) => {
     const failedUrl = new URL(request.url());
     if (request.failure()?.errorText === "net::ERR_ABORTED") {
@@ -58,7 +120,7 @@ for (const profile of [
       optionalResourceFailures.push(`${request.method()} ${failedUrl.origin}${failedUrl.pathname}`);
       return;
     }
-    errors.push(`request:${request.method()} ${request.url()}`);
+    errors.push(`request:${request.method()} ${sanitizeDiagnostic(request.url())}`);
   });
   page.on("response", (candidate) => {
     const candidateUrl = new URL(candidate.url());
@@ -132,6 +194,131 @@ for (const profile of [
   await page.getByRole('button', { name: /切换到.+主题/ }).click();
   const toggledTheme = await page.evaluate(() => document.documentElement.dataset.theme);
 
+  const searchPage = await context.newPage();
+  const searchPageErrors = [];
+  searchPage.on('pageerror', (error) => searchPageErrors.push(sanitizeDiagnostic(error.message)));
+  await searchPage.goto(auditUrl.toString(), { waitUntil: 'networkidle', timeout: 120_000 });
+  let searchInitialLoadedCount = Number(await searchPage.locator('.schedule-section')
+    .getAttribute('data-schedule-loaded-count'));
+  let searchInitialTotalCount = Number(await searchPage.locator('.schedule-section')
+    .getAttribute('data-schedule-total-count'));
+  if (searchInitialLoadedCount < searchInitialTotalCount
+    && await searchPage.locator('.team-name').count() === 0) {
+    // An empty active date range can report fewer visible rows than the full
+    // snapshot even though there is no visible team name to use as a query.
+    // Switch to the all-records view so credential-free local runs can still
+    // exercise search using static/manual matches.
+    await searchPage.getByRole('tab', { name: /全部收录/ }).click();
+    await searchPage.waitForFunction(() => {
+      const section = document.querySelector('.schedule-section');
+      return !!section
+        && Number(section.getAttribute('data-schedule-loaded-count')) > 0;
+    }, { timeout: 120_000 });
+    searchInitialLoadedCount = Number(await searchPage.locator('.schedule-section')
+      .getAttribute('data-schedule-loaded-count'));
+    searchInitialTotalCount = Number(await searchPage.locator('.schedule-section')
+      .getAttribute('data-schedule-total-count'));
+  }
+  let globalSearchMode = 'empty';
+  let globalSearchRequestStatus = null;
+  let globalSearchResultCount = 0;
+  let globalSearchFoundFixture = false;
+  let globalSearchLoadingRetainsResults = false;
+  let globalSearchErrorRetainsResults = false;
+  if (searchInitialLoadedCount < searchInitialTotalCount) {
+    globalSearchMode = 'partial';
+    const partialSearchTerm = (await searchPage.locator('.team-name').first().innerText()).trim();
+    let fullScheduleRequestCount = 0;
+    await searchPage.route('**/api/matches', async (route) => {
+      if (route.request().method() !== 'GET') return continueRequest(route);
+      fullScheduleRequestCount += 1;
+      if (fullScheduleRequestCount === 1) {
+        // Keep the request pending long enough to assert that current results
+        // stay visible, then fail it to verify the retry state is non-blocking.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        return route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'temporarily_unavailable' }),
+        });
+      }
+      const response = await fetchRequest(route);
+      const body = await response.json();
+      const fixtureName = 'Codex global search fixture';
+      const outsideToday = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+      const matchingMatch = body.matches.find((match) =>
+        match.homeTeam.name === partialSearchTerm || match.awayTeam.name === partialSearchTerm);
+      if (!matchingMatch) throw new Error('The full schedule response did not contain the visible partial-search match.');
+      body.matches = [{
+        ...matchingMatch,
+        startTimeUtc: outsideToday,
+        status: 'scheduled',
+        homeTeam: { ...matchingMatch.homeTeam, name: `${fixtureName} ${partialSearchTerm}` },
+      }];
+      body.coverage.totals.finalWithManual = body.matches.length;
+      await route.fulfill({ response, body: JSON.stringify(body) });
+    });
+    const failedSearchRequest = searchPage.waitForResponse(
+      (candidate) => new URL(candidate.url()).pathname === '/api/matches'
+        && candidate.request().method() === 'GET',
+      { timeout: 120_000 },
+    );
+    await searchPage.locator('.search-field input').fill(partialSearchTerm);
+    await searchPage.getByText('正在加载完整赛程；先显示当前已加载的比赛。', { exact: true })
+      .waitFor({ timeout: 120_000 });
+    globalSearchLoadingRetainsResults = await searchPage.locator('.match-card')
+      .filter({ hasText: partialSearchTerm }).count() > 0;
+    const failedSearchResponse = await failedSearchRequest;
+    if (failedSearchResponse.status() !== 503) {
+      throw new Error(`Expected the first full schedule request to fail with HTTP 503, got ${failedSearchResponse.status()}`);
+    }
+    await searchPage.getByText('完整赛程暂时无法加载；当前已加载的比赛仍可查看。', { exact: false })
+      .waitFor({ timeout: 120_000 });
+    globalSearchErrorRetainsResults = await searchPage.locator('.match-card')
+      .filter({ hasText: partialSearchTerm }).count() > 0;
+
+    const globalSearchRequest = searchPage.waitForResponse(
+      (candidate) => new URL(candidate.url()).pathname === '/api/matches'
+        && candidate.request().method() === 'GET',
+      { timeout: 120_000 },
+    );
+    await searchPage.getByRole('button', { name: '重试', exact: true }).click();
+    const searchResponse = await globalSearchRequest;
+    globalSearchRequestStatus = searchResponse.status();
+    if (!searchResponse.ok()) {
+      throw new Error(`Global search schedule request returned HTTP ${searchResponse.status()}`);
+    }
+    await searchPage.waitForFunction(() => {
+      const section = document.querySelector('.schedule-section');
+      return !!section
+        && Number(section.getAttribute('data-schedule-loaded-count'))
+          >= Number(section.getAttribute('data-schedule-total-count'));
+    }, { timeout: 120_000 });
+    globalSearchResultCount = await searchPage.locator('.match-card').count();
+    globalSearchFoundFixture = (await searchPage.locator('.match-list').innerText())
+      .includes('Codex global search fixture');
+    if (!(await searchPage.getByText("正在全部已收录赛程中搜索；选择日期可缩小范围。", { exact: true }).count())) {
+      throw new Error("Global search scope hint is missing");
+    }
+  } else {
+    await searchPage.getByRole('tab', { name: /全部收录/ }).click();
+    if (searchInitialTotalCount > 0) {
+      await searchPage.locator('.match-card').first().waitFor({ timeout: 120_000 });
+    }
+    const firstTeam = searchPage.locator('.team-name').first();
+    if (await firstTeam.count()) {
+      globalSearchMode = 'complete';
+      const searchTerm = (await firstTeam.innerText()).trim();
+      await searchPage.locator('.search-field input').fill(searchTerm);
+      await searchPage.locator('.match-card').filter({ hasText: searchTerm }).first()
+        .waitFor({ timeout: 120_000 });
+      globalSearchResultCount = await searchPage.locator('.match-card').count();
+      globalSearchFoundFixture = (await searchPage.locator('.match-list').innerText())
+        .includes(searchTerm);
+    }
+  }
+  await searchPage.close();
+
   const gameFilterCounts = {};
   const statusFilterCounts = {};
   const initialScheduleCounts = await page.locator(".schedule-section").evaluate((section) => ({
@@ -173,8 +360,8 @@ for (const profile of [
 
   // Client-only fixtures cover running matches that are undated or cross local midnight.
   await page.route("**/api/matches", async (route) => {
-    if (route.request().method() !== "GET") return route.continue();
-    const response = await route.fetch();
+    if (route.request().method() !== "GET") return continueRequest(route);
+    const response = await fetchRequest(route);
     const body = await response.json();
     const syntheticRunning = [
       { id: "browser-verify-running-undated", date: null, name: "Codex undated live fixture" },
@@ -276,7 +463,7 @@ for (const profile of [
       ];
     });
   } catch (error) {
-    errors.push(`version-health:${error instanceof Error ? error.message : "request failed"}`);
+    errors.push(`version-health:${sanitizeDiagnostic(error instanceof Error ? error.message : "request failed")}`);
   }
   await page.goto(`${baseUrl}/submit-match`, { waitUntil: "networkidle", timeout: 120_000 });
   const submitFields = await page.locator("form input, form select").count();
@@ -318,6 +505,17 @@ for (const profile of [
     gameFilterCounts,
     statusFilterCounts,
     themeToggleWorks: initialTheme !== toggledTheme,
+    globalSearchCompleteness: {
+      mode: globalSearchMode,
+      initialLoadedCount: searchInitialLoadedCount,
+      initialTotalCount: searchInitialTotalCount,
+      requestStatus: globalSearchRequestStatus,
+      resultCount: globalSearchResultCount,
+      foundFixture: globalSearchFoundFixture,
+      loadingRetainsResults: globalSearchLoadingRetainsResults,
+      errorRetainsResults: globalSearchErrorRetainsResults,
+      errors: searchPageErrors,
+    },
     refreshedApiUrl: apiResponse.url(),
     expectedTodayRunningCount,
     todayTabCount,
@@ -379,6 +577,27 @@ for (const result of results) {
   if (result.syncStatusCards < 5) failures.push(`${prefix}: incomplete sync status cards`);
   if (result.gameOptions < 6) failures.push(`${prefix}: incomplete game filters`);
   if (!result.themeToggleWorks) failures.push(`${prefix}: theme toggle failed`);
+  if (result.globalSearchCompleteness.initialLoadedCount < result.globalSearchCompleteness.initialTotalCount
+    && result.globalSearchCompleteness.requestStatus !== 200) {
+    failures.push(`${prefix}: global search did not load the complete schedule`);
+  }
+  if (result.globalSearchCompleteness.mode === 'partial'
+    && (!result.globalSearchCompleteness.foundFixture || result.globalSearchCompleteness.resultCount !== 1)) {
+    failures.push(`${prefix}: global search did not find exactly one full-schedule fixture`);
+  }
+  if (result.globalSearchCompleteness.mode === 'partial'
+    && !result.globalSearchCompleteness.loadingRetainsResults) {
+    failures.push(`${prefix}: partial search results disappeared while the full schedule was loading`);
+  }
+  if (result.globalSearchCompleteness.mode === 'partial'
+    && !result.globalSearchCompleteness.errorRetainsResults) {
+    failures.push(`${prefix}: partial search results disappeared after the full schedule request failed`);
+  }
+  if (result.globalSearchCompleteness.mode === 'complete'
+    && (!result.globalSearchCompleteness.foundFixture || result.globalSearchCompleteness.resultCount < 1)) {
+    failures.push(`${prefix}: search failed on an initially complete schedule`);
+  }
+  failures.push(...result.globalSearchCompleteness.errors.map((error) => `${prefix}: search:${error}`));
   if (result.todayTabCount < result.expectedTodayRunningCount) failures.push(`${prefix}: Today tab count excludes one or more running fixtures`);
   if (result.todayRunningCount < result.expectedTodayRunningCount) failures.push(`${prefix}: Today/Running filter hides an undated or prior-local-day live match`);
   if (result.selectedTodayRunningCount < result.expectedTodayRunningCount) failures.push(`${prefix}: selecting local Today hides an undated or prior-local-day live match`);

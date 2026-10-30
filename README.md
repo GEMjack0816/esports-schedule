@@ -102,6 +102,14 @@ npm run verify:production -- http://localhost:3000 <expected-git-sha>
 
 没有 `PANDASCORE_TOKEN` 时，本地只返回可用的上次缓存/人工数据并明确标记数据源未配置，不会生成模拟比赛。不要为了测试把真实 Token 写入仓库。
 
+对于受 Vercel Deployment Protection 保护的 Preview，可在已登录并链接到正确项目的 Vercel CLI 下运行：
+
+```powershell
+cmd /d /c "vercel env run -- node scripts/verify-browser.mjs https://your-preview-deployment.vercel.app"
+```
+
+请将 URL 换成当前项目 READY Preview Deployment 的 URL（主机名匹配 `esports-schedule-*-jack-zhu-s-projects.vercel.app`）。提供 `VERCEL_OIDC_TOKEN` 时，验证器会先用当前 Vercel CLI 登录态确认目标部署的 Project ID、项目名和 Preview/READY 状态；无法确认时会 fail closed，不发送身份头。通过后，短期令牌只会用于该 Preview 的同源请求，不会发给第三方资源或浏览器子进程，也不会进入诊断输出。不要启用 Playwright 协议调试或打印请求头。
+
 ## Vercel 部署后验证
 
 1. 确认本地目录仍链接到 Vercel 项目 `esports-schedule`，Production 环境存在 `PANDASCORE_TOKEN` 和 `CRON_SECRET`。
