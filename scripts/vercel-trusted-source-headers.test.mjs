@@ -7,6 +7,8 @@ import {
   MAX_TRUSTED_SOURCE_REDIRECTS,
   redactTrustedSourceToken,
   VERCEL_TRUSTED_SOURCE_HEADER,
+  ESPORTS_SCHEDULE_VERCEL_PROJECT_ID,
+  verifyTrustedVercelPreviewDeployment,
 } from "./vercel-trusted-source-headers.mjs";
 
 describe("addTrustedSourceHeader", () => {
@@ -157,6 +159,69 @@ describe("getTrustedVercelDeploymentOrigin", () => {
     "not a URL",
   ])("rejects non-deployment or unsafe target %s", (value) => {
     expect(getTrustedVercelDeploymentOrigin(value)).toBeNull();
+  });
+});
+
+describe("verifyTrustedVercelPreviewDeployment", () => {
+  const validApiDeployment = {
+    projectId: ESPORTS_SCHEDULE_VERCEL_PROJECT_ID,
+    readyState: "READY",
+  };
+  const validInspection = {
+    name: "esports-schedule",
+    target: "preview",
+    readyState: "READY",
+  };
+
+  it("requires exact project identity and a READY Preview target before returning an origin", () => {
+    const runJson = vi.fn(([command]) => command === "api" ? validApiDeployment : validInspection);
+
+    expect(verifyTrustedVercelPreviewDeployment(
+      "https://esports-schedule-abc123456-jack-zhu-s-projects.vercel.app",
+      runJson,
+    )).toBe("https://esports-schedule-abc123456-jack-zhu-s-projects.vercel.app");
+    expect(runJson).toHaveBeenNthCalledWith(1, expect.arrayContaining([
+      "api",
+      "/v13/deployments/esports-schedule-abc123456-jack-zhu-s-projects.vercel.app",
+      "--raw",
+    ]));
+    expect(runJson).toHaveBeenNthCalledWith(2, expect.arrayContaining([
+      "inspect",
+      "esports-schedule-abc123456-jack-zhu-s-projects.vercel.app",
+      "--format=json",
+    ]));
+  });
+
+  it("rejects a similarly named deployment owned by another Vercel project", () => {
+    const runJson = vi.fn(([command]) => command === "api"
+      ? { ...validApiDeployment, projectId: "prj_unrelated_project" }
+      : validInspection);
+
+    expect(() => verifyTrustedVercelPreviewDeployment(
+      "https://esports-schedule-other-app-abc123456-jack-zhu-s-projects.vercel.app",
+      runJson,
+    )).toThrow(/not this project's READY Preview deployment/);
+  });
+
+  it.each([
+    { ...validInspection, target: "production" },
+    { ...validInspection, readyState: "BUILDING" },
+    { ...validInspection, name: "esports-schedule-other" },
+  ])("rejects a target that is not the READY esports-schedule Preview", (inspection) => {
+    const runJson = vi.fn(([command]) => command === "api" ? validApiDeployment : inspection);
+
+    expect(() => verifyTrustedVercelPreviewDeployment(
+      "https://esports-schedule-abc123456-jack-zhu-s-projects.vercel.app",
+      runJson,
+    )).toThrow(/not this project's READY Preview deployment/);
+  });
+
+  it("does not make Vercel API calls for a non-project hostname", () => {
+    const runJson = vi.fn();
+
+    expect(() => verifyTrustedVercelPreviewDeployment("https://attacker.example", runJson))
+      .toThrow(/only supports this project's HTTPS Vercel Preview/);
+    expect(runJson).not.toHaveBeenCalled();
   });
 });
 

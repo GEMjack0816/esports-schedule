@@ -3,15 +3,15 @@ import path from "node:path";
 import {
   addTrustedSourceHeader,
   fetchTrustedSourceResponse,
-  getTrustedVercelDeploymentOrigin,
   isolateBrowserEnvironment,
   redactTrustedSourceToken,
+  verifyTrustedVercelPreviewDeployment,
 } from "./vercel-trusted-source-headers.mjs";
 
 const baseUrl = process.argv[2] || "http://localhost:3000";
 const trustedSourceToken = process.env.VERCEL_OIDC_TOKEN;
 const trustedSourceOrigin = trustedSourceToken
-  ? getTrustedVercelDeploymentOrigin(baseUrl)
+  ? verifyTrustedVercelPreviewDeployment(baseUrl)
   : null;
 
 if (trustedSourceToken && !trustedSourceOrigin) {

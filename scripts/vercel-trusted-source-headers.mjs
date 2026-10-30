@@ -1,5 +1,9 @@
+import { execFileSync } from "node:child_process";
+
 export const VERCEL_TRUSTED_SOURCE_HEADER = "x-vercel-trusted-oidc-idp-token";
 export const MAX_TRUSTED_SOURCE_REDIRECTS = 10;
+export const ESPORTS_SCHEDULE_VERCEL_PROJECT_ID = "prj_o5ujB2omd6c1Mish4voL9wFCFdRB";
+export const ESPORTS_SCHEDULE_VERCEL_TEAM_ID = "team_Cz8cQhDVK9X0SRfXPToHArmi";
 
 export function redactTrustedSourceToken(value, token) {
   const text = String(value ?? "");
@@ -57,6 +61,74 @@ export function getTrustedVercelDeploymentOrigin(value) {
   }
 
   return url.origin;
+}
+
+function runVercelJson(args) {
+  const env = { ...process.env };
+  delete env.VERCEL_OIDC_TOKEN;
+  delete env.DEBUG;
+  delete env.PWDEBUG;
+
+  try {
+    // The URL is already restricted by getTrustedVercelDeploymentOrigin; all
+    // remaining command arguments are constants. On Windows Vercel is
+    // installed as a .cmd shim, so invoke it through cmd.exe.
+    const command = process.platform === "win32"
+      ? ["cmd.exe", ["/d", "/s", "/c", `vercel ${args.join(" ")}`]]
+      : ["vercel", args];
+    const output = execFileSync(command[0], command[1], {
+      encoding: "utf8",
+      env,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 20_000,
+      maxBuffer: 1_000_000,
+      windowsHide: true,
+    });
+    return JSON.parse(output);
+  } catch {
+    // CLI output can include request diagnostics; never surface it while an
+    // OIDC credential is present in the parent process.
+    throw new Error("Unable to verify the Vercel Preview deployment identity; no identity header was sent.");
+  }
+}
+
+/**
+ * A hostname pattern alone is not a project identity: another project in the
+ * same Vercel team can have a similarly named deployment URL. Before sending
+ * the short-lived OIDC token, check both the deployment API's projectId and
+ * Vercel CLI's deployment target using the caller's existing CLI login.
+ */
+export function verifyTrustedVercelPreviewDeployment(value, runJson = runVercelJson) {
+  const origin = getTrustedVercelDeploymentOrigin(value);
+  if (!origin) {
+    throw new Error("VERCEL_OIDC_TOKEN only supports this project's HTTPS Vercel Preview deployment URL.");
+  }
+
+  const hostname = new URL(value).hostname;
+  const scope = ["--scope", ESPORTS_SCHEDULE_VERCEL_TEAM_ID, "--non-interactive"];
+  const deployment = runJson([
+    "api",
+    `/v13/deployments/${hostname}`,
+    ...scope,
+    "--raw",
+  ]);
+  const inspection = runJson([
+    "inspect",
+    hostname,
+    "--format=json",
+    ...scope,
+  ]);
+
+  if (
+    deployment?.projectId !== ESPORTS_SCHEDULE_VERCEL_PROJECT_ID
+    || inspection?.name !== "esports-schedule"
+    || inspection?.target !== "preview"
+    || inspection?.readyState !== "READY"
+  ) {
+    throw new Error("VERCEL_OIDC_TOKEN was not sent because the target is not this project's READY Preview deployment.");
+  }
+
+  return origin;
 }
 
 /**
